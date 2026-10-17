@@ -37,6 +37,18 @@ export type FlowQuestion = {
   ruleGroup?: string;
 };
 
+/** One time the user did the task by hand, shown as proof on the review screen. */
+export type FlowEvidence = {
+  /** When it happened, ISO 8601. "View in timeline" opens the timeline there. */
+  at: string;
+  /** What the user did, one short sentence. */
+  label: string;
+  /** screenpipe frame id of a capture of that moment (`frame_id` in /search results). */
+  frameId?: number;
+  /** App where it happened, e.g. "Gmail". */
+  app?: string;
+};
+
 /**
  * Review material for an Automation Flow. The n8n workflow is the source of
  * truth for what runs; this only describes it for the review screen. Flows
@@ -51,6 +63,8 @@ export type AutomationFlow = {
   summary: string;
   /** Short outcomes shown as checks under the summary. */
   checks: string[];
+  /** The repetitions the Flow was learned from, oldest first. */
+  evidence?: FlowEvidence[];
   questions: FlowQuestion[];
   /** Titles of the rule blocks, in display order. */
   ruleGroups: { id: string; title: string }[];

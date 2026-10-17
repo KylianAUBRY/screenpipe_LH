@@ -16,10 +16,25 @@ describe("automation flow source", () => {
     expect(parseAutomationFlows({ not: "an array" })).toEqual([]);
   });
 
+  it("keeps only well-formed repetitions", () => {
+    const [flow] = parseAutomationFlows([
+      {
+        ...EXAMPLE_FLOW,
+        evidence: [
+          { at: "2026-10-14T09:12:00Z", label: "ok", frameId: 42 },
+          { at: "not a date", label: "bad date" },
+          { at: "2026-10-14T10:00:00Z", label: "bad frame", frameId: "42" },
+          { label: "no date" },
+        ],
+      },
+    ]);
+    expect(flow.evidence).toEqual([{ at: "2026-10-14T09:12:00Z", label: "ok", frameId: 42 }]);
+  });
+
   it("reads the local file, and shows no Flows when it is missing", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => [EXAMPLE_FLOW] });
     vi.stubGlobal("fetch", fetchMock);
-    await expect(localFileFlowSource.load()).resolves.toEqual([EXAMPLE_FLOW]);
+    await expect(localFileFlowSource.load()).resolves.toEqual([{ ...EXAMPLE_FLOW, evidence: [] }]);
     expect(fetchMock).toHaveBeenCalledWith(LOCAL_FLOWS_URL, { cache: "no-store" });
 
     fetchMock.mockResolvedValueOnce({ ok: false, json: async () => ({}) });

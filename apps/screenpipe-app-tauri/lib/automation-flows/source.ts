@@ -1,6 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
-import type { AutomationFlow } from "./types";
+import type { AutomationFlow, FlowEvidence } from "./types";
 
 /** Where the Recommendations tab gets its proposed Flows from. */
 export interface FlowSource {
@@ -16,6 +16,17 @@ export const LOCAL_FLOWS_URL = "/automation-flows.local.json";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isEvidence(value: unknown): value is FlowEvidence {
+  return (
+    isRecord(value) &&
+    typeof value.at === "string" &&
+    !Number.isNaN(Date.parse(value.at)) &&
+    typeof value.label === "string" &&
+    (value.frameId === undefined || Number.isInteger(value.frameId)) &&
+    (value.app === undefined || typeof value.app === "string")
+  );
 }
 
 /** Keeps well-formed Flows and fills the optional parts; drops anything else. */
@@ -37,6 +48,7 @@ export function parseAutomationFlows(value: unknown): AutomationFlow[] {
         summary,
         learnedFrom: typeof item.learnedFrom === "string" ? item.learnedFrom : "",
         checks: Array.isArray(item.checks) ? (item.checks as string[]) : [],
+        evidence: Array.isArray(item.evidence) ? item.evidence.filter(isEvidence) : [],
         questions: questions as AutomationFlow["questions"],
         ruleGroups: groups,
         rules: flowRules,

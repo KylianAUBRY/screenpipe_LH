@@ -9,6 +9,8 @@ code holds no proposal data: Flows come from a FlowSource.
   Automation Flows grouped by state (Waiting for you, Running, Paused).
 - **Review screen** (`components/automation-flows/flow-review.tsx`):
   - title, provenance and status;
+  - "Learned from": each repetition with its screen capture and
+    "View in timeline";
   - VIEW GRAPH: the steps, then OPEN IN N8N;
   - TURN ON / PAUSE;
   - one sentence and the checks;
@@ -26,6 +28,13 @@ code holds no proposal data: Flows come from a FlowSource.
 - **Shape**: `AutomationFlow` in `lib/automation-flows/types.ts`. Required:
   `id`, `title`, `summary`, `questions`, `rules`. Everything else is optional.
   `unit` (e.g. "emails") is the word used in the screen's text.
+- **Repetitions ("Learned from")**: `evidence` is a list of
+  `{ at, label, frameId?, app? }`:
+  - `at` is ISO 8601 and is where "View in timeline" opens;
+  - `frameId` is a screenpipe frame (`frame_id` in `/search` results), shown
+    as the capture.
+
+  Take them from the recorded session.
 - **Local file (default source)**:
   `apps/screenpipe-app-tauri/public/automation-flows.local.json` holds a JSON
   array of Flows. The file is git-ignored, so everyone keeps their own demo

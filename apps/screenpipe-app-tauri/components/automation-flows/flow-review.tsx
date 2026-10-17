@@ -36,6 +36,7 @@ import {
 } from "@/lib/automation-flows/review";
 import { useAutomationFlowStore, useFlowReviewState } from "@/lib/automation-flows/store";
 import type { AutomationFlow, FlowStatus } from "@/lib/automation-flows/types";
+import { FlowEvidence } from "./flow-evidence";
 import { FlowQuestionItem } from "./flow-question";
 
 // Same shape as the Discover detail header buttons.
@@ -166,6 +167,8 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
           ))}
         </ul>
       </div>
+
+      {flow.evidence?.length ? <FlowEvidence evidence={flow.evidence} unit={unit} /> : null}
 
       {running ? (
         <div className="space-y-3">
