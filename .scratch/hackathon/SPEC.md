@@ -190,11 +190,30 @@ chaque ticket créé ».
 - Node types available for the demo workflow (latest versions): IMAP Email
   trigger `emailReadImap` 2.2, `jira` 1, `if` 2.3, `set` 3.5, `stickyNote` 1,
   AI Agent `@n8n/n8n-nodes-langchain.agent` 3.1, OpenAI Chat Model
-  `lmChatOpenAi` 1.3, Structured Output Parser `outputParserStructured` 1.3.
+  `lmChatOpenAi` 1.3, Structured Output Parser `outputParserStructured` 1.3,
+  HTTP Request `httpRequest` 4.5.
 - Instance-level MCP endpoint: `http://localhost:5678/mcp-server/http`
   (Bearer token); registered in Claude Code for this project (local scope).
 
 - AI proxy from the n8n container (`http://host.docker.internal:3030/v1`, model `auto`): chat completions 200, tool calls returned. `GET /models` is 404, so n8n's OpenAI credential test shows a red error on Save; that is expected. Tool calls come back non-OpenAI-shaped (`type: "tool_use"`, no `id`, no `finish_reason`): the n8n AI Agent may not parse them; if it fails, normalize the response in the engine's cloud proxy before falling back to a plain ScreenPipe step.
+- Demo n8n workflow (ticket 01): `infra/automation-flows/workflows/novadesk-support-tickets.json`
+  (fixed id `spNovaFlow000001`, tag `screenpipe-flow`, `settings.availableInMCP: true`) and its
+  review JSON beside it; (re)import switched off with `infra/automation-flows/import-workflow.sh`
+  (`docker cp` + `n8n import:workflow`; refuses if the workflow is active). Import upserts by id,
+  forces `active: false`, sets a new `versionId`, matches tags by name and keeps credential ids.
+- Jira step = HTTP Request `httpRequest` 4.5 with the predefined `jiraSoftwareCloudApi`
+  credential, `POST https://kylianaubry.atlassian.net/rest/api/2/issue` with `project.key`,
+  `issuetype.name`, `priority.name`, `labels`, no `assignee`. Not the `jira` 1 node: its create
+  operation only sends `project.id`, `issuetype.id` and `priority.id`, which cannot be resolved
+  without the token and cannot switch between Bug and Tâche.
+- OpenAI Chat Model through the proxy: `responsesApiEnabled: false` (the proxy has no
+  `/v1/responses`) and model in `id` mode with value `auto` (no `/v1/models`).
+- AI Agent 3.1 + Structured Output Parser through the proxy works despite the tool-call shape:
+  the parser adds a `format_final_json_response` tool, and three synthetic emails came back
+  Bug/Highest/back, Tâche/Low/front and none. Full chain run in n8n (AI → IF → title and quoted
+  description → Jira JSON body), stopping before the HTTP call. One-off CLI runs need
+  `docker exec -e N8N_RUNNERS_BROKER_PORT=5690 … n8n execute --id=…` (port 5679 is taken by the
+  server).
 
 ## Risks to check first (golden path)
 
