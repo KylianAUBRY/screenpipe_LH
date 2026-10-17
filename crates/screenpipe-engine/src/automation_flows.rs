@@ -1303,8 +1303,10 @@ async fn create_flow(
 
 /// Demo: imports the task's bundled n8n workflow switched off and tagged (or
 /// adopts the copy the import script already installed, switching it off if
-/// it was left on), and records its review material. Calling it again for the same task returns the same Flow
-/// (re-imported only if it was deleted or archived in n8n).
+/// it was left on), and records its review material. A copy that already has
+/// a local record is a Flow the user knows: it is only linked to the task,
+/// never switched off. Calling it again for the same task returns the same
+/// Flow (re-imported only if it was deleted or archived in n8n).
 async fn create_from_task(
     State(state): State<FlowsState>,
     Json(request): Json<FromTaskRequest>,
@@ -1350,10 +1352,29 @@ async fn create_from_task(
         Some(fixed_id) => api.workflow(fixed_id).await?,
         None => None,
     };
+    // That copy is already a Flow here (reviewed, maybe switched on by the
+    // user): link it to the task and leave its state and history alone.
+    let known = preinstalled
+        .as_ref()
+        .and_then(|workflow| workflow["id"].as_str())
+        .filter(|id| store.flows.contains_key(*id))
+        .map(str::to_string);
+    if let (Some(id), Some(workflow)) = (known, preinstalled.clone()) {
+        let record = store.record_mut(&id);
+        record.source_task_id = Some(task.id.to_string());
+        record.answers = request.answers;
+        if record.summary.trim().is_empty() {
+            record.summary = review["summary"].as_str().unwrap_or_default().to_string();
+        }
+        store.save(dir)?;
+        let workflow = api.ensure_tagged(workflow).await?;
+        let flow = build_flow(&api, &workflow, store.flows.get(&id)).await;
+        return Ok((StatusCode::OK, Json(flow)));
+    }
     let created = match preinstalled {
         // Creation always hands over a switched-off Draft (story 12): a copy
-        // left on in the n8n editor is switched off before it is recorded.
-        // Nothing is logged: the user never activated it.
+        // with no record, left on in the n8n editor, is switched off before
+        // it is recorded. Nothing is logged: the user never activated it.
         Some(workflow) if workflow["active"] == true => {
             let id = workflow_id(&workflow)?;
             let unpublished = api.switch(&id, "unpublish", None).await?;

@@ -732,6 +732,55 @@ async fn create_switches_off_a_pre_imported_copy_that_was_left_on() {
 }
 
 #[tokio::test]
+async fn create_never_takes_over_a_flow_the_user_already_has() {
+    // Ticket 22, item 6: the pre-imported copy is already a Flow here (the
+    // user activated it from its Review Screen); creating the Flow from the
+    // task links it to the task and changes nothing else.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let mut imported: Value = serde_json::from_str(include_str!(
+        "../../../infra/automation-flows/workflows/novadesk-support-tickets.json"
+    ))
+    .unwrap();
+    imported["active"] = json!(true);
+    imported["versionId"] = json!("imported-version");
+    imported["activeVersionId"] = json!("imported-version");
+    imported["tags"] = json!([{"id": "tag-imported", "name": "screenpipe-flow"}]);
+    n8n.add_workflow(imported);
+    let history = json!([{
+        "at": "2026-10-17T09:00:00+00:00", "event": "activated",
+        "versionId": "imported-version", "by": "user"
+    }]);
+    app.write_store(json!({"flows": {"spNovaFlow000001": {
+        "sourceTaskId": null, "summary": "", "answers": null,
+        "reviewedVersionId": "imported-version", "activationLog": history,
+        "createdAt": "2026-10-17T08:00:00+00:00"
+    }}}));
+
+    let (status, flow) = app.create_from_task().await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["id"], "spNovaFlow000001");
+    assert_eq!(flow["status"], "active");
+    assert_eq!(flow["sourceTaskId"], TASK_ID);
+    assert_eq!(flow["reviewedVersionId"], "imported-version");
+    assert_eq!(
+        events(&flow),
+        [event("activated", "imported-version", "user")]
+    );
+    assert!(!flow["summary"].as_str().unwrap().is_empty());
+    assert!(n8n_writes(&server).await.is_empty(), "nothing switched or imported");
+    assert_eq!(n8n.workflows()[0]["active"], true);
+    let store = app.store();
+    assert_eq!(store["flows"]["spNovaFlow000001"]["sourceTaskId"], TASK_ID);
+    assert_eq!(
+        store["flows"]["spNovaFlow000001"]["answers"]["q1"],
+        "oui, en Tâche"
+    );
+}
+
+#[tokio::test]
 async fn create_again_after_the_workflow_was_deleted_in_n8n() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;
