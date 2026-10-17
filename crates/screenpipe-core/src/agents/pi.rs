@@ -5036,6 +5036,24 @@ mod tests {
     }
 
     #[test]
+    fn automation_flows_skill_builds_step_by_step_and_deletes_abandoned_drafts() {
+        // flows-round-two 07: a hidden draft, a state read after every step,
+        // « Terminer » once nothing is missing, and no draft left behind.
+        let skill = include_str!("../../assets/skills/automation-flows/SKILL.md");
+        for row in [
+            "| `POST /automation-flows/drafts` ",
+            "| `PUT /automation-flows/drafts/<id>` ",
+            "| `GET /automation-flows/drafts/<id>` ",
+            "| `POST /automation-flows/drafts/<id>/finish` ",
+        ] {
+            assert!(skill.contains(row), "{row} missing from the skill");
+        }
+        assert!(skill.contains("## Build a Flow step by step"));
+        assert!(skill.contains("**Delete a draft you abandon**"));
+        assert!(skill.contains("flow_under_construction"));
+    }
+
+    #[test]
     fn automation_flows_skill_names_the_screenpipe_node_types_n8n_loads() {
         // The local n8n loads the package as custom extensions, so its node
         // types are `CUSTOM.<name>`; a wrong prefix makes n8n refuse the

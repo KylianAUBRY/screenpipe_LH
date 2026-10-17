@@ -70,7 +70,11 @@ the `screenpipe-api` skill (`Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY`).
 | `GET /automation-flows/<id>/workflow` | `{id, versionId, summary, workflow}`: the n8n workflow to edit |
 | `PUT /automation-flows/<id>` with `{workflow, summary?}` | the updated Flow |
 | `POST /automation-flows` with `{workflow, summary}` | the new Flow (`201`, `draft`, switched off) |
-| `DELETE /automation-flows/<id>` | `{id, deleted: true}`: the Flow is gone from n8n and ScreenPipe |
+| `POST /automation-flows/drafts` with `{workflow, summary?}` | a new hidden draft's state (`201`) |
+| `PUT /automation-flows/drafts/<id>` with `{workflow, summary?}` | the draft's state after this step |
+| `GET /automation-flows/drafts/<id>` | the draft's state: `nodes[]` (`complete`, `missing`, `credentials`), `problems`, `complete` |
+| `POST /automation-flows/drafts/<id>/finish` with `{summary?}` | the Flow (`draft`, switched off, now listed) |
+| `DELETE /automation-flows/<id>` | `{id, deleted: true}`: the Flow (or draft) is gone from n8n and ScreenPipe |
 | `GET /automation-flows/nodes?q=<words>` | `{results, total}`: at most 20 node types of this n8n matching every word, best first |
 | `GET /automation-flows/nodes/card?type=<type>&resource=<r>&operation=<o>` | one node type's card (`resource` and `operation` optional) |
 
@@ -87,6 +91,8 @@ invalid_workflow` (the `detail` says what to fix: fix it and send again),
 email; ScreenPipe already waited about 90 s and changed nothing. Wait a minute
 and send the same request once more; if it is refused again, tell the user to
 try again later),
+`409 flow_under_construction` / `409 flow_not_under_construction` (« Build a
+Flow step by step »),
 `400 invalid_query` (a lookup without words, or a `resource`/`operation` the
 node does not offer: `detail` lists the values), `404 node_type_unknown`
 (that type is not in this n8n: search again).
@@ -232,22 +238,78 @@ off; the user reviews it and switches it on.
        `activitySummary` with `startTime` (e.g. `1h ago`), `endTime`
        (`now`) and `summaryFilters` (`appName`, `query`); both take
        `maxTextLength` (default 1000).
-4. Write `body.json` as `{"workflow": <workflow>, "summary": "<2 to 4 plain
-   French sentences: what the Flow does and how>"}`.
-5. Send it **once**:
+4. Build it step by step in a hidden draft (« Build a Flow step by step »),
+   with its `summary`: 2 to 4 plain French sentences, what the Flow does and
+   how.
+5. Check the answer of « Terminer »: `status` is `draft` and every node has
+   its `sentence`.
+6. Reply in French: what the Flow will do in one to three short points, that
+   the Flow is switched off until the user reviews and activates it, and the
+   Review Screen link with the returned `id`.
+
+`POST /automation-flows` with a whole, complete workflow and its summary
+still creates a Flow in one request (same checks as « Terminer »); prefer
+building step by step, which tells you after each step what is missing.
+
+## Build a Flow step by step
+
+A Flow under construction is a draft in n8n, switched off and marked under
+construction: it is invisible in the user's Flows list and cannot be
+activated until you call « Terminer ». Send the whole workflow at each step
+(the same JSON as in « Create a Flow », step 3), never a fragment.
+
+1. Start the draft with a first step: the `name` and, usually, the trigger.
+   Write `body.json` as `{"workflow": <workflow>, "summary": "…"}` (`summary`
+   optional until « Terminer »):
    ```bash
    curl --fail-with-body -X POST -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
      -H "Content-Type: application/json" --data @body.json \
-     "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/automation-flows"
+     "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/automation-flows/drafts"
    ```
-   On `400 invalid_workflow`, `detail` lists every problem: fix what you can
-   and send again; a missing node type or connection is for the user (rules 4
-   and 7). On any other failure, `GET /automation-flows` first: if a Flow with
-   that name now exists, it was created; do not send a second one.
-6. Check the answer: `status` is `draft` and every node has its `sentence`.
-7. Reply in French: what the Flow will do in one to three short points, that
-   the Flow is switched off until the user reviews and activates it, and the
-   Review Screen link with the returned `id`.
+   The answer (`201`) is the draft's state; keep its `id`. Start **one**
+   draft per Flow: on a failure other than `400`, look for it before
+   starting another (its state is at `GET /automation-flows/drafts/<id>`).
+2. Add or change nodes, one step at a time:
+   ```bash
+   curl --fail-with-body -X PUT -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+     -H "Content-Type: application/json" --data @body.json \
+     "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/automation-flows/drafts/<id>"
+   ```
+   A step is refused (`400 invalid_workflow`, nothing changed) only when a
+   node uses a type this n8n does not have or switches off, or a version it
+   lacks: look the node up again (rule 5). Anything else is accepted, even
+   empty parameters, unlinked nodes or no trigger yet, and listed in the
+   state.
+3. Read the state after every step: each answer is the state, and `GET
+   /automation-flows/drafts/<id>` reads it again.
+   - `nodes[]`: `name`, `type`, `complete`, `missing` (what the node still
+     lacks: a required parameter, a credential, a link to another node, its
+     `notes`) and `credentials` (`[{type, name}]`: the credentials it holds,
+     wired by ScreenPipe; rule 4).
+   - `problems`: what the whole workflow lacks (a trigger, the `summary`).
+   - `complete`: `true` when nothing is missing anywhere.
+   Fix what is missing in the next step. A credential n8n does not hold, or
+   holds several of, is for the user: tell them and stop (rule 4).
+4. « Terminer », once `complete` is `true` (`{"summary": "…"}` optional when
+   already sent):
+   ```bash
+   curl --fail-with-body -X POST -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+     -H "Content-Type: application/json" --data '{}' \
+     "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/automation-flows/drafts/<id>/finish"
+   ```
+   While anything is missing it is refused (`400 invalid_workflow`, `detail`
+   lists every problem) and the draft stays hidden. Accepted, the answer is
+   the Flow: `status: "draft"`, switched off, now in the Flows list for the
+   user to review.
+5. **Delete a draft you abandon**: when the user gives up, or the Flow
+   cannot be built (a node or a connection this n8n does not have, rule 7),
+   delete it at once with `DELETE /automation-flows/<id>` (« Delete a Flow »,
+   step 2). Never leave a half-built draft in n8n.
+
+A draft answers `409 flow_under_construction` on the other Flow routes
+(read, change, activate): build it here. A finished Flow answers `409
+flow_not_under_construction` on these routes: change it with « Change a
+Flow ».
 
 ## Delete a Flow
 
