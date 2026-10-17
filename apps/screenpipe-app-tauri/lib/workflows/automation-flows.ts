@@ -22,10 +22,11 @@ const CREATION_ERROR: Record<FlowsErrorCode, string> = {
   // A copy of the Flow left on in n8n is still processing an email.
   flow_running: "n8n traite encore un e-mail avec ce Flow. Réessayez dans un instant.",
   not_found: "Cette tâche ne peut pas encore devenir une automatisation.",
-  // Activation-only codes; creation never returns them.
+  // Activation- and retry-only codes; creation never returns them.
   version_changed: CREATION_FAILED,
   activation_failed: CREATION_FAILED,
   activation_requires_user: CREATION_FAILED,
+  run_not_failed: CREATION_FAILED,
   unknown: CREATION_FAILED,
 };
 
