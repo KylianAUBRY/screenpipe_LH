@@ -215,6 +215,51 @@ describe("SummaryCards", () => {
     }
   });
 
+  it("offers Create flow between the built-in chips and Custom, without sending", () => {
+    const onSendMessage = vi.fn();
+    const onCreateFlow = vi.fn();
+    const onPreviewPrompt = vi.fn();
+    render(
+      <SummaryCards
+        onSendMessage={onSendMessage}
+        onPreviewPrompt={onPreviewPrompt}
+        onCreateFlow={onCreateFlow}
+        customTemplates={[]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+        userGoalCategory="work_memory"
+      />,
+    );
+
+    const createFlow = screen.getByRole("button", { name: "Create flow" });
+    const order = screen
+      .getAllByRole("button")
+      .map((button) => button.textContent?.trim())
+      .filter((label) => ["Blockers", "Create flow", "+ Custom"].includes(label ?? ""));
+    expect(order).toEqual(["Blockers", "Create flow", "+ Custom"]);
+    expect(createFlow).toHaveClass("bg-card", "text-foreground/75", "focus-visible:ring-1");
+
+    fireEvent.click(createFlow);
+    expect(onCreateFlow).toHaveBeenCalledTimes(1);
+    expect(onSendMessage).not.toHaveBeenCalled();
+    expect(onPreviewPrompt).toHaveBeenCalledWith(null);
+    expect(captureMock).toHaveBeenCalledWith("home_card_clicked", { kind: "create_flow" });
+  });
+
+  it("shows no Create flow where the chat does not wire it", () => {
+    render(
+      <SummaryCards
+        onSendMessage={vi.fn()}
+        customTemplates={[]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("home-create-flow")).not.toBeInTheDocument();
+  });
+
   it("inverts the dashed Custom slot on hover without hiding its dashes", () => {
     render(
       <SummaryCards

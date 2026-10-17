@@ -22,7 +22,6 @@ import { ComposerUtilityMenu } from "@/components/chat/standalone/composer-utili
 import { ComposerDictationControl } from "@/components/chat/standalone/composer-dictation-control";
 import { UsagePopover } from "@/components/usage/usage-popover";
 import { ComposerWorktreeToggle } from "@/components/chat/standalone/composer-worktree-toggle";
-import { CreateFlowButton } from "@/components/automation-flows/create-flow-button";
 import type {
   ComposerCodingWorkspaceProps,
   ComposerFiltersProps,
@@ -40,8 +39,6 @@ interface ComposerControlsRowProps {
   codingWorkspace: ComposerCodingWorkspaceProps;
   isStreaming: boolean;
   dictation?: React.ComponentProps<typeof ComposerDictationControl>;
-  /** « Create flow »: fills the composer with the `automation-flows` skill prompt. */
-  createFlow?: Omit<React.ComponentProps<typeof CreateFlowButton>, "disabled">;
   sendButton: {
     isStopMode: boolean;
     hasPendingDocs: boolean;
@@ -58,7 +55,6 @@ export function ComposerControlsRow({
   codingWorkspace,
   isStreaming,
   dictation,
-  createFlow,
   sendButton,
 }: ComposerControlsRowProps) {
 
@@ -164,9 +160,6 @@ export function ComposerControlsRow({
           activePreset={modelControls.activePreset}
           onPersistDefault={modelControls.onAcpConfigDefault}
         />
-      )}
-      {createFlow && (
-        <CreateFlowButton {...createFlow} disabled={pending || !canChat} />
       )}
       <ComposerWorktreeToggle codingWorkspace={codingWorkspace} />
       <ActiveFilterLabels filters={filters} />

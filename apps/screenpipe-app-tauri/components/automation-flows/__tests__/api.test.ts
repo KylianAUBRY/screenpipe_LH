@@ -18,7 +18,7 @@ vi.mock("@/lib/chat-utils", () => ({ showChatWithPrefill }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
-import { flowsApi, FlowsApiError } from "../api";
+import { CREATION_PROMPT, flowsApi, FlowsApiError, withCreationPrompt } from "../api";
 import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "../fixtures";
 import { mockAutomationFlowsResponse, resetAutomationFlowsMock } from "../mock";
 import { createBrowserIpcMock } from "@/lib/dev/browser-tauri-mock";
@@ -289,5 +289,23 @@ describe("browser mock", () => {
   it("leaves other engine routes alone", () => {
     expect(mockAutomationFlowsResponse(new URL("/pipes", ENGINE), undefined)).toBeNull();
     expect(mockAutomationFlowsResponse(new URL("/automation-flowsX", ENGINE), undefined)).toBeNull();
+  });
+});
+
+describe("withCreationPrompt (Create flow in the main chat)", () => {
+  it("starts an empty composer with the automation-flows skill prompt", () => {
+    expect(withCreationPrompt("")).toBe(CREATION_PROMPT);
+    expect(CREATION_PROMPT).toContain("skill automation-flows");
+  });
+
+  it("keeps what the user already typed as the description", () => {
+    expect(withCreationPrompt("  crée un ticket Jira pour chaque email de bug ")).toBe(
+      `${CREATION_PROMPT}crée un ticket Jira pour chaque email de bug`,
+    );
+  });
+
+  it("does not add the prompt twice", () => {
+    const once = withCreationPrompt("trie mes emails");
+    expect(withCreationPrompt(once)).toBe(once);
   });
 });

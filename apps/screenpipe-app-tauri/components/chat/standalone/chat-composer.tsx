@@ -120,11 +120,6 @@ export function ChatComposer({
               sessionId: modelControls.currentQueueSessionId,
               isMac: queue.isMac,
             }}
-            createFlow={{
-              value: input.value,
-              inputRef: input.inputRef,
-              onValueChange: input.onValueChange,
-            }}
             sendButton={{
               isStopMode,
               hasPendingDocs,
