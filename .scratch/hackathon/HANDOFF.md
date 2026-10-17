@@ -8,8 +8,8 @@ and `evidence/LIVE-CHECKS.md` (every live check with its observed result).
 ## Where the work is
 
 - **Branch:** `hackathon/automation-flows` on `origin` (KylianAUBRY/screenpipe_LH).
-  All tickets are merged there. It is deliberately **not merged into
-  `main`** (user decision, see "Teammate divergence").
+  All tickets are merged there. Since 2026-10-17 `main` holds exactly this
+  branch (user decision, see "Teammate divergence").
 - **Process:** `/mattpocock-skills:implement-spec`: one implementer per ticket
   in its own worktree (`tdd` skill), merged `--no-ff` into the integration
   branch, pushed after every merge; then an independent code review (standards,
@@ -39,11 +39,10 @@ minutes).
 
 ## Gotchas (each cost time already)
 
-- **Branch base:** agent worktrees are cut from `origin/main`, which has a
-  teammate commit `658549edb` that conflicts with this branch (same files
-  under `components/automation-flows/`). Every implementer must start with
-  `git switch -c hackathon/ticket-NN hackathon/automation-flows`, and every
-  merger checks `git merge-base --is-ancestor 658549edb <branch>` fails.
+- **Branch base:** agent worktrees are cut from `origin/main`. Since
+  2026-10-17 `main` holds this branch's content, so that base is safe; still
+  start implementers with
+  `git switch -c hackathon/ticket-NN hackathon/automation-flows`.
 - **Engine changes need the dev build.** The ScreenPipe running from
   `/Applications` does not contain our routes or the proxy fix. Live checks:
   quit the installed app, then `cd apps/screenpipe-app-tauri && bun run dev:tauri`
@@ -109,11 +108,14 @@ minutes).
 
 ## Open decisions
 
-- **Teammate divergence:** `origin/main` has another Review Screen
-  ("Recommendations" tab, questions on the Review Screen, notification opens
-  the Review Screen, demo backend) by a teammate. Our branch follows the
-  user's decision: notification → Task Page → questions → creation → Review
-  Screen. User decision: keep a separate branch for now; do not touch `main`
-  or the teammate's files. Reconciling is a team discussion (their screen has
-  pluggable `setFlowSource`/`setFlowBackend`, which our routes could feed).
+- **Teammate divergence (settled 2026-10-17):** `main` had another Review
+  Screen ("Recommendations" tab, questions on the Review Screen, notification
+  opens the Review Screen, demo backend) by a teammate, plus the « Find an
+  automation » button and its `repeated-workflow-detector` Pipe. User
+  decision: those four commits moved to
+  `archive/main-before-automation-flows` (tip `1196dd10a`), and `main` took
+  this branch's content unchanged (merge `-s ours`, no force-push, so their
+  commits stay in `main`'s history). Pieces worth porting later from the
+  archive: Flows grouped by state, the « if → then » rules with « de vous »
+  for rules from the user's answers, choice pills for the questions.
 - Whether the n8n trigger nodes appear in the 3-minute demo (D12).
