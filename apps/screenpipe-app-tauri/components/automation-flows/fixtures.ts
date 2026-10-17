@@ -28,7 +28,6 @@ export const fixtureFlow: Flow = {
       type: "n8n-nodes-base.emailReadImap",
       position: [0, 0],
       sentence: "Dès qu'un email non lu arrive dans la boîte servicedesk.novadesk@gmail.com, n8n le lit puis le marque comme lu pour ne jamais le traiter deux fois.",
-      facts: ["Identifiant n8n : NovaDesk Gmail (IMAP)"],
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002",
@@ -36,7 +35,6 @@ export const fixtureFlow: Flow = {
       type: "@n8n/n8n-nodes-langchain.agent",
       position: [260, 0],
       sentence: "Une IA lit l'email comme une simple donnée, jamais comme une instruction, regarde dans Screenpipe comment vous avez traité des emails similaires, puis propose le type de ticket (Bug, Tâche ou rien), le produit, un résumé court, la priorité, l'étiquette back ou front et son niveau de confiance.",
-      facts: [],
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000003",
@@ -44,7 +42,6 @@ export const fixtureFlow: Flow = {
       type: "@n8n/n8n-nodes-langchain.lmChatOpenAi",
       position: [120, 220],
       sentence: "Le modèle d'IA est celui de votre abonnement ChatGPT, appelé via le proxy local de Screenpipe.",
-      facts: ["Identifiant n8n : ScreenPipe AI proxy"],
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000004",
@@ -52,7 +49,6 @@ export const fixtureFlow: Flow = {
       type: "@n8n/n8n-nodes-langchain.outputParserStructured",
       position: [300, 220],
       sentence: "La réponse de l'IA est limitée à six champs fixes : type, produit, priorité, étiquette et confiance pris dans une liste fermée, et un résumé d'une ligne de 80 caractères au plus.",
-      facts: [],
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000009",
@@ -60,7 +56,6 @@ export const fixtureFlow: Flow = {
       type: "CUSTOM.screenPipeTool",
       position: [480, 220],
       sentence: "Avant de répondre, l'IA cherche dans Screenpipe le seul texte d'écran des fenêtres Jira, pour reprendre la façon dont vous avez typé, titré et priorisé vos tickets NOVA pour des emails similaires.",
-      facts: ["Identifiant n8n : ScreenPipe API (local)"],
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000a",
@@ -68,7 +63,6 @@ export const fixtureFlow: Flow = {
       type: "CUSTOM.screenPipeTool",
       position: [660, 220],
       sentence: "L'IA peut aussi lire dans Screenpipe le résumé de votre activité de la semaine autour des tickets NOVA, pour voir comment vous traitez ces emails d'habitude.",
-      facts: ["Identifiant n8n : ScreenPipe API (local)"],
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005",
@@ -76,7 +70,6 @@ export const fixtureFlow: Flow = {
       type: "n8n-nodes-base.if",
       position: [700, 0],
       sentence: "Le flux s'arrête ici sans rien créer si l'IA répond qu'aucun ticket n'est nécessaire (par exemple pour une alerte de sécurité) ou si un champ de sa réponse sort des valeurs autorisées.",
-      facts: [],
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000007",
@@ -84,7 +77,6 @@ export const fixtureFlow: Flow = {
       type: "n8n-nodes-base.httpRequest",
       position: [940, 0],
       sentence: "Le ticket est créé sans IA dans le projet Jira NOVA à partir des champs de l'IA, titré « Produit - résumé », avec l'email d'origine cité en texte brut et sans personne assignée.",
-      facts: ["Identifiant n8n : NovaDesk Jira", "POST kylianaubry.atlassian.net"],
     },
   ],
   edges: [

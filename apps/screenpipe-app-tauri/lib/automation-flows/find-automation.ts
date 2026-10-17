@@ -1,9 +1,9 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-// « Trouver une automatisation » (Automations, next to the bell). Demo
-// contract (AGENTS.md, Hackathon mode): no detection runs; finding repeated
-// work installs the scripted Detected Task, its captures pointing at this
+// The demo installer behind the hidden shortcut ⌃⌥⌘D (`demo-shortcut.ts`).
+// Demo contract (AGENTS.md, Hackathon mode): no detection runs; finding
+// repeated work installs the scripted Detected Task, its captures pointing at this
 // machine's recorder frames when found, then sends the notification whose
 // « Voir la tâche » opens its Task Page. Same result as
 // `infra/automation-flows/demo/demo.ts`, without a terminal.
