@@ -1064,8 +1064,8 @@ async fn create_flow(
 }
 
 /// Demo: imports the task's bundled n8n workflow switched off and tagged (or
-/// adopts the copy the import script already installed), and records its
-/// review material. Calling it again for the same task returns the same Flow
+/// adopts the copy the import script already installed, switching it off if
+/// it was left on), and records its review material. Calling it again for the same task returns the same Flow
 /// (re-imported only if it was deleted or archived in n8n).
 async fn create_from_task(
     State(state): State<FlowsState>,
@@ -1113,6 +1113,14 @@ async fn create_from_task(
         None => None,
     };
     let created = match preinstalled {
+        // Creation always hands over a switched-off Draft (story 12): a copy
+        // left on in the n8n editor is switched off before it is recorded.
+        // Nothing is logged: the user never activated it.
+        Some(workflow) if workflow["active"] == true => {
+            let id = workflow_id(&workflow)?;
+            let unpublished = api.switch(&id, "unpublish", None).await?;
+            api.workflow(&id).await?.unwrap_or(unpublished)
+        }
         Some(workflow) => workflow,
         None => {
             api.expect_ok(

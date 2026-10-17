@@ -543,6 +543,45 @@ async fn create_adopts_the_workflow_already_imported_by_the_import_script() {
 }
 
 #[tokio::test]
+async fn create_switches_off_a_pre_imported_copy_that_was_left_on() {
+    // The golden-path check publishes the imported copy in the n8n editor;
+    // creating the Flow afterwards must still hand the user a switched-off
+    // Draft that only their click on "Activer" turns on.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let mut imported: Value = serde_json::from_str(include_str!(
+        "../../../infra/automation-flows/workflows/novadesk-support-tickets.json"
+    ))
+    .unwrap();
+    imported["active"] = json!(true);
+    imported["versionId"] = json!("imported-version");
+    imported["activeVersionId"] = json!("imported-version");
+    imported["tags"] = json!([{"id": "tag-imported", "name": "screenpipe-flow"}]);
+    n8n.add_workflow(imported);
+
+    let (status, flow) = app.create_from_task().await;
+
+    assert!(status.is_success(), "{status} {flow}");
+    assert_eq!(flow["id"], "spNovaFlow000001");
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(flow["activationLog"], json!([]), "nothing logged as activated");
+    assert_eq!(n8n.workflows()[0]["active"], false);
+    assert_eq!(
+        posts_ending_with(&server, "/unpublish").await,
+        vec![(
+            "/api/v1/workflows/spNovaFlow000001/unpublish".to_string(),
+            Value::Null
+        )]
+    );
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    assert_eq!(
+        app.store()["flows"]["spNovaFlow000001"]["activationLog"],
+        json!([])
+    );
+}
+
+#[tokio::test]
 async fn create_again_after_the_workflow_was_deleted_in_n8n() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;
