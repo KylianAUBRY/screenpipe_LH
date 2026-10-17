@@ -2,7 +2,7 @@
 // https://screenpipe.com
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2, Play, X } from "lucide-react";
 import type { WorkflowMap, WorkflowStage, WorkflowScreenshot } from "./model";
 import type { WorkflowsPlatform } from "./platform";
@@ -70,7 +70,7 @@ export function WorkflowStepEvidence({ workflow, stage, platform, timelineLabel 
       {preview.status === "loading" ? "Loading source screenshot…" : preview.status === "error" ? "Could not load the source screenshot." : "No screenshot available for this step."}
       {preview.canRetry && preview.status !== "loading" && <button type="button" onClick={preview.retry}>Retry screenshot</button>}
     </div>}
-    {!playing && current && <div className={styles.carousel} role="group" aria-roledescription="carousel" aria-label={`Captures for ${stage.name}`}
+    {!playing && current && <div className={`${styles.carousel} ${count > 1 ? styles.paged : ""}`} role="group" aria-roledescription="carousel" aria-label={`Captures for ${stage.name}`}
       tabIndex={count > 1 ? 0 : undefined} onKeyDown={count > 1 ? event => {
         if (event.altKey || event.ctrlKey || event.metaKey || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
         event.preventDefault(); move(event.key === "ArrowLeft" ? -1 : 1);
@@ -78,12 +78,13 @@ export function WorkflowStepEvidence({ workflow, stage, platform, timelineLabel 
       <EvidenceFigure key={`${current.frameId}:${current.timestamp}`} capture={current} stage={stage} platform={platform} suffix={suffix} expanded={enlarged.has(current.frameId)} opening={opening} label={label}
         toggle={() => setEnlarged(previous => { const next = new Set(previous); if (!next.delete(current.frameId)) next.add(current.frameId); return next; })}
         replay={!isEmbeddedScreenshot(current) && (canReplay || !!platform.openCapturedMoment) ? () => void openRecording(current) : undefined}
-        resolved={current === preview.image}
-        controls={count > 1 && <span className={styles.carouselNav}>
-          <button type="button" aria-label={`Previous capture for ${stage.name}`} title="Previous capture" onClick={() => move(-1)}><ChevronLeft size={15} aria-hidden="true" /></button>
-          <span aria-live="polite">{position + 1} / {count}</span>
-          <button type="button" aria-label={`Next capture for ${stage.name}`} title="Next capture" onClick={() => move(1)}><ChevronRight size={15} aria-hidden="true" /></button>
-        </span>} />
+        resolved={current === preview.image} />
+      {/* Outside the keyed figure, so focus stays on the control that was used. */}
+      {count > 1 && <div className={styles.carouselNav}>
+        <button type="button" aria-label={`Previous capture for ${stage.name}`} title="Previous capture" onClick={() => move(-1)}><ChevronLeft size={15} aria-hidden="true" /></button>
+        <span aria-live="polite">{position + 1} / {count}</span>
+        <button type="button" aria-label={`Next capture for ${stage.name}`} title="Next capture" onClick={() => move(1)}><ChevronRight size={15} aria-hidden="true" /></button>
+      </div>}
     </div>}
     {playing && <div ref={playerRef} className={styles.player}>
       <button type="button" className={styles.close} aria-label={`Close recording for ${stage.name}`} title="Close recording" onClick={() => setPlaying(false)}><X size={15} /></button>
@@ -106,11 +107,9 @@ function RecordingButton({ label, name, opening, onClick }: {
   </button>;
 }
 
-function EvidenceFigure({ capture, stage, platform, suffix, expanded, opening, label, toggle, replay, resolved, controls }: {
+function EvidenceFigure({ capture, stage, platform, suffix, expanded, opening, label, toggle, replay, resolved }: {
   capture: WorkflowScreenshot; stage: WorkflowStage; platform: WorkflowsPlatform; suffix: string;
   expanded: boolean; opening: boolean; label?: string; toggle: () => void; replay?: () => void; resolved: boolean;
-  /** Carousel position and navigation, shown at the end of the caption row. */
-  controls?: ReactNode;
 }) {
   const load = resolved || isEmbeddedScreenshot(capture) ? undefined : platform.loadWorkflowScreenshot;
   const preview = useSourceScreenshot(stage, !load, load, capture);
@@ -129,11 +128,8 @@ function EvidenceFigure({ capture, stage, platform, suffix, expanded, opening, l
       {(failed || preview.status === "error") && load && <button onClick={() => { setFailed(false); preview.retry(); }}>Retry screenshot</button>}
     </div>}
     <figcaption><span>{!capture.visualVerified ? "Source screenshot · " : ""}{capture.app} · {when(capture.timestamp)}</span>
-      <span className={styles.captionActions}>
-        {replay && <RecordingButton label={label} opening={opening} onClick={replay}
-          name={label ? `${label}${suffix} : ${stage.name}` : `${platform.openCapturedMoment ? "Open" : "View"} recording${suffix} for ${stage.name}`} />}
-        {controls}
-      </span>
+      {replay && <RecordingButton label={label} opening={opening} onClick={replay}
+        name={label ? `${label}${suffix} : ${stage.name}` : `${platform.openCapturedMoment ? "Open" : "View"} recording${suffix} for ${stage.name}`} />}
     </figcaption>
   </figure>;
 }

@@ -4,7 +4,9 @@
 .previewStatus { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 16px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-size: 12px; }
 .previewStatus button { text-decoration: underline; }
 /* One capture at a time in a fixed frame; Enlarge shows it at full width. */
-.carousel { min-width: 0; margin: 0 0 20px; border-radius: 6px; }
+.carousel { position: relative; min-width: 0; margin: 0 0 20px; border-radius: 6px; }
+/* The navigation shares the caption row: the caption keeps room for it. */
+.paged figcaption { min-height: 32px; padding-right: 104px; }
 .carousel:focus-visible { outline: 1px solid var(--ink); outline-offset: 4px; }
 .figure { margin: 0; }
 .figure .imageButton { display: block; padding: 0; position: relative; width: 100%; height: var(--evidence-frame); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--soft); cursor: zoom-in; }
@@ -15,9 +17,8 @@
 .zoom { position: absolute; right: 8px; bottom: 8px; display: grid; place-items: center; padding: 6px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; opacity: 0; }
 .imageButton:hover .zoom, .imageButton:focus-visible .zoom { opacity: 1; }
 .figure figcaption { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; font-size: 11px; line-height: 1.5; color: var(--muted); }
-.figure figcaption > span:first-child { min-width: 0; overflow-wrap: anywhere; }
-.captionActions { display: inline-flex; align-items: center; flex-shrink: 0; gap: 4px; }
-.carouselNav { display: inline-flex; align-items: center; gap: 2px; font-variant-numeric: tabular-nums; }
+.figure figcaption > span { min-width: 0; overflow-wrap: anywhere; }
+.carouselNav { position: absolute; right: 0; bottom: 0; display: flex; align-items: center; height: 32px; gap: 2px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .carouselNav > span { min-width: 34px; text-align: center; }
 .carouselNav > button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
 .carouselNav > button:hover { background: var(--soft); color: var(--ink); }

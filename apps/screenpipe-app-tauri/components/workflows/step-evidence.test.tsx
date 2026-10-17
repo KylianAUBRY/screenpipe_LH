@@ -254,6 +254,17 @@ describe("evidence carousel", () => {
     expect(screen.getByRole("img")).toHaveAttribute("src", captures[1].dataUrl);
   });
 
+  it("keeps keyboard focus on the control that changed the capture", () => {
+    render(carousel());
+    const next = screen.getByRole("button", { name: `Next capture for ${stage.name}` });
+    next.focus();
+    fireEvent.click(next);
+    expect(screen.getByText("2 / 3")).toBeVisible();
+    expect(screen.getByRole("button", { name: `Next capture for ${stage.name}` })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    expect(screen.getByText("3 / 3")).toBeVisible();
+  });
+
   it("shows a single capture without carousel controls", () => {
     render(<WorkflowStepEvidence workflow={workflow} stage={{ ...stage, screenshot: null, screenshots: [captures[0]] }} platform={{} as WorkflowsPlatform} />);
     expect(screen.getByRole("img")).toHaveAttribute("src", captures[0].dataUrl);
