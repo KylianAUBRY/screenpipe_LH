@@ -7,8 +7,8 @@
 // Pieces shared by the Flows list and the Review Screen.
 
 import React, { useCallback, useEffect, useState } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { FlowsApiError, type FlowsApi, type FlowStatus } from "./api";
 import { STATUS_LABEL } from "./labels";
 
@@ -46,13 +46,35 @@ export function useFlowsLoad<T>(load: () => Promise<T>, key: string) {
   return [result, reload] as const;
 }
 
+/** Status square + label; phosphor marks a Flow that runs (docs/DESIGN.md). */
 export function StatusBadge({ status }: { status: FlowStatus }) {
   return (
-    <Badge variant={status === "active" ? "default" : "outline"} data-testid="flow-status">
-      {STATUS_LABEL[status]}
-    </Badge>
+    <span className="inline-flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground">
+      <span
+        aria-hidden
+        className={cn(
+          "h-[9px] w-[9px] flex-none border",
+          status === "active"
+            ? "border-phosphor bg-phosphor"
+            : "border-muted-foreground/60",
+        )}
+      />
+      <span data-testid="flow-status">{STATUS_LABEL[status]}</span>
+    </span>
   );
 }
+
+/** Uppercase section label, as in the rest of the app. */
+export function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <h3 className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
+      {children}
+    </h3>
+  );
+}
+
+/** Uppercase mono action buttons. */
+export const ACTION_BUTTON = "uppercase tracking-[0.08em]";
 
 export function FlowsErrorMessage({
   error,
@@ -71,7 +93,7 @@ export function FlowsErrorMessage({
           Renseignez l&apos;URL de l&apos;API n8n et une clé API dans Connexions → n8n,
           puis revenez ici.
         </p>
-        <Button size="sm" variant="outline" onClick={() => void api.openN8nConnection()}>
+        <Button size="sm" variant="outline" className={ACTION_BUTTON} onClick={() => void api.openN8nConnection()}>
           Ouvrir Connexions
         </Button>
       </div>
@@ -95,7 +117,7 @@ export function FlowsErrorMessage({
       {error.detail && (
         <p className="break-all font-mono text-xs text-muted-foreground">{error.detail}</p>
       )}
-      <Button size="sm" variant="outline" onClick={onRetry}>
+      <Button size="sm" variant="outline" className={ACTION_BUTTON} onClick={onRetry}>
         Réessayer
       </Button>
     </div>

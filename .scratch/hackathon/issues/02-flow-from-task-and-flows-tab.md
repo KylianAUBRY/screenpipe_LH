@@ -18,9 +18,12 @@ styling, built to be replaced.
 **Blocked by:** None (can start immediately). Use a provisional bundled
 fixture until 01 exports the final one.
 
-**Status:** done (2026-10-17, branch `claude/wonderful-spence-c67d0b`). The
-bundled workflow is still the provisional one; ticket 01 replaces
-`crates/screenpipe-engine/assets/automation-flows/novadesk-support-tickets.{workflow,review}.json`.
+**Status:** ready-for-agent
+
+Implementation: branch `claude/wonderful-spence-c67d0b`. The engine bundles
+ticket 01's `infra/automation-flows/workflows/novadesk-support-tickets*.json`
+and adopts the copy `import-workflow.sh` already installed (fixed id
+`spNovaFlow000001`) instead of importing a duplicate.
 
 - [x] Flow service tests against a fake n8n: not configured → 412; n8n down → 502; create imports switched off and tagged; a second call returns the same Flow; unknown task → 404; sticky notes are not nodes; node sentences come from node notes; status is Draft.
 - [x] The n8n connection shows the two new fields and stores the key as a secret.

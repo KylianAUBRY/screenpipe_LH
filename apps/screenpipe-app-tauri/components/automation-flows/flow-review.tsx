@@ -12,7 +12,7 @@ import React from "react";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Flow, FlowsApi } from "./api";
-import { FlowsErrorMessage, StatusBadge, useFlowsLoad } from "./common";
+import { ACTION_BUTTON, FlowsErrorMessage, SectionLabel, StatusBadge, useFlowsLoad } from "./common";
 import { activationLabel, lastRunLabel, shortNodeType } from "./labels";
 
 export function FlowReview({
@@ -59,7 +59,7 @@ function ReviewContent({ flow, api }: { flow: Flow; api: FlowsApi }) {
           Dernière exécution : {lastRunLabel(flow.lastExecution)}
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" onClick={() => void api.openInN8n(flow.n8nUrl)}>
+          <Button size="sm" variant="outline" className={ACTION_BUTTON} onClick={() => void api.openInN8n(flow.n8nUrl)}>
             <ExternalLink className="mr-1 h-4 w-4" aria-hidden />
             Voir le graphe
           </Button>
@@ -67,6 +67,7 @@ function ReviewContent({ flow, api }: { flow: Flow; api: FlowsApi }) {
             <Button
               size="sm"
               variant="outline"
+              className={ACTION_BUTTON}
               onClick={() => void api.openTaskPage(flow.sourceTaskId!)}
             >
               Voir la tâche
@@ -88,12 +89,14 @@ function ReviewContent({ flow, api }: { flow: Flow; api: FlowsApi }) {
       )}
 
       <section className="space-y-2">
-        <h3 className="text-sm font-medium">Ce que fait ce Flow</h3>
+        <SectionLabel>Ce que fait ce Flow</SectionLabel>
         <p className="text-sm leading-relaxed">{flow.summary || "Pas de résumé."}</p>
       </section>
 
       <section className="space-y-2">
-        <h3 className="text-sm font-medium">Étapes ({steps.length})</h3>
+        <SectionLabel>
+          Étapes <span className="font-mono tracking-normal">{steps.length}</span>
+        </SectionLabel>
         <ol className="space-y-2" aria-label="Étapes du Flow">
           {steps.map((node) => (
             <li
@@ -116,7 +119,7 @@ function ReviewContent({ flow, api }: { flow: Flow; api: FlowsApi }) {
       </section>
 
       <section className="space-y-2">
-        <h3 className="text-sm font-medium">Historique d&apos;activation</h3>
+        <SectionLabel>Historique d&apos;activation</SectionLabel>
         {flow.activationLog.length === 0 ? (
           <p className="text-sm text-muted-foreground">Jamais activé.</p>
         ) : (
