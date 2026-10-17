@@ -44,10 +44,9 @@ export function FlowReview({
 }
 
 function ReviewContent({ flow, api }: { flow: Flow; api: FlowsApi }) {
-  // n8n positions run left to right; reading order follows them.
-  const steps = [...flow.nodes].sort(
-    (a, b) => a.position[0] - b.position[0] || a.position[1] - b.position[1],
-  );
+  // The n8n node order: sorting by position would put an AI agent's model
+  // and tools (drawn below it, further left) before the agent itself.
+  const steps = flow.nodes;
 
   return (
     <article className="space-y-6" aria-label={`Revue du Flow ${flow.name}`}>

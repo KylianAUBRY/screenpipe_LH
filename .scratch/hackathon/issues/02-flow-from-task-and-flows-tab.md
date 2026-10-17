@@ -18,10 +18,35 @@ styling, built to be replaced.
 **Blocked by:** None (can start immediately). Use a provisional bundled
 fixture until 01 exports the final one.
 
-**Status:** ready-for-agent
+**Status:** done (2026-10-17, branch `claude/wonderful-spence-c67d0b`). The
+bundled workflow is still the provisional one; ticket 01 replaces
+`crates/screenpipe-engine/assets/automation-flows/novadesk-support-tickets.{workflow,review}.json`.
 
-- [ ] Flow service tests against a fake n8n: not configured → 412; n8n down → 502; create imports switched off and tagged; a second call returns the same Flow; unknown task → 404; sticky notes are not nodes; node sentences come from node notes; status is Draft.
-- [ ] The n8n connection shows the two new fields and stores the key as a secret.
-- [ ] The Flows tab and Review Screen render from the typed client (frontend tests).
-- [ ] The browser mock shows a fixture Flow without the native app.
-- [ ] A clear message appears in the Flows tab when n8n is not configured or unreachable.
+- [x] Flow service tests against a fake n8n: not configured → 412; n8n down → 502; create imports switched off and tagged; a second call returns the same Flow; unknown task → 404; sticky notes are not nodes; node sentences come from node notes; status is Draft.
+- [x] The n8n connection shows the two new fields and stores the key as a secret.
+- [x] The Flows tab and Review Screen render from the typed client (frontend tests).
+- [x] The browser mock shows a fixture Flow without the native app.
+- [x] A clear message appears in the Flows tab when n8n is not configured or unreachable.
+
+## Verification
+
+| Criterion | Command (exact) | Result |
+|---|---|---|
+| Flow service vs fake n8n (wiremock) | `cargo test -p screenpipe-engine --test automation_flows_test` | 9 passed, 0 failed: `not_configured_returns_412`, `n8n_down_returns_502`, `create_from_task_imports_switched_off_and_tagged` (also asserts Draft), `second_create_returns_the_same_flow`, `create_again_after_the_workflow_was_deleted_in_n8n`, `unknown_task_or_flow_returns_404`, `review_nodes_come_from_n8n_notes_without_sticky_notes`, `list_shows_only_flows_with_status_and_last_run`, `status_is_derived_from_n8n_and_the_reviewed_version` |
+| Status derivation, fixture validity | `cargo test -p screenpipe-engine --lib automation_flows` | 3 passed, 0 failed |
+| n8n connection fields + secret | `cargo test -p screenpipe-connect --lib connections::` | 110 passed, 0 failed, 1 ignored (includes `n8n::tests::api_url_is_plain_and_api_key_is_secret`, `api_key_is_stored_in_the_secret_store`, `test_checks_the_api_with_the_key_header`, `test_rejects_half_configured_api_and_empty_form`) |
+| n8n form shows the fields (masked key) | `bun x vitest run --config vitest.config.ts components/settings/__tests__/connection-credential-forms.test.tsx` (in `apps/screenpipe-app-tauri`) | 6 passed |
+| Flows tab + Review Screen from the typed client, error messages, browser mock | `bun x vitest run --config vitest.config.ts components/automation-flows components/__tests__/pipe-store-flows-tab.test.tsx` | 23 passed (api 11, flows-tab 10, pipe-store-flows-tab 2) |
+| Whole frontend suite | `NODE_OPTIONS=--no-experimental-webstorage bun run test` | vitest 6908 passed, 1 skipped; bun 398 pass, 0 fail. Without the flag, 171 tests in 16 unrelated files fail on this machine (Node v26's built-in `localStorage` shadows jsdom's; none of those files import changed code). |
+| Types | `bun run typecheck` | 0 errors |
+
+Browser mock (`bun run dev:web`, then
+`http://127.0.0.1:1420/home?section=pipes&tab=flows`; add
+`&flowsState=not-configured` or `unreachable` for the error states):
+
+- List: `.scratch/hackathon/screenshots/02-flows-list.jpg`
+- Review Screen (`&flow=fxNovaDesk01`): `.scratch/hackathon/screenshots/02-review-screen.jpg`
+- n8n not configured: `.scratch/hackathon/screenshots/02-n8n-not-configured.jpg`
+
+Not verified here: the real n8n 2.42.2 import (no API key yet) and the
+native app (`bun run dev:tauri`); both belong to ticket 01 / the golden path.
