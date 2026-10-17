@@ -42,7 +42,7 @@ timestamp: string} | null`, `by: "api"` and the codes `flow_running`,
 
 **Blocked by:** None.
 
-**Status:** done on `hackathon/ticket-23` (tests only; live check pending, see Notes). Codes
+**Status:** done (live: sentence-case buttons, facts, « Voir dans la timeline », NOVA-40 with inert markup; see `.scratch/hackathon/evidence/LIVE-CHECKS.md`)
 against ticket 22's contract (`facts`, `sourceMoment`); merge after or with ticket 22.
 
 - [x] Frontend tests for 1–4; `bun x tsc --noEmit -p .` clean.

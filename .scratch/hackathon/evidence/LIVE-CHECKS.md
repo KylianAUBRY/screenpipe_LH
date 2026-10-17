@@ -126,6 +126,19 @@ in Safari (n8n sign-in page: log in before the demo); history
 reset between rehearsals restored the start state (empty Flows list, answers
 cleared, 0 unread).
 
+## After the code review fixes (tickets 21–23), build of 15:33
+
+| Check | Observed |
+|---|---|
+| Review Screen | sentence-case buttons (« Activer », « Voir le graphe », « Voir la tâche », « Voir dans la timeline », « Demander une modification »); facts under the steps: « Identifiant n8n : NovaDesk Gmail (IMAP) », « … ScreenPipe AI proxy », « … ScreenPipe API (local) », « Identifiant n8n : NovaDesk Jira · POST kylianaubry.atlassian.net » |
+| « Voir dans la timeline » | `sourceMoment` = frame 17099 (r1 email, 04:05:30); the click opened the app's timeline window |
+| Created workflow in n8n | settings without `availableInMCP`; IMAP catch-up seed present |
+| Chat change sent **while** execution 24 ran (direct `PUT`) | the service waited, execution 24 finished (ticket created), then `paused_for_edit` — answer after 7 s, nothing orphaned (ticket 21) |
+| `POST /deactivate` with the API key only | history « Désactivé hors de Screenpipe » (not « par vous ») |
+| Workflow published directly in n8n | `reviewOutdated: true` → banner and « Activer cette version » |
+| Email with `{noformat}`, `{quote}`, a link and an image | NOVA-40: the whole email inside one `{noformat}` block, the markup inert |
+| Rehearsal 5 | Part A in 52 s; then execution 25 hung: ScreenPipe's AI proxy never answered one call and the OpenAI client waited for its 10-minute default (n8n logs « Request timed out », same as execution 22 in rehearsal 3). The chat change waited 90 s and answered `flow_running` without touching anything (ticket 21 working as designed). Fixed in the workflow: the AI call times out after 30 s and retries twice. |
+
 ## Task Page evidence (ticket 15)
 
 `demo.ts` lookup: 9/9 captures resolved to frames recorded on this Mac

@@ -196,15 +196,24 @@ chaque ticket créé ».
 
 ## Acceptance (demo machine)
 
-- The notification opens the Task Page of `wf-novadesk-support-tickets`.
-- "Créer l'automatisation" stays disabled until both answers are filled.
-- After creation, n8n holds one inactive workflow tagged `screenpipe-flow`; a
-  second click does not create a second one.
-- The Review Screen shows every non-sticky node with its sentence.
-- Activer makes the n8n workflow active; Désactiver reverses it; both appear
-  in the activation history.
-- A new bug email becomes one NOVA ticket; a non-ticket email creates none.
-- A chat modification of an active Flow leaves it `needs_review` and inactive.
+Observed on the demo machine on 2026-10-17 (details: `evidence/LIVE-CHECKS.md`):
+
+- [x] The notification opens the Task Page of `wf-novadesk-support-tickets`.
+  Pressing « Voir la tâche » in the app's notification panel opened it in 4–8 s (rehearsals 0–5).
+- [x] "Créer l'automatisation" stays disabled until both answers are filled.
+  `enabled=false` at 0 and 1 answer, `true` at 2 (rehearsals 1–5).
+- [x] After creation, n8n holds one inactive workflow tagged `screenpipe-flow`; a
+  second click does not create a second one. Checked through the n8n API in every rehearsal; a
+  second click returned the same Flow (rehearsal 0).
+- [x] The Review Screen shows every non-sticky node with its sentence. 8 of 8, plus the fixed
+  facts (credentials, Jira host).
+- [x] Activer makes the n8n workflow active; Désactiver reverses it; both appear
+  in the activation history. « Activé par vous » / « Désactivé par vous »; a deactivation outside
+  the app reads « Désactivé hors de Screenpipe ».
+- [x] A new bug email becomes one NOVA ticket; a non-ticket email creates none. NOVA-31…40;
+  6 Google security alerts and a newsletter created none.
+- [x] A chat modification of an active Flow leaves it `needs_review` and inactive. Rehearsals
+  0–4; with an email being processed, the change waits for it (ticket 21).
 
 ## Human setup (agents must not do these)
 

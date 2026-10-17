@@ -46,7 +46,7 @@ and what `flow_running` means (wait and retry once).
 **Blocked by:** None. Ticket 23 runs in parallel on the frontend, the demo
 workflow's Jira step and the n8n nodes; it codes against the contract above.
 
-**Status:** done on `hackathon/ticket-22` (tests only; live check pending, see Notes). Integration
+**Status:** done (live: facts, timeline moment, « Désactivé hors de Screenpipe », outdated flag after a publish in n8n, no availableInMCP; see `.scratch/hackathon/evidence/LIVE-CHECKS.md`)
 tip merged (ticket 23 included).
 
 - [x] Engine tests (fake n8n) for each numbered item; existing tests pass.

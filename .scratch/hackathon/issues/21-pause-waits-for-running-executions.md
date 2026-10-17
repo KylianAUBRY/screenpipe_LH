@@ -21,7 +21,7 @@ unchanged.
 
 **Blocked by:** None.
 
-**Status:** done on `hackathon/ticket-22` (with ticket 22; tests only, live check pending)
+**Status:** done (live: a chat change sent while execution 24 ran waited for it, the ticket was created, then the Flow paused; see `.scratch/hackathon/evidence/LIVE-CHECKS.md`)
 
 - [x] Engine tests (fake n8n): a running execution that finishes → the change/deactivation waits, then unpublishes; one still running at the deadline → 409 `flow_running`, no unpublish, no history entry; none running → immediate as today.
   `switching_off_waits_for_the_email_being_processed` (Désactiver and a chat change of an active
@@ -32,7 +32,7 @@ unchanged.
   `flows-tab.test.tsx`: « Désactivation impossible » + « n8n traite encore un e-mail avec ce Flow :
   rien n'a changé. Réessayez dans un instant. ». Skill: `409 flow_running` → wait a minute, send the
   same request once more, then tell the user.
-- [ ] Live (orchestrator): bug email, then the chat change while it is processed → the ticket is created, then the Flow is paused.
+- [x] Live (orchestrator): bug email, then the chat change while it is processed → the ticket is created, then the Flow is paused.
 
 ## What was built
 
