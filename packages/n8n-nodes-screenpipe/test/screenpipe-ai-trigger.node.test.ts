@@ -57,7 +57,7 @@ describe("ScreenPipe AI Trigger: what n8n loads", () => {
       ["conditionPrompt", ""],
       ["lookbackMinutes", 15],
       ["cooldownMinutes", 60],
-      ["model", "chatgpt/gpt-5.6-terra"],
+      ["model", "chatgpt/gpt-5.6-luna:max"],
     ]);
     // n8n resolves `file:` icons next to the built .node.js; the build copies
     // nodes/ScreenPipe/screenpipe.png, which this node reuses.
@@ -95,8 +95,8 @@ describe("ScreenPipe AI Trigger: deciding with the AI", () => {
     });
     expect(aiRequest).toMatchObject({ method: "POST", path: "/v1/chat/completions", authorization: `Bearer ${API_KEY}` });
     const body = aiRequest.body as { model: string; messages: { role: string; content: string }[] };
-    // By default the user's ChatGPT subscription judges, through the same proxy.
-    expect(body.model).toBe("chatgpt/gpt-5.6-terra");
+    // By default the user's ChatGPT subscription judges, at maximum reasoning, through the same proxy.
+    expect(body.model).toBe("chatgpt/gpt-5.6-luna:max");
     const prompt = body.messages.map((m) => m.content).join("\n");
     expect(prompt).toContain(CONDITION);
     expect(prompt).toContain("[NovaCRM] Export CSV vide — support");

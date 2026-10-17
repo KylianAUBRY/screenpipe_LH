@@ -12,9 +12,9 @@ the user's ChatGPT subscription.
 
 | AI | Before | Now |
 |----|--------|-----|
-| ScreenPipe chat (Flow creation, Flow changes) | default preset `screenpipe-cloud` / `auto` | the ChatGPT preset: Settings → AI → « Use a model directly » → ChatGPT, signed in, set as default. No code: Pi already speaks the ChatGPT backend. |
-| n8n AI step (OpenAI Chat Model, credential `spProxyOpenAI001`) | model `auto` | model `chatgpt/gpt-5.6-terra`, same credential and base URL |
-| ScreenPipe AI Trigger | `model: "auto"` hard-coded | new `model` parameter, default `chatgpt/gpt-5.6-terra` |
+| ScreenPipe chat (Flow creation, Flow changes) | default preset `screenpipe-cloud` / `auto` | the ChatGPT preset on `gpt-5.6-luna`, Effort slider on Max: Settings → AI → « Use a model directly » → ChatGPT, signed in, set as default. No code: Pi already speaks the ChatGPT backend. |
+| n8n AI step (OpenAI Chat Model, credential `spProxyOpenAI001`) | model `auto` | model `chatgpt/gpt-5.6-luna:max`, same credential and base URL |
+| ScreenPipe AI Trigger | `model: "auto"` hard-coded | new `model` parameter, default `chatgpt/gpt-5.6-luna:max` |
 
 ## How `chatgpt/<model>` works
 
@@ -48,7 +48,7 @@ byte for byte as before.
 - `packages/n8n-nodes-screenpipe/nodes/ScreenPipeAiTrigger/ScreenPipeAiTrigger.node.ts`
   (+ tests): `model` parameter; reads OpenAI-shaped error bodies.
 - `crates/screenpipe-core/assets/skills/automation-flows/SKILL.md`: the chat
-  builds AI steps on `chatgpt/gpt-5.6-terra` and knows the trigger's `model`.
+  builds AI steps on `chatgpt/gpt-5.6-luna:max` and knows the trigger's `model`.
 - `infra/automation-flows/workflows/novadesk-support-tickets.json`,
   `.review.json`, `.test.ts`, and the app fixture
   `components/automation-flows/fixtures.ts`: model and wording (« votre

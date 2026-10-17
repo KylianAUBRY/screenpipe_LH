@@ -15,9 +15,10 @@ import {
 
 /**
  * The AI that judges by default: the user's ChatGPT subscription, which
- * ScreenPipe's proxy answers for any `chatgpt/<model>` model.
+ * ScreenPipe's proxy answers for any `chatgpt/<model>` model; `:max` is the
+ * reasoning effort.
  */
-const DEFAULT_MODEL = "chatgpt/gpt-5.6-terra";
+const DEFAULT_MODEL = "chatgpt/gpt-5.6-luna:max";
 
 /**
  * Starts a workflow when an AI judges that a situation described in plain
@@ -71,7 +72,7 @@ export class ScreenPipeAiTrigger implements INodeType {
         type: "string",
         default: DEFAULT_MODEL,
         description:
-          "The AI that judges the condition. A model starting with chatgpt/ (e.g. chatgpt/gpt-5.6-sol) uses your ChatGPT subscription, connected in ScreenPipe's AI settings; auto uses your ScreenPipe subscription.",
+          "The AI that judges the condition. A model starting with chatgpt/ uses your ChatGPT subscription, connected in ScreenPipe's AI settings; an optional :low to :max suffix sets the reasoning effort (e.g. chatgpt/gpt-5.6-sol:high). auto uses your ScreenPipe subscription.",
       },
     ],
   };

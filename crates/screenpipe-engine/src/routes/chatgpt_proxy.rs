@@ -4,7 +4,10 @@
 //! `chatgpt/<model>` on the local `/v1/chat/completions` proxy: the answer
 //! comes from the user's ChatGPT subscription instead of screenpipe cloud.
 //! n8n workflows (and any OpenAI client on the machine) keep the same base URL
-//! and local key; only the model name changes, e.g. `chatgpt/gpt-5.6-terra`.
+//! and local key; only the model name changes, e.g. `chatgpt/gpt-5.6-luna:max`.
+//! The optional `:<effort>` suffix sets the reasoning effort (`low` … `max`),
+//! for clients that cannot send it (n8n only passes low, medium or high); a
+//! `reasoning_effort` in the request overrides it.
 //!
 //! The ChatGPT sign-in is the one the desktop app holds (Settings → AI →
 //! ChatGPT), read and refreshed through screenpipe-core as pipes do. The
@@ -30,23 +33,47 @@ const CODEX_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 /// The backend requires instructions; used when the request has no system message.
 const DEFAULT_INSTRUCTIONS: &str = "You are a helpful assistant.";
 
-/// The ChatGPT model a chat request names (`chatgpt/<model>` → `<model>`), or
-/// `None` when the request is not for ChatGPT.
-pub fn requested_model(body: &[u8]) -> Option<String> {
+/// A `chatgpt/<name>[:<effort>]` model: the ChatGPT model and the reasoning
+/// effort its suffix asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatGptModel {
+    /// The model as the caller named it, echoed in the answer.
+    id: String,
+    name: String,
+    effort: Option<String>,
+}
+
+impl ChatGptModel {
+    fn parse(model: &str) -> Option<Self> {
+        let rest = model.strip_prefix(MODEL_PREFIX)?;
+        let (name, effort) = match rest.split_once(':') {
+            Some((name, effort)) => (name, Some(effort).filter(|e| !e.is_empty())),
+            None => (rest, None),
+        };
+        if name.is_empty() {
+            return None;
+        }
+        Some(Self {
+            id: model.to_string(),
+            name: name.to_string(),
+            effort: effort.map(str::to_string),
+        })
+    }
+}
+
+/// The ChatGPT model a chat request names, or `None` when the request is not
+/// for ChatGPT.
+pub fn requested_model(body: &[u8]) -> Option<ChatGptModel> {
     #[derive(serde::Deserialize)]
     struct Model {
         model: Option<String>,
     }
-    let model = serde_json::from_slice::<Model>(body).ok()?.model?;
-    model
-        .strip_prefix(MODEL_PREFIX)
-        .filter(|m| !m.is_empty())
-        .map(str::to_string)
+    ChatGptModel::parse(&serde_json::from_slice::<Model>(body).ok()?.model?)
 }
 
 /// Answers a Chat Completions request for `model` with the user's ChatGPT
 /// subscription.
-pub async fn chat_completions(model: String, body: axum::body::Bytes) -> Response {
+pub async fn chat_completions(model: ChatGptModel, body: axum::body::Bytes) -> Response {
     // Reads, and refreshes when expired, the token the app stored. Blocking.
     let token =
         tokio::task::spawn_blocking(screenpipe_core::pipes::read_chatgpt_oauth_token)
@@ -103,7 +130,7 @@ fn account_id(token: &str) -> Option<String> {
 /// it at a fake backend.
 async fn chat_completions_with(
     auth: &ChatGptAuth,
-    model: &str,
+    model: &ChatGptModel,
     body: &[u8],
     url: &str,
 ) -> Response {
@@ -185,7 +212,7 @@ async fn chat_completions_with(
 }
 
 /// The Codex Responses request for a Chat Completions `request`.
-fn responses_request(request: &Value, model: &str) -> Result<Value, String> {
+fn responses_request(request: &Value, model: &ChatGptModel) -> Result<Value, String> {
     let messages = request
         .get("messages")
         .and_then(Value::as_array)
@@ -236,7 +263,7 @@ fn responses_request(request: &Value, model: &str) -> Result<Value, String> {
         instructions.join("\n\n")
     };
     let mut body = json!({
-        "model": model,
+        "model": model.name,
         "instructions": instructions,
         "input": input,
         "store": false,
@@ -261,7 +288,8 @@ fn responses_request(request: &Value, model: &str) -> Result<Value, String> {
     if let Some(format) = text_format(request.get("response_format")) {
         body["text"] = json!({ "format": format });
     }
-    if let Some(effort) = request.get("reasoning_effort").and_then(Value::as_str) {
+    let effort = request.get("reasoning_effort").and_then(Value::as_str);
+    if let Some(effort) = effort.or(model.effort.as_deref()) {
         body["reasoning"] = json!({ "effort": effort });
     }
     Ok(body)
@@ -413,7 +441,7 @@ fn failure(error: Option<&Value>) -> (StatusCode, String) {
 }
 
 /// The answer as a Chat Completions response.
-fn chat_completion(answer: &Answer, model: &str) -> Value {
+fn chat_completion(answer: &Answer, model: &ChatGptModel) -> Value {
     let mut text = String::new();
     let mut tool_calls = Vec::new();
     for item in &answer.items {
@@ -468,7 +496,7 @@ fn chat_completion(answer: &Answer, model: &str) -> Value {
         "id": format!("chatcmpl-{}", uuid::Uuid::new_v4().simple()),
         "object": "chat.completion",
         "created": created,
-        "model": format!("{MODEL_PREFIX}{model}"),
+        "model": model.id,
         "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
         "usage": {
             "prompt_tokens": tokens("input_tokens"),
@@ -608,10 +636,15 @@ mod tests {
         server
     }
 
+    fn model(id: &str) -> ChatGptModel {
+        ChatGptModel::parse(id).unwrap()
+    }
+
     async fn proxy(server: &MockServer, request: Value) -> (StatusCode, String, Vec<u8>) {
         let url = format!("{}/backend-api/codex/responses", server.uri());
         let body = serde_json::to_vec(&request).unwrap();
-        let response = chat_completions_with(&auth(), "gpt-5.6-terra", &body, &url).await;
+        let response =
+            chat_completions_with(&auth(), &model("chatgpt/gpt-5.6-terra"), &body, &url).await;
         let status = response.status();
         let content_type = response
             .headers()
@@ -628,13 +661,35 @@ mod tests {
 
     #[test]
     fn only_chatgpt_prefixed_models_are_for_chatgpt() {
-        let model = |m: &str| requested_model(json!({"model": m, "messages": []}).to_string().as_bytes());
-        assert_eq!(model("chatgpt/gpt-5.6-terra").as_deref(), Some("gpt-5.6-terra"));
-        assert_eq!(model("auto"), None);
-        assert_eq!(model("gpt-5.6-sol"), None);
-        assert_eq!(model("chatgpt/"), None);
+        let requested = |m: &str| requested_model(json!({"model": m, "messages": []}).to_string().as_bytes());
+        let terra = requested("chatgpt/gpt-5.6-terra").unwrap();
+        assert_eq!((terra.name.as_str(), terra.effort), ("gpt-5.6-terra", None));
+        assert_eq!(requested("auto"), None);
+        assert_eq!(requested("gpt-5.6-sol"), None);
+        assert_eq!(requested("chatgpt/"), None);
+        assert_eq!(requested("chatgpt/:max"), None);
         assert_eq!(requested_model(b"not json"), None);
         assert_eq!(requested_model(b"{\"messages\": []}"), None);
+    }
+
+    #[test]
+    fn an_effort_suffix_sets_the_reasoning_effort() {
+        let luna = model("chatgpt/gpt-5.6-luna:max");
+        assert_eq!((luna.name.as_str(), luna.effort.as_deref()), ("gpt-5.6-luna", Some("max")));
+        assert_eq!(model("chatgpt/gpt-5.6-luna:").effort, None);
+
+        let request = json!({"messages": [{"role": "user", "content": "hi"}]});
+        let body = responses_request(&request, &luna).unwrap();
+        assert_eq!(body["model"], "gpt-5.6-luna");
+        assert_eq!(body["reasoning"], json!({"effort": "max"}));
+
+        // An effort the request names wins over the suffix.
+        let request = json!({"reasoning_effort": "low", "messages": [{"role": "user", "content": "hi"}]});
+        assert_eq!(responses_request(&request, &luna).unwrap()["reasoning"], json!({"effort": "low"}));
+
+        // No suffix and no request effort: the backend's default.
+        let plain = json!({"messages": [{"role": "user", "content": "hi"}]});
+        assert!(responses_request(&plain, &model("chatgpt/gpt-5.6-luna")).unwrap().get("reasoning").is_none());
     }
 
     #[test]
@@ -672,7 +727,7 @@ mod tests {
             "response_format": {"type": "json_schema", "json_schema": {"name": "ticket", "schema": {"type": "object"}, "strict": true}},
         });
 
-        let body = responses_request(&request, "gpt-5.6-terra").unwrap();
+        let body = responses_request(&request, &model("chatgpt/gpt-5.6-terra")).unwrap();
 
         assert_eq!(body, json!({
             "model": "gpt-5.6-terra",
@@ -700,7 +755,7 @@ mod tests {
     #[test]
     fn a_request_without_system_message_gets_default_instructions() {
         let request = json!({"messages": [{"role": "user", "content": "hi"}]});
-        let body = responses_request(&request, "gpt-5.6-terra").unwrap();
+        let body = responses_request(&request, &model("chatgpt/gpt-5.6-terra")).unwrap();
         assert_eq!(body["instructions"], DEFAULT_INSTRUCTIONS);
         assert_eq!(body["input"], json!([{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]));
     }
@@ -708,11 +763,11 @@ mod tests {
     #[test]
     fn unsupported_content_is_refused_by_name() {
         let audio = json!({"messages": [{"role": "user", "content": [{"type": "input_audio"}]}]});
-        assert!(responses_request(&audio, "m").unwrap_err().contains("input_audio"));
+        assert!(responses_request(&audio, &model("chatgpt/m")).unwrap_err().contains("input_audio"));
         let role = json!({"messages": [{"role": "function", "content": "x"}]});
-        assert!(responses_request(&role, "m").unwrap_err().contains("function"));
+        assert!(responses_request(&role, &model("chatgpt/m")).unwrap_err().contains("function"));
         let tool = json!({"messages": [], "tools": [{"type": "web_search"}]});
-        assert!(responses_request(&tool, "m").is_err());
+        assert!(responses_request(&tool, &model("chatgpt/m")).is_err());
     }
 
     #[tokio::test]

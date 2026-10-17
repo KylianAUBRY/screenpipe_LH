@@ -94,10 +94,11 @@ n8n workflow — distinct from ScreenPipe's existing automations and pipes.
 - **AI model**: the user's ChatGPT subscription, everywhere. The ScreenPipe
   chat (Flow creation included) uses the ChatGPT preset (Settings → AI →
   ChatGPT). AI nodes in n8n workflows and the ScreenPipe AI Trigger name a
-  `chatgpt/<model>` model (default `chatgpt/gpt-5.6-terra`) on the local
-  OpenAI-compatible proxy (`:3030/v1/chat/completions`), which answers with
-  the ChatGPT sign-in the app holds; `auto` on the same proxy still reaches
-  the ScreenPipe subscription.
+  `chatgpt/<model>[:<effort>]` model on the local OpenAI-compatible proxy
+  (`:3030/v1/chat/completions`), which answers with the ChatGPT sign-in the
+  app holds; `auto` on the same proxy still reaches the ScreenPipe
+  subscription. Model everywhere: `gpt-5.6-luna` at `max` reasoning effort
+  (`chatgpt/gpt-5.6-luna:max`; the chat's Effort slider on Max).
 - **Situational triggers are generic**: any PC situation ScreenPipe can
   observe can trigger an n8n workflow (not just the reference case); this is
   implemented by the two ScreenPipe trigger nodes above.
