@@ -107,9 +107,9 @@ request once more; if it is refused again, tell the user to try again later).
 ### Example: « Ajoute l'étiquette `auto` à chaque ticket créé »
 
 In the NovaDesk Flow, the node « Créer le ticket Jira » (`httpRequest`) builds
-the Jira issue in `parameters.jsonBody`, which ends with
-`labels: [ $json.label ]`. Change it to `labels: [ $json.label, 'auto' ]` and set
-that node's `notes` to a sentence such as « Le ticket est créé dans le projet
+the Jira issue in `parameters.jsonBody`, which holds
+`labels: [ $json.output.label ]`. Change it to
+`labels: [ $json.output.label, 'auto' ]` and set that node's `notes` to a sentence such as « Le ticket est créé dans le projet
 Jira NOVA avec le type, la priorité, l'étiquette back ou front et l'étiquette
 auto, sans personne assignée. » Nothing else changes; the summary can mention
 the `auto` label.
