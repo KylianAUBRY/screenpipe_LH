@@ -9,10 +9,12 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AnalysisQuality, WorkflowAnalysis, WorkflowMap } from "../../../packages/workflows-ui/src/model";
-import { DEMO_TASK_ID } from "./detected-task";
+import type { Catalog } from "../../../apps/screenpipe-app-tauri/lib/automation-flows/demo-task/catalog";
+import { DEMO_TASK_ID } from "../../../apps/screenpipe-app-tauri/lib/automation-flows/demo-task/detected-task";
 
-export type Catalog = WorkflowAnalysis & { revision?: number };
+// The task itself and how it is installed are shared with the app's
+// « Trouver une automatisation » button.
+export { upsertTask, type Catalog } from "../../../apps/screenpipe-app-tauri/lib/automation-flows/demo-task/catalog";
 
 /** `<app local data>/workflows`; the default is the installed macOS app (`screenpi.pe`). */
 export function catalogDir(): string {
@@ -43,31 +45,6 @@ export function readCatalog(dir: string): Catalog | null {
   }
   if (found) throw new Error(`The workflow catalog in ${dir} is unreadable. It was left untouched.`);
   return null;
-}
-
-const EMPTY_QUALITY: AnalysisQuality = {
-  grade: "limited", usableDays: 0, requestedDays: 90, capturedMinutes: 0, totalFrames: 0,
-  appAttributionCoverage: 0, parsedContextCount: 0, verifiedEvidenceCount: 0,
-  screenshotCount: 0, screenshotCoverage: 0, warnings: [],
-};
-
-/** Install or reinstall the scripted task in its initial state (no answers). */
-export function upsertTask(previous: Catalog | null, task: WorkflowMap, now: string): Catalog {
-  const base: Catalog = previous ?? {
-    schemaVersion: 5, revision: 0, analysis: { workflows: [] }, analyzedAt: now, days: 90,
-    source: "screenpipe", bundleCount: 0, observedActiveMinutes: 0, quality: EMPTY_QUALITY,
-  };
-  const prior = base.analysis.workflows.find(workflow => workflow.id === task.id);
-  const others = base.analysis.workflows.filter(workflow => workflow.id !== task.id);
-  // A newer revision makes a stale open Task Page reload before saving answers.
-  const installed = { ...task, revision: Math.max(task.revision ?? 1, (prior?.revision ?? 0) + 1) };
-  return {
-    ...base,
-    revision: (base.revision ?? 0) + 1,
-    analyzedAt: base.analyzedAt || now,
-    quality: base.quality ?? EMPTY_QUALITY,
-    analysis: { workflows: [installed, ...others].map((workflow, index) => ({ ...workflow, rank: index + 1 })) },
-  };
 }
 
 /** Answers live in `userCorrection` (workflows-ui `workflow-answers.ts`). */

@@ -39,7 +39,7 @@ alert twice within 90 s: wait 90 s after a previous run before `demo.ts`.
 
 | Time | Do | Observed in rehearsals |
 |---|---|---|
-| 0:00 | Problem (one sentence), then run `bun infra/automation-flows/demo/demo.ts` (or have it fired just before). | — |
+| 0:00 | Problem (one sentence), then Automations → « Trouver une automatisation » (next to the bell), or run `bun infra/automation-flows/demo/demo.ts` (or have it fired just before). Both install the task and fire the same notification. | button not rehearsed in the native app yet (ticket 24) |
 | 0:10 | Click « Voir la tâche » on the notification. Task Page: 3 repetitions with the real captures (4:05–4:15), « Voir dans la timeline » on a capture. | Task Page in 4–7 s |
 | 0:30 | Type the 2 answers; « Créer l'automatisation » unlocks only at 2/2. Click it. | Review Screen in ~10 s |
 | 0:50 | Review Screen: summary, graph with one sentence per step; « Voir le graphe » (n8n in Safari) for 5 s. | |

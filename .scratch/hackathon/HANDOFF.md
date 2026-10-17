@@ -30,6 +30,7 @@ and `evidence/LIVE-CHECKS.md` (every live check with its observed result).
 | 21 | Switching a Flow off waits for the running execution | done, live-verified |
 | 22 | Review fixes, engine (who deactivated, outside activation, credentials, facts, sourceMoment, n8n_failed, no MCP) | done, live-verified |
 | 23 | Review fixes, UI/workflow/nodes (DESIGN.md, reviewed version, timeline link, Jira markup, AI trigger) | done, live-verified |
+| 24 | « Trouver une automatisation » button (scripted detection, next to the bell) | done, browser mock only; native app not run |
 | 12 | Demo assembly + rehearsal | 5 rehearsals; journey 105–110 s; acceptance list checked in `SPEC.md`; see `DEMO.md` |
 
 Also fixed from rehearsals: IMAP catch-up seed (an email arriving around
@@ -116,7 +117,10 @@ minutes).
   decision: those four commits moved to
   `archive/main-before-automation-flows` (tip `1196dd10a`), and `main` took
   this branch's content unchanged (merge `-s ours`, no force-push, so their
-  commits stay in `main`'s history). Pieces worth porting later from the
-  archive: Flows grouped by state, the « if → then » rules with « de vous »
-  for rules from the user's answers, choice pills for the questions.
+  commits stay in `main`'s history). Ported since: the « Find an automation »
+  button, as « Trouver une automatisation » running the scripted detection
+  (ticket 24; the archive's `repeated-workflow-detector` Pipe was not ported).
+  Pieces worth porting later from the archive: Flows grouped by state, the
+  « if → then » rules with « de vous » for rules from the user's answers,
+  choice pills for the questions.
 - Whether the n8n trigger nodes appear in the 3-minute demo (D12).

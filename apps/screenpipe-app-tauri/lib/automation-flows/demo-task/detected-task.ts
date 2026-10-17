@@ -6,11 +6,30 @@
 // (starts 04:05:16 local, 02:05:16Z). Embedded images use negative frame IDs:
 // they are pixels, never recorder frames (see workflows-ui `screenshots.ts`).
 // A capture found in this machine's recordings (`recorded-evidence.ts`) uses
-// its recorder frame instead, so the Task Page loads it live.
-import type { WorkflowMap, WorkflowStage, WorkflowTimingRun } from "../../../packages/workflows-ui/src/model";
+// its recorder frame instead, so the Task Page loads it live. Shared by the
+// « Trouver une automatisation » button and `infra/automation-flows/demo`.
+import type { WorkflowMap, WorkflowStage, WorkflowTimingRun } from "@screenpipe/workflows-ui";
 
 export const DEMO_TASK_ID = "wf-novadesk-support-tickets";
 export const DEMO_TASK_URL = `screenpipe://workflows?workflow=${DEMO_TASK_ID}&source=notification`;
+/** The embedded key frames, `<name>.webp`: served by the app at this path, under `public/` in the repo. */
+export const EVIDENCE_PATH = "/automation-flows/demo-evidence";
+
+/** Same deeplink action shape as the native workflow notification (`notifications/workflow.rs`). */
+export function notificationPayload(now = Date.now()) {
+  return {
+    // Unique per run: the route drops a repeated id ("Notification already sent").
+    id: `automation-flows-demo:${DEMO_TASK_ID}:${now}`,
+    title: "Tâche répétitive détectée",
+    body: "Tu as transformé 3 e-mails de bug en tickets Jira NOVA. Réponds à 2 questions pour l'automatiser.",
+    type: "pipe",
+    priority: "normal",
+    transient: false,
+    autoDismissMs: 60_000,
+    source_url: DEMO_TASK_URL,
+    actions: [{ type: "deeplink", label: "Voir la tâche", url: DEMO_TASK_URL, primary: true }],
+  };
+}
 
 /** D10: the only Clarification Questions, verbatim. */
 export const CLARIFICATION_QUESTIONS = [

@@ -27,7 +27,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { catalogDir, clearAnswers, readCatalog, writeCatalog } from "./catalog";
-import { DEMO_TASK_ID } from "./detected-task";
+import { DEMO_TASK_ID } from "../../../apps/screenpipe-app-tauri/lib/automation-flows/demo-task/detected-task";
 
 const STORE_FILE = "automation-flows.json";
 const FLOW_TAG = "screenpipe-flow"; // engine `FLOW_TAG`

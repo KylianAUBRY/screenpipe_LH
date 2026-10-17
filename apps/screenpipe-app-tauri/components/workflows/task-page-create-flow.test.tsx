@@ -5,8 +5,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { describe, expect, it, vi } from "vitest";
 import { serializeWorkflowData, WorkflowsApp, type WorkflowsPlatform } from "@screenpipe/workflows-ui";
 import { createFixtureWorkflowsPlatform } from "@screenpipe/workflows-ui/fixture";
-import { buildDetectedTask, CLARIFICATION_QUESTIONS, DEMO_TASK_ID } from "../../../../infra/automation-flows/demo/detected-task";
-import { upsertTask } from "../../../../infra/automation-flows/demo/catalog";
+import { buildDetectedTask, CLARIFICATION_QUESTIONS, DEMO_TASK_ID } from "@/lib/automation-flows/demo-task/detected-task";
+import { upsertTask } from "@/lib/automation-flows/demo-task/catalog";
 import { readWorkflowAnswers } from "../../../../packages/workflows-ui/src/workflow-answers";
 
 // The Task Page of the scripted Detected Task, opened as the notification does.

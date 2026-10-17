@@ -10,14 +10,14 @@ import { createFixtureWorkflowsPlatform, fixtureWorkflowAnalysis } from "@screen
 import { localFetch } from "@/lib/api";
 import { loadWorkflowScreenshot } from "@/lib/workflows/source-screenshot";
 import { stageScreenshots } from "../../../../packages/workflows-ui/src/screenshots";
-import { buildDetectedTask, CLARIFICATION_QUESTIONS, DEMO_TASK_ID } from "../../../../infra/automation-flows/demo/detected-task";
-import { upsertTask } from "../../../../infra/automation-flows/demo/catalog";
+import { buildDetectedTask, CLARIFICATION_QUESTIONS, DEMO_TASK_ID } from "@/lib/automation-flows/demo-task/detected-task";
+import { upsertTask } from "@/lib/automation-flows/demo-task/catalog";
 
 vi.mock("@/lib/api", () => ({ localFetch: vi.fn() }));
 
 const stage = fixtureWorkflowAnalysis.analysis.workflows[0].stages[0];
 const at = "2026-10-17T02:05:41Z";
-const evidence = (name: string) => `data:image/webp;base64,${readFileSync(join(__dirname, "../../../../infra/automation-flows/demo/evidence", `${name}.webp`)).toString("base64")}`;
+const evidence = (name: string) => `data:image/webp;base64,${readFileSync(join(__dirname, "../../public/automation-flows/demo-evidence", `${name}.webp`)).toString("base64")}`;
 const shownTime = (timestamp: string) => new Date(timestamp).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 describe("embedded evidence (scripted Detected Task)", () => {
