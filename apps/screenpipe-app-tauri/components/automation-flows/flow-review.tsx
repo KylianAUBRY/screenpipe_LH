@@ -36,7 +36,8 @@ import {
   replayScore,
 } from "@/lib/automation-flows/review";
 import { useAutomationFlowStore, useFlowReviewState } from "@/lib/automation-flows/store";
-import type { AutomationFlow, FlowStatus } from "@/lib/automation-flows/types";
+import type { AutomationFlow, FlowActivation, FlowStatus } from "@/lib/automation-flows/types";
+import { useUiLocale } from "@/lib/i18n/provider";
 import { FlowEvidence } from "./flow-evidence";
 import { FlowQuestionItem } from "./flow-question";
 
@@ -63,9 +64,11 @@ export function FlowStatusSquare({ status }: { status: FlowStatus }) {
 export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () => void }) {
   const ui = useGT();
   const { toast } = useToast();
-  const { status, answers } = useFlowReviewState(flow.id);
+  const uiLocale = useUiLocale();
+  const { status, answers, history = [] } = useFlowReviewState(flow.id);
   const setAnswer = useAutomationFlowStore((store) => store.setAnswer);
   const setStatus = useAutomationFlowStore((store) => store.setStatus);
+  const recordSwitch = useAutomationFlowStore((store) => store.recordSwitch);
   const [busy, setBusy] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
 
@@ -102,12 +105,12 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
         })
       : null;
 
-  const switchFlow = async (on: boolean) => {
+  const switchFlow = async (on: boolean, reason?: FlowActivation["reason"]) => {
     setBusy(true);
     try {
       if (on) await flowBackend().activate(flow);
       else await flowBackend().deactivate(flow);
-      setStatus(flow.id, on ? "running" : "paused");
+      recordSwitch(flow.id, on, reason);
     } catch (error) {
       toast({
         title: on ? ui("Could not turn it on") : ui("Could not pause it"),
@@ -252,7 +255,7 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
                   variant="outline"
                   className="h-8 px-3 text-xs font-semibold rounded-md normal-case tracking-wide"
                   disabled={busy}
-                  onClick={() => void switchFlow(false)}
+                  onClick={() => void switchFlow(false, "change-answers")}
                   data-testid="flow-change-answers"
                 >
                   <Pencil className="h-3.5 w-3.5 mr-1.5" />
@@ -310,6 +313,40 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
             </div>
           </section>
         </>
+      )}
+
+      {/* Every TURN ON / PAUSE, newest first */}
+      {history.length > 0 && (
+        <section className="space-y-3" data-testid="flow-history">
+          <h4 className={SECTION_LABEL}>{ui("History")}</h4>
+          <ul className="divide-y divide-border rounded-lg border border-border">
+            {history.map((event, index) => (
+              <li
+                key={`${event.at}-${index}`}
+                className="flex items-center gap-3 px-4 py-2.5 text-sm"
+                data-testid="flow-history-item"
+              >
+                <FlowStatusSquare status={event.on ? "running" : "paused"} />
+                <span className="min-w-0 flex-1">
+                  {event.on
+                    ? ui("Turned on")
+                    : event.reason === "change-answers"
+                      ? ui("Paused to change answers")
+                      : ui("Paused")}
+                </span>
+                <time dateTime={event.at} className="shrink-0 font-mono text-xs text-muted-foreground">
+                  {new Date(event.at).toLocaleString(uiLocale, {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </time>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       <Dialog open={graphOpen} onOpenChange={setGraphOpen}>

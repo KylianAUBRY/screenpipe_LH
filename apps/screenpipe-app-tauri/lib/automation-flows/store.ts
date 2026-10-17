@@ -3,13 +3,16 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import { flowSource } from "./source";
-import type { AutomationFlow, FlowAnswer, FlowStatus } from "./types";
+import type { AutomationFlow, FlowActivation, FlowAnswer, FlowStatus } from "./types";
 
 const STORAGE_KEY = "screenpipe:automation-flows:v1";
+const HISTORY_LIMIT = 50;
 
 export type FlowReviewState = {
   status: FlowStatus;
   answers: Record<string, FlowAnswer | undefined>;
+  /** TURN ON / PAUSE events, newest first. Missing in state saved before it existed. */
+  history?: FlowActivation[];
 };
 
 type AutomationFlowStore = {
@@ -20,6 +23,8 @@ type AutomationFlowStore = {
   flows: Record<string, FlowReviewState>;
   setAnswer: (flowId: string, questionId: string, answer: FlowAnswer | undefined) => void;
   setStatus: (flowId: string, status: FlowStatus) => void;
+  /** Running or paused after a successful backend call, logged in the History. */
+  recordSwitch: (flowId: string, on: boolean, reason?: FlowActivation["reason"]) => void;
   /** Back to "waiting" with no answers. Used by the dev test tools. */
   reset: (flowId?: string) => void;
 };
@@ -46,7 +51,8 @@ function save(flows: Record<string, FlowReviewState>) {
 
 /**
  * Review answers and status kept on this device. Activation state itself lives
- * in n8n; `status` mirrors the last result of the backend call.
+ * in n8n; `status` mirrors the last result of the backend call, and `history`
+ * logs those calls on this device.
  */
 export const useAutomationFlowStore = create<AutomationFlowStore>((set, get) => {
   const update = (flowId: string, change: (state: FlowReviewState) => FlowReviewState) => {
@@ -62,6 +68,15 @@ export const useAutomationFlowStore = create<AutomationFlowStore>((set, get) => 
     setAnswer: (flowId, questionId, answer) =>
       update(flowId, (state) => ({ ...state, answers: { ...state.answers, [questionId]: answer } })),
     setStatus: (flowId, status) => update(flowId, (state) => ({ ...state, status })),
+    recordSwitch: (flowId, on, reason) =>
+      update(flowId, (state) => ({
+        ...state,
+        status: on ? "running" : "paused",
+        history: [
+          { at: new Date().toISOString(), on, ...(reason ? { reason } : {}) },
+          ...(state.history ?? []),
+        ].slice(0, HISTORY_LIMIT),
+      })),
     reset: (flowId) => {
       const flows = { ...get().flows };
       if (flowId) delete flows[flowId];

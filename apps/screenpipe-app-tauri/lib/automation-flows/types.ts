@@ -63,5 +63,14 @@ export type AutomationFlow = {
 
 export type FlowAnswer = { choiceId: string } | { custom: string };
 
+/** One TURN ON or PAUSE, shown in the review screen's History. */
+export type FlowActivation = {
+  /** When it happened, ISO 8601. */
+  at: string;
+  on: boolean;
+  /** Why it was paused, when it was not a plain PAUSE. */
+  reason?: "change-answers";
+};
+
 /** "dismissed": the user dismissed it; it stays listed and can be restored. */
 export type FlowStatus = "waiting" | "running" | "paused" | "dismissed";

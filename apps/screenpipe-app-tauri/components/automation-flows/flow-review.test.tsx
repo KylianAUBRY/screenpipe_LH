@@ -68,6 +68,24 @@ describe("flow review screen", () => {
     fireEvent.click(screen.getByTestId("flow-turn-on"));
     await waitFor(() => expect((screen.getByTestId("flow-turn-on") as HTMLButtonElement).disabled).toBe(false));
     expect(useAutomationFlowStore.getState().flows[flow.id]?.status).toBe("waiting");
+    expect(screen.queryByTestId("flow-history")).toBeNull();
+  });
+
+  it("logs each TURN ON and PAUSE in History, newest first", async () => {
+    const store = useAutomationFlowStore.getState();
+    store.setAnswer(flow.id, "pick-option", { choiceId: "neither" });
+    store.setAnswer(flow.id, "explain", { choiceId: "reason-y" });
+    render(<FlowReview flow={flow} onBack={() => {}} />);
+    expect(screen.queryByTestId("flow-history")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("flow-turn-on"));
+    await waitFor(() => expect(screen.getByTestId("flow-pause")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("flow-pause"));
+    await waitFor(() => expect(screen.getByTestId("flow-turn-on")).toBeTruthy());
+
+    const items = screen.getAllByTestId("flow-history-item");
+    expect(items.map((item) => item.querySelector("span.flex-1")?.textContent)).toEqual(["Paused", "Turned on"]);
+    expect(items[0].querySelector("time")?.getAttribute("dateTime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it("Dismiss moves the Flow to Dismissed and goes back to the list", () => {
@@ -110,6 +128,7 @@ describe("flow review screen", () => {
     expect(deactivate).toHaveBeenCalledWith(flow);
     expect(useAutomationFlowStore.getState().flows[flow.id]?.status).toBe("paused");
     expect(screen.getByTestId("flow-status").textContent).toContain("Paused");
+    expect(screen.getByTestId("flow-history").textContent).toContain("Paused to change answers");
     // Turning it on again stays an explicit action.
     expect((screen.getByTestId("flow-turn-on") as HTMLButtonElement).disabled).toBe(false);
     expect(useAutomationFlowStore.getState().flows[flow.id]?.status).not.toBe("running");
