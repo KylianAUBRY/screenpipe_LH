@@ -10,7 +10,9 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use screenpipe_audio::audio_manager::AudioManagerBuilder;
 use screenpipe_db::DatabaseManager;
-use screenpipe_engine::automation_flows::{FlowActivationKey, RunningWait, ACTIVATION_HEADER};
+use screenpipe_engine::automation_flows::{
+    FlowActivationKey, FlowHealthCheck, RunningWait, ACTIVATION_HEADER,
+};
 use screenpipe_engine::SCServer;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -458,7 +460,28 @@ impl App {
     }
 
     async fn build(ui_key: Option<FlowActivationKey>, local_api_auth: bool) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        Self::build_at(tempfile::tempdir().unwrap(), ui_key, local_api_auth, None).await
+    }
+
+    /// The desktop app's engine with its Flow health check running on its
+    /// own on `schedule` (ticket 29).
+    async fn with_health_check(schedule: FlowHealthCheck) -> Self {
+        let ui_key = Some(FlowActivationKey::generate());
+        Self::build_at(tempfile::tempdir().unwrap(), ui_key, false, Some(schedule)).await
+    }
+
+    /// The app quit and started again on the same data dir (its notification
+    /// server is a fresh one).
+    async fn restarted(self) -> Self {
+        Self::build_at(self.dir, self.ui_key, false, None).await
+    }
+
+    async fn build_at(
+        dir: tempfile::TempDir,
+        ui_key: Option<FlowActivationKey>,
+        local_api_auth: bool,
+        health_check: Option<FlowHealthCheck>,
+    ) -> Self {
         let db = Arc::new(
             DatabaseManager::new("sqlite::memory:", Default::default())
                 .await
@@ -499,6 +522,8 @@ impl App {
             interval: Duration::from_millis(10),
             deadline: Duration::from_millis(300),
         };
+        // Tests run the health check by hand unless they ask for the schedule.
+        server.flow_health_check = health_check;
         if local_api_auth {
             server.api_auth = true;
             server.api_auth_key = Some(LOCAL_API_KEY.to_string());
@@ -3109,6 +3134,386 @@ async fn a_flow_stays_failed_until_a_later_run_succeeds() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Flow health check (SPEC D19, ticket 29)
+// ---------------------------------------------------------------------------
+
+/// The health check's position: when it last looked at n8n's Runs.
+fn set_last_check(app: &App, at: &str) {
+    let path = app.dir.path().join("automation-flows.json");
+    let mut store = if path.exists() { read_json(&path) } else { json!({}) };
+    store["health_checked_at"] = json!(at);
+    app.write_store(store);
+}
+
+/// One health check now, as the app runs it at start and every 15 minutes.
+async fn run_check(app: &App) -> (StatusCode, Value) {
+    app.call("POST", "/automation-flows/health/check", Some(json!({})))
+        .await
+}
+
+/// A failed Run of `workflow_id` that stopped at `stopped_at`.
+fn failed_run_at(id: &str, workflow_id: &str, subject: &str, stopped_at: &str) -> Value {
+    let mut run = failed_run(id, workflow_id, subject);
+    run["startedAt"] = json!(stopped_at);
+    run["stoppedAt"] = json!(stopped_at);
+    run
+}
+
+#[tokio::test]
+async fn a_run_that_failed_while_screenpipe_was_closed_is_notified_once_at_the_next_check() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    // Before quitting: the error workflow reported Run 601, and the last
+    // check ran at 08:00.
+    n8n.add_execution(failed_run_at("601", &id, "Déjà signalé", "2026-10-17T07:50:00.000Z"));
+    let (_, answer) =
+        report_failed_run(&app, json!({"executionId": "601", "workflowId": id})).await;
+    assert_eq!(answer["notified"], true);
+    set_last_check(&app, "2026-10-17T08:00:00Z");
+    // While ScreenPipe was closed: Run 602 failed (nothing could report it).
+    // Run 600 failed long before the last check.
+    n8n.add_execution(failed_run_at("600", &id, "Ancien", "2026-10-17T06:00:00.000Z"));
+    n8n.add_execution(failed_run_at(
+        "602",
+        &id,
+        "Export des contacts vide dans NovaCRM",
+        "2026-10-17T09:00:20.000Z",
+    ));
+
+    let app = app.restarted().await;
+    let (status, answer) = run_check(&app).await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["n8n"], "ok");
+    assert_eq!(answer["notified"], 1);
+    let sent = app.notifications().await;
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    // The same notification as the error workflow's (D16).
+    let text = format!("{} {}", sent[0]["title"], sent[0]["body"]);
+    assert!(text.contains("Échec du Flow"), "{text}");
+    assert!(text.contains("Créer le ticket Jira"), "{text}");
+    assert!(text.contains("Export des contacts vide dans NovaCRM"), "{text}");
+    assert_eq!(sent[0]["actions"][0]["url"], format!("screenpipe://flows/{id}"));
+    assert!(!sent[0].to_string().contains(EMAIL_BODY));
+
+    // Never twice: not by the next check, not by a late call of the error
+    // workflow, not after another restart.
+    let (_, answer) = run_check(&app).await;
+    assert_eq!(answer["notified"], 0);
+    let (_, answer) =
+        report_failed_run(&app, json!({"executionId": "602", "workflowId": id})).await;
+    assert_eq!(answer["notified"], false);
+    assert_eq!(app.notifications().await.len(), 1);
+    let app = app.restarted().await;
+    let (_, answer) = run_check(&app).await;
+    assert_eq!(answer["notified"], 0);
+    assert!(app.notifications().await.is_empty());
+    assert_ne!(app.store()["health_checked_at"], "2026-10-17T08:00:00Z");
+}
+
+#[tokio::test]
+async fn the_first_check_starts_from_now_and_leaves_older_failures_alone() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    n8n.add_execution(failed_run_at("700", &id, "Avant ScreenPipe", "2026-10-17T06:00:00.000Z"));
+
+    let (status, answer) = run_check(&app).await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["notified"], 0);
+    assert!(app.notifications().await.is_empty());
+    assert!(app.store()["health_checked_at"].is_string());
+}
+
+/// Requests the fake n8n received for executions.
+async fn execution_reads(server: &MockServer) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path().starts_with("/api/v1/executions"))
+        .count()
+}
+
+#[tokio::test]
+async fn the_check_does_nothing_when_there_are_no_flows() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    set_last_check(&app, "2026-10-17T08:00:00Z");
+    // A failed Run of a workflow the user made in n8n: not a Flow.
+    n8n.add_workflow(json!({
+        "id": "perso", "name": "Perso", "active": true, "versionId": "v",
+        "tags": [], "nodes": [], "connections": {}
+    }));
+    n8n.add_execution(failed_run_at("800", "perso", "Sujet", "2026-10-17T09:00:00.000Z"));
+
+    let (status, answer) = run_check(&app).await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["n8n"], "ok");
+    assert_eq!(answer["notified"], 0);
+    assert!(app.notifications().await.is_empty());
+    assert_eq!(execution_reads(&server).await, 0);
+}
+
+#[tokio::test]
+async fn the_check_does_nothing_when_n8n_is_not_configured() {
+    let app = App::new().await;
+
+    let (status, answer) = run_check(&app).await;
+    let (_, health) = app.call("GET", "/automation-flows/health", None).await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["n8n"], "not_configured");
+    assert_eq!(health["n8n"], "not_configured");
+    assert!(!app.dir.path().join("automation-flows.json").exists());
+    assert!(app.notifications().await.is_empty());
+}
+
+#[tokio::test]
+async fn an_unreachable_n8n_sets_the_banner_state_instead_of_failing() {
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&closed_port_url());
+    set_last_check(&app, "2026-10-17T08:00:00Z");
+
+    let (status, answer) = run_check(&app).await;
+    let (health_status, health) = app.call("GET", "/automation-flows/health", None).await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["n8n"], "unreachable");
+    assert_eq!(health_status, StatusCode::OK);
+    assert_eq!(health["n8n"], "unreachable");
+    // Nothing was looked at: the next check starts from the same place.
+    assert_eq!(app.store()["health_checked_at"], "2026-10-17T08:00:00Z");
+    // (The engine answers times in local time: compare instants.)
+    let last_check = chrono::DateTime::parse_from_rfc3339(health["lastCheckAt"].as_str().unwrap());
+    assert_eq!(
+        last_check.unwrap(),
+        chrono::DateTime::parse_from_rfc3339("2026-10-17T08:00:00Z").unwrap()
+    );
+
+    // n8n back: the banner goes.
+    app.configure_n8n(&server.uri());
+    let (_, health) = app.call("GET", "/automation-flows/health", None).await;
+    assert_eq!(health["n8n"], "ok");
+    // A refused key is not « injoignable ».
+    app.configure_n8n_key(&server.uri(), "wrong-key");
+    let (_, health) = app.call("GET", "/automation-flows/health", None).await;
+    assert_eq!(health["n8n"], "unauthorized");
+}
+
+#[tokio::test]
+async fn a_notification_the_app_cannot_show_yet_is_tried_again_at_the_next_check() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    set_last_check(&app, "2026-10-17T08:00:00Z");
+    n8n.add_execution(failed_run_at("900", &id, "Sujet", "2026-10-17T09:00:00.000Z"));
+    // The app's notification server is not up yet (app start).
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&app.notify)
+        .await;
+
+    let (_, first) = run_check(&app).await;
+    assert_eq!(first["notified"], 0);
+    assert_eq!(app.store()["health_checked_at"], "2026-10-17T08:00:00Z");
+
+    let (_, second) = run_check(&app).await;
+    assert_eq!(second["notified"], 1);
+    assert_eq!(app.notifications().await.len(), 2, "one refused, one shown");
+}
+
+#[tokio::test]
+async fn the_app_checks_on_its_own_at_start_and_then_on_schedule() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::with_health_check(FlowHealthCheck {
+        first_after: Duration::from_millis(0),
+        every: Duration::from_millis(50),
+    })
+    .await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    // Wait for a check to have set its position, then a Run fails.
+    for _ in 0..100 {
+        if app.dir.path().join("automation-flows.json").exists()
+            && app.store()["health_checked_at"].is_string()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    n8n.add_execution(failed_run_at("1000", &id, "Sujet", &now));
+
+    let mut sent = Vec::new();
+    for _ in 0..100 {
+        sent = app.notifications().await;
+        if !sent.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(sent.len(), 1, "notified by the scheduled check");
+    // Later checks do not notify it again.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(app.notifications().await.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Abstentions (SPEC D18, ticket 27)
+// ---------------------------------------------------------------------------
+
+const UNSURE_REASON: &str = "Je ne sais pas si c'est un bug de NovaPay ou une question d'usage.";
+
+/// What the demo workflow's « À trier à la main » step sends when the AI is unsure.
+fn abstention(workflow_id: &str, execution_id: &str, subject: &str) -> Value {
+    json!({
+        "workflowId": workflow_id,
+        "executionId": execution_id,
+        "from": "Arthur Noteris <arthur@novacrm.example>",
+        "subject": subject,
+        "reason": UNSURE_REASON,
+    })
+}
+
+async fn report_abstention(app: &App, body: Value) -> (StatusCode, Value) {
+    app.call("POST", "/automation-flows/abstentions", Some(body))
+        .await
+}
+
+#[tokio::test]
+async fn an_unsure_ai_leaves_the_email_to_the_user_with_one_notification() {
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+
+    let report = abstention(&id, "500", "Question sur NovaPay");
+    let (status, answer) = report_abstention(&app, report.clone()).await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["notified"], true);
+    // The step's output names the Run's outcome (D18).
+    assert_eq!(answer["outcome"], "abstained");
+    let sent = app.notifications().await;
+    assert_eq!(sent.len(), 1);
+    let notification = &sent[0];
+    assert!(
+        notification["title"]
+            .as_str()
+            .unwrap()
+            .contains("À trier à la main"),
+        "{notification}"
+    );
+    let body = notification["body"].as_str().unwrap();
+    for shown in [
+        created["name"].as_str().unwrap(),
+        "Arthur Noteris",
+        "Question sur NovaPay",
+        "Je ne sais pas si c'est un bug de NovaPay",
+    ] {
+        assert!(body.contains(shown), "{shown} missing: {body}");
+    }
+    // Clicking it opens the Flow's Review Screen; it stays until read.
+    let review = format!("screenpipe://flows/{id}");
+    assert_eq!(notification["actions"][0]["type"], "deeplink");
+    assert_eq!(notification["actions"][0]["url"], review.as_str());
+    assert_eq!(notification["transient"], false);
+
+    // n8n retries the call: still one notification.
+    let (status, answer) = report_abstention(&app, report).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(answer["notified"], false);
+    assert_eq!(answer["outcome"], "abstained");
+    assert_eq!(app.notifications().await.len(), 1);
+
+    // Another email the same Run left to the user gets its own notification.
+    let (_, answer) = report_abstention(&app, abstention(&id, "500", "Autre question")).await;
+    assert_eq!(answer["notified"], true);
+    let sent = app.notifications().await;
+    assert_eq!(sent.len(), 2);
+    assert_ne!(sent[0]["id"], sent[1]["id"]);
+}
+
+#[tokio::test]
+async fn the_ai_reason_and_the_email_cannot_put_links_or_markup_in_the_notification() {
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let hostile = format!(
+        "Urgent [cliquez ici](https://evil.example) **gras** <img src=x>\nligne 2 {}",
+        "x".repeat(1_000)
+    );
+    let mut report = abstention(&id, "501", &hostile);
+    report["from"] = json!(hostile);
+    report["reason"] = json!(hostile);
+
+    let (status, _) = report_abstention(&app, report).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let body = app.notifications().await[0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!body.contains("](https://"), "{body}");
+    assert!(!body.contains("**"), "{body}");
+    // HTML stays text: every `<` is escaped.
+    assert_eq!(
+        body.matches('<').count(),
+        body.matches("\\<").count(),
+        "{body}"
+    );
+    assert!(!body.contains("ligne 2\n"), "{body}");
+    assert!(body.contains("Urgent"), "{body}");
+    assert!(
+        body.chars().count() < 1_000,
+        "fields cut: {} chars",
+        body.chars().count()
+    );
+}
+
+#[tokio::test]
+async fn only_an_abstention_of_a_flow_notifies() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    n8n.add_workflow(json!({
+        "id": "other", "name": "Perso", "active": true, "versionId": "v",
+        "tags": [], "nodes": [], "connections": {}
+    }));
+
+    for (body, expected) in [
+        (abstention("other", "600", "Sujet"), StatusCode::OK),
+        (abstention("unknown", "601", "Sujet"), StatusCode::OK),
+        (abstention("../x", "602", "Sujet"), StatusCode::OK),
+        (json!({"workflowId": "other"}), StatusCode::OK),
+    ] {
+        let (status, answer) = report_abstention(&app, body.clone()).await;
+        assert_eq!(status, expected, "{body} → {answer}");
+        assert_eq!(answer["notified"], false, "{body}");
+    }
+    assert!(app.notifications().await.is_empty());
 }
 
 // ---------------------------------------------------------------------------

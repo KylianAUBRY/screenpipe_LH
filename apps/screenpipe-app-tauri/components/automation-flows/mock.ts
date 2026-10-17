@@ -140,6 +140,18 @@ export function mockAutomationFlowsResponse(
     return null;
   }
   const state = flowsState();
+  if (url.pathname === "/automation-flows/health") {
+    // Ticket 29: the engine answers whatever n8n does.
+    const n8n =
+      state === "unreachable"
+        ? "unreachable"
+        : state === "not-configured"
+          ? "not_configured"
+          : state === "unauthorized"
+            ? "unauthorized"
+            : "ok";
+    return Response.json({ n8n, lastCheckAt: null });
+  }
   if (state === "not-configured") {
     return Response.json({ error: "n8n_not_configured" }, { status: 412 });
   }

@@ -113,11 +113,13 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(subNodeOf(parser.name, "ai_outputParser")).toBe(agent.name);
     expect(parser.parameters.schemaType).toBe("manual");
     const schema = JSON.parse(parser.parameters.inputSchema);
-    expect(Object.keys(schema.properties).sort()).toEqual(
-      ["label", "priority", "product", "summary", "type"],
-    );
-    expect(schema.required.sort()).toEqual(["label", "priority", "product", "summary", "type"]);
+    const fields = ["confidence", "label", "priority", "product", "reason", "summary", "type"];
+    expect(Object.keys(schema.properties).sort()).toEqual(fields);
+    expect(schema.required.sort()).toEqual(fields);
     expect(schema.properties.type.enum).toEqual(["Bug", "Tâche", "none"]);
+    // D18: the AI says how sure it is, and why, in one short line.
+    expect(schema.properties.confidence.enum).toEqual(["high", "low"]);
+    expect(schema.properties.reason.maxLength).toBeLessThanOrEqual(200);
     expect(schema.properties.label.enum).toEqual(["back", "front"]);
     expect(schema.properties.priority.enum).toEqual(["Highest", "High", "Medium", "Low", "Lowest"]);
   });
@@ -207,6 +209,78 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(passes("Tâche")).toBe(true);
     expect(next(gate.name, 0)).toHaveLength(1);
     expect(next(gate.name, 1)).toEqual([]);
+  });
+
+  test("an unsure AI abstains: no Jira call at all, and ScreenPipe gets the sender, the subject and the AI's reason", () => {
+    for (const type of ["Bug", "Tâche", "none"]) {
+      const jira = fakeJira();
+      const screenpipe = fakeScreenpipe();
+      const reason = "Je ne sais pas si c'est un bug de NovaPay ou une question d'usage.";
+      const ticket = runTicketBranch(aiAnswer({ type, confidence: "low", reason }), EMAIL, jira, screenpipe);
+
+      expect(ticket, type).toBeNull();
+      expect(jira.searches, type).toEqual([]);
+      expect(jira.issues, type).toEqual([]);
+      // Only ids and the three fields the notification shows; never the body.
+      expect(screenpipe.abstentions, type).toEqual([
+        { ...WORKFLOW_RUN, from: EMAIL.from, subject: EMAIL.subject, reason },
+      ]);
+    }
+  });
+
+  test("a missing or unexpected confidence counts as low", () => {
+    const unsure: unknown[] = [undefined, null, "", "low", "High", "HIGH", "high ", "medium", "élevée", true, 1, 0.99, ["high"], { level: "high" }];
+    for (const confidence of unsure) {
+      const jira = fakeJira();
+      const screenpipe = fakeScreenpipe();
+      const answer = aiAnswer({ confidence });
+      if (confidence === undefined) delete answer.confidence;
+      expect(runTicketBranch(answer, EMAIL, jira, screenpipe), JSON.stringify(confidence)).toBeNull();
+      expect(jira.searches, JSON.stringify(confidence)).toEqual([]);
+      expect(screenpipe.abstentions, JSON.stringify(confidence)).toHaveLength(1);
+    }
+    // No answer at all, or one without its reason: still left to the user.
+    for (const answer of [undefined, aiAnswer({ confidence: "low", reason: undefined })]) {
+      const screenpipe = fakeScreenpipe();
+      expect(runTicketBranch(answer, EMAIL, fakeJira(), screenpipe)).toBeNull();
+      expect(screenpipe.abstentions).toEqual([{ ...WORKFLOW_RUN, from: EMAIL.from, subject: EMAIL.subject, reason: "" }]);
+    }
+  });
+
+  test("a confident AI behaves as before: a ticket, or nothing for none, and no notification", () => {
+    const screenpipe = fakeScreenpipe();
+    expect(runTicketBranch(aiAnswer(), EMAIL, fakeJira(), screenpipe)).not.toBeNull();
+    const jira = fakeJira();
+    expect(runTicketBranch(aiAnswer({ type: "none" }), EMAIL, jira, screenpipe)).toBeNull();
+    expect(jira.searches).toEqual([]);
+    expect(screenpipe.abstentions).toEqual([]);
+  });
+
+  test("a huge email or AI reason cannot make the abstention report huge", () => {
+    const screenpipe = fakeScreenpipe();
+    runTicketBranch(
+      aiAnswer({ confidence: "low", reason: "r".repeat(5_000) }),
+      { ...EMAIL, from: "f".repeat(5_000), subject: "s".repeat(5_000) },
+      fakeJira(),
+      screenpipe,
+    );
+    const [report] = screenpipe.abstentions;
+    for (const field of ["from", "subject", "reason"]) {
+      expect(String(report[field]).length, field).toBeLessThanOrEqual(500);
+    }
+  });
+
+  test("abstaining ends the Run there, and a ScreenPipe outage is retried before it fails the Run", () => {
+    const notify = workflow.nodes.find((n) => n.parameters.url === ABSTENTION_URL)!;
+    expect(next(confidenceGate().name, 1)).toEqual([notify.name]);
+    expect(next(notify.name)).toEqual([]);
+    expect(notify.onError ?? "stopWorkflow").toBe("stopWorkflow");
+    expect(notify.retryOnFail).toBe(true);
+    expect(notify.maxTries).toBeGreaterThanOrEqual(3);
+    // The AI is told when to abstain and asked for a short reason.
+    const rules = onlyNode("@n8n/n8n-nodes-langchain.agent").parameters.options.systemMessage as string;
+    expect(rules).toContain("confidence");
+    expect(rules).toContain("reason");
   });
 
   test("a malformed or injected AI answer never reaches Jira, whatever the parser let through", () => {
@@ -420,8 +494,19 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(issue.fields.labels).toEqual(["front", mailLabel(EMAIL_MESSAGE_ID)]);
   });
 
+  test("its only other call goes to ScreenPipe's local API, with the ScreenPipe credential", () => {
+    const others = workflow.nodes.filter(
+      (n) => n.type === "n8n-nodes-base.httpRequest" && !n.parameters.url.startsWith("https://kylianaubry.atlassian.net/"),
+    );
+    expect(others.map((n) => `${n.parameters.method} ${n.parameters.url}`)).toEqual([`POST ${ABSTENTION_URL}`]);
+    expect(others[0].parameters.nodeCredentialType).toBe("screenpipeApi");
+    expect(others[0].credentials).toEqual({ screenpipeApi: { id: "spScreenpipeApi1", name: "ScreenPipe API (local)" } });
+  });
+
   test("calls the Jira Cloud REST API with the stored Jira credential", () => {
-    const requests = workflow.nodes.filter((n) => n.type === "n8n-nodes-base.httpRequest");
+    const requests = workflow.nodes.filter(
+      (n) => n.type === "n8n-nodes-base.httpRequest" && n.parameters.url !== ABSTENTION_URL,
+    );
     expect(requests.map((n) => `${n.parameters.method} ${n.parameters.url}`).sort()).toEqual([
       `GET ${JIRA_SEARCH_URL}`,
       `POST ${JIRA_ISSUE_URL}`,
@@ -496,7 +581,9 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     // email handled again never makes a second ticket.
     expect(review.summary).toMatch(/étiquette[^.]*email/);
     expect(review.summary).toMatch(/doublon/);
-    expect(review.summary.length).toBeLessThan(1200);
+    // D18: an unsure AI leaves the email to the user instead of guessing.
+    expect(review.summary).toContain("« À trier à la main »");
+    expect(review.summary.length).toBeLessThan(1400);
   });
 
   test("contains no secrets, only credential references", () => {
@@ -545,6 +632,17 @@ function fakeJira(issues: JiraIssue[] = []): {
 }
 type FakeJira = ReturnType<typeof fakeJira>;
 
+/** ScreenPipe's local API as the workflow sees it: the abstentions it was told about. */
+function fakeScreenpipe(): { abstentions: Record<string, unknown>[] } {
+  return { abstentions: [] };
+}
+type FakeScreenpipe = ReturnType<typeof fakeScreenpipe>;
+
+// The Flow service route (SPEC D18), reached from the n8n container.
+const ABSTENTION_URL = "http://host.docker.internal:3030/automation-flows/abstentions";
+/** The ids n8n gives the Run's expressions as `$workflow.id` and `$execution.id`. */
+const WORKFLOW_RUN = { workflowId: "spNovaFlow000001", executionId: "4242" };
+
 const JIRA_ISSUE_URL = "https://kylianaubry.atlassian.net/rest/api/2/issue";
 // Jira Cloud's JQL search; the older /rest/api/2/search is removed.
 const JIRA_SEARCH_URL = "https://kylianaubry.atlassian.net/rest/api/2/search/jql";
@@ -561,15 +659,16 @@ function labelSearch(label: string): string {
  * when it created none.
  */
 function runTicketBranch(
-  answer: ReturnType<typeof aiAnswer>,
+  answer: AiAnswer | undefined,
   email: Email = EMAIL,
   jira: FakeJira = fakeJira(),
+  screenpipe: FakeScreenpipe = fakeScreenpipe(),
 ): JiraIssue | null {
   const trigger = onlyNode("n8n-nodes-base.emailReadImap");
   const agent = onlyNode("@n8n/n8n-nodes-langchain.agent");
   const nodes: Record<string, any> = { [trigger.name]: email };
 
-  let item: any = { output: answer };
+  let item: any = answer === undefined ? {} : { output: answer };
   nodes[agent.name] = item;
   let current = next(agent.name);
   let created: JiraIssue | null = null;
@@ -587,7 +686,7 @@ function runTicketBranch(
       }
       item = out;
     } else if (node.type === "n8n-nodes-base.httpRequest") {
-      item = answerHttpRequest(node, { $json: item, nodes }, jira, (issue) => {
+      item = answerHttpRequest(node, { $json: item, nodes }, jira, screenpipe, (issue) => {
         expect(created, "a second Jira creation in one run").toBeNull();
         created = issue;
       });
@@ -601,9 +700,26 @@ function runTicketBranch(
 }
 
 /** The fake Jira's answer to one HTTP Request node, as n8n would get it. */
-function answerHttpRequest(node: N8nNode, ctx: Ctx, jira: FakeJira, onCreate: (issue: JiraIssue) => void) {
+function answerHttpRequest(
+  node: N8nNode,
+  ctx: Ctx,
+  jira: FakeJira,
+  screenpipe: FakeScreenpipe,
+  onCreate: (issue: JiraIssue) => void,
+) {
   const p = node.parameters;
   expect(p.authentication).toBe("predefinedCredentialType");
+  if (p.url === ABSTENTION_URL) {
+    // ScreenPipe's local API, with the same credential as the error workflow.
+    expect(p.method).toBe("POST");
+    expect(p.nodeCredentialType).toBe("screenpipeApi");
+    expect(node.credentials?.screenpipeApi.id).toBe("spScreenpipeApi1");
+    expect(p.sendBody).toBe(true);
+    expect(p.specifyBody).toBe("json");
+    const body = evaluate(p.jsonBody, ctx);
+    screenpipe.abstentions.push(typeof body === "string" ? JSON.parse(body) : body);
+    return { notified: true, outcome: "abstained" };
+  }
   expect(p.nodeCredentialType).toBe("jiraSoftwareCloudApi");
   if ((p.method ?? "GET") === "GET" && p.url === JIRA_SEARCH_URL) {
     expect(p.sendQuery).toBe(true);
@@ -637,7 +753,7 @@ function answerHttpRequest(node: N8nNode, ctx: Ctx, jira: FakeJira, onCreate: (i
 }
 
 /** The JSON body n8n would send to create the issue, for this AI answer and email. */
-function jiraRequestFor(answer: ReturnType<typeof aiAnswer>, email: Email = EMAIL): JiraIssue {
+function jiraRequestFor(answer: AiAnswer, email: Email = EMAIL): JiraIssue {
   const created = runTicketBranch(answer, email);
   expect(created).not.toBeNull();
   return created!;
@@ -700,13 +816,17 @@ const HOSTILE_EMAIL = {
   textHtml: "",
 };
 
-function aiAnswer(overrides: Record<string, string> = {}) {
+type AiAnswer = Record<string, unknown>;
+
+function aiAnswer(overrides: AiAnswer = {}): AiAnswer {
   return {
     type: "Bug",
     product: "NovaCRM",
     summary: "Export CSV des contacts filtrés vide",
     priority: "Highest",
     label: "back",
+    confidence: "high",
+    reason: "Défaut clair de NovaCRM : l'export filtré ne contient que les en-têtes.",
     ...overrides,
   };
 }
@@ -741,7 +861,13 @@ function evaluate(value: unknown, ctx: Ctx): unknown {
     if (json === undefined) throw new Error(`expression references unknown node "${name}"`);
     return { item: { json }, first: () => ({ json }) };
   };
-  const run = (code: string) => new Function("$json", "$", `return (${code});`)(ctx.$json, $);
+  const run = (code: string) =>
+    new Function("$json", "$", "$workflow", "$execution", `return (${code});`)(
+      ctx.$json,
+      $,
+      { id: WORKFLOW_RUN.workflowId },
+      { id: WORKFLOW_RUN.executionId },
+    );
   const whole = template.match(/^\{\{([\s\S]*)\}\}$/);
   if (whole && !whole[1].includes("{{")) return run(whole[1]);
   return template.replace(/\{\{([\s\S]*?)\}\}/g, (_, code) => String(run(code)));
@@ -756,6 +882,7 @@ function evaluateIf(node: N8nNode, ctx: Ctx): boolean {
   expect(options.typeValidation).toBe("strict");
   const results = conditions.map((c: any) => {
     if (c.operator.type === "number") return evaluateNumberCondition(c, ctx);
+    if (c.operator.type === "boolean") return evaluateBooleanCondition(c, ctx);
     const raw = evaluate(c.leftValue, ctx);
     if (raw !== undefined && raw !== null && typeof raw !== "string") {
       throw new Error(`Wrong type: '${raw}' is a ${typeof raw} but was expecting a string`);
@@ -791,9 +918,28 @@ function evaluateNumberCondition(c: any, ctx: Ctx): boolean {
   throw new Error(`operator not supported by this test: number:${c.operator.operation}`);
 }
 
-/** The check right after the AI step: its "true" output leads to a ticket. */
-function aiGate(): N8nNode {
+// n8n 2.42.2, strict boolean "is true": only a real boolean passes the type
+// check, anything else fails the node with "Wrong type".
+function evaluateBooleanCondition(c: any, ctx: Ctx): boolean {
+  expect(c.operator.singleValue).toBe(true);
+  const left = evaluate(c.leftValue, ctx);
+  if (typeof left !== "boolean") {
+    throw new Error(`Wrong type: '${left}' is a ${typeof left} but was expecting a boolean`);
+  }
+  if (c.operator.operation === "true") return left;
+  throw new Error(`operator not supported by this test: boolean:${c.operator.operation}`);
+}
+
+/** The check right after the AI step: its "true" output goes on, the other abstains. */
+function confidenceGate(): N8nNode {
   const after = next(onlyNode("@n8n/n8n-nodes-langchain.agent").name);
+  expect(after).toHaveLength(1);
+  return workflow.nodes.find((n) => n.name === after[0])!;
+}
+
+/** The check on a confident answer: its "true" output leads to a ticket. */
+function aiGate(): N8nNode {
+  const after = next(confidenceGate().name, 0);
   expect(after).toHaveLength(1);
   return workflow.nodes.find((n) => n.name === after[0])!;
 }

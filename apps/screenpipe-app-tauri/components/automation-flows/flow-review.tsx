@@ -26,6 +26,7 @@ import { FlowActivation } from "./flow-activation";
 import { FailedRun } from "./flow-failed-run";
 import { FlowGraph } from "./flow-graph";
 import { activationLabel, lastRunLabel } from "./labels";
+import { N8nUnreachableBanner } from "./n8n-banner";
 
 export function FlowReview({
   flowId,
@@ -44,6 +45,10 @@ export function FlowReview({
         <ArrowLeft className="mr-1 h-4 w-4" aria-hidden />
         Tous les Flows
       </Button>
+      <N8nUnreachableBanner
+        api={api}
+        hidden={flow.state === "error" && flow.error.code === "n8n_unreachable"}
+      />
       {flow.state === "loading" && (
         <p className="text-sm text-muted-foreground">Chargement du Flow…</p>
       )}

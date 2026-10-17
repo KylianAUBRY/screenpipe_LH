@@ -10,6 +10,9 @@ import { REFRESH_INTERVAL_MS } from "../common";
 import { FlowsTab } from "../flows-tab";
 import { fixtureFlow, summaryOf } from "../fixtures";
 
+/** The banner of ticket 29, word for word. */
+const N8N_UNREACHABLE = "n8n injoignable, tes Flows ne tournent pas";
+
 const activation = {
   at: "2026-10-17T09:00:00.000Z",
   event: "activated" as const,
@@ -48,6 +51,7 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     openTimeline: vi.fn(async () => {}),
     requestChange: vi.fn(async () => {}),
     requestCreation: vi.fn(async () => {}),
+    health: vi.fn(async () => ({ n8n: "ok" as const, lastCheckAt: null })),
     ...overrides,
   };
 }
@@ -145,7 +149,7 @@ describe("Flows list", () => {
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("n8n a refusé la clé API")).toBeTruthy();
     expect(within(alert).getByText(/clé API.*Connexions → n8n/)).toBeTruthy();
-    expect(within(alert).queryByText("Impossible de joindre n8n")).toBeNull();
+    expect(within(alert).queryByText(N8N_UNREACHABLE)).toBeNull();
     fireEvent.click(within(alert).getByRole("button", { name: "Ouvrir Connexions" }));
     expect(api.openN8nConnection).toHaveBeenCalled();
   });
@@ -164,12 +168,69 @@ describe("Flows list", () => {
     render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
 
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("Impossible de joindre n8n")).toBeTruthy();
+    expect(within(alert).getByText(N8N_UNREACHABLE)).toBeTruthy();
     expect(within(alert).getByText(/cannot reach n8n/)).toBeTruthy();
     fireEvent.click(within(alert).getByRole("button", { name: "Réessayer" }));
 
     expect(await screen.findByTestId(`flow-row-${fixtureFlow.id}`)).toBeTruthy();
     expect(calls).toBe(2);
+  });
+});
+
+describe("n8n health banner (ticket 29)", () => {
+  const unreachable = vi.fn(async () => ({ n8n: "unreachable" as const, lastCheckAt: null }));
+
+  it("tells the user on the list that their Flows do not run, keeping the Flows shown", async () => {
+    render(
+      <FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ health: unreachable })} />,
+    );
+
+    const banner = await screen.findByRole("alert");
+    expect(within(banner).getByText(N8N_UNREACHABLE)).toBeTruthy();
+    expect(screen.getByTestId(`flow-row-${fixtureFlow.id}`)).toBeTruthy();
+  });
+
+  it("tells the user on the Review Screen too", async () => {
+    render(
+      <FlowsTab
+        flowId={fixtureFlow.id}
+        onSelectFlow={vi.fn()}
+        api={fakeApi({ health: unreachable })}
+      />,
+    );
+
+    expect(await screen.findByText(N8N_UNREACHABLE)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: fixtureFlow.name })).toBeTruthy();
+  });
+
+  it("shows nothing while n8n answers, or when the engine cannot say", async () => {
+    for (const health of [
+      vi.fn(async () => ({ n8n: "ok" as const, lastCheckAt: null })),
+      vi.fn(async () => {
+        throw new FlowsApiError("unknown", "engine down");
+      }),
+    ]) {
+      render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ health })} />);
+      await screen.findByTestId(`flow-row-${fixtureFlow.id}`);
+      await waitFor(() => expect(health).toHaveBeenCalled());
+      await act(async () => {});
+      expect(screen.queryByText(N8N_UNREACHABLE)).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("says it once when the list itself cannot reach n8n", async () => {
+    const list = vi.fn(async () => {
+      throw new FlowsApiError("n8n_unreachable", "connection refused");
+    });
+    render(
+      <FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ list, health: unreachable })} />,
+    );
+
+    await screen.findByText(/connection refused/);
+    await waitFor(() => expect(unreachable).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.getAllByText(N8N_UNREACHABLE)).toHaveLength(1);
   });
 });
 
@@ -647,7 +708,7 @@ describe("Freshness", () => {
     await act(async () => {});
 
     expect(screen.getByRole("heading", { name: fixtureFlow.name })).toBeTruthy();
-    expect(screen.queryByText("Impossible de joindre n8n")).toBeNull();
+    expect(screen.queryByText(N8N_UNREACHABLE)).toBeNull();
   });
 
   describe("on an interval", () => {
