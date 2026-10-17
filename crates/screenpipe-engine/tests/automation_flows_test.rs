@@ -4513,6 +4513,40 @@ async fn a_failed_run_the_notification_server_missed_is_notified_at_the_next_che
 }
 
 #[tokio::test]
+async fn a_check_waiting_to_clean_drafts_never_holds_up_a_reported_failure() {
+    // The draft cleanup waits for the Flow writes in progress (a switch-off
+    // waits up to 90 s for n8n's running email); the error workflow's report
+    // must not wait behind it.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.start_execution(&id, None);
+    n8n.add_execution(failed_run_ago("exec-live", &id, chrono::Duration::zero()));
+    let deactivate = format!("/automation-flows/{id}/deactivate");
+    let failures = format!("/automation-flows/{id}/failures");
+
+    let switch_off = app.call("POST", &deactivate, Some(json!({})));
+    let check = async {
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        health_check(&app).await
+    };
+    let report = async {
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let started = std::time::Instant::now();
+        let body = json!({"executionId": "exec-live", "error": "503"});
+        let (status, answer) = app.call("POST", &failures, Some(body)).await;
+        (status, answer, started.elapsed())
+    };
+    let ((switched, _), _, (status, answer, waited)) = tokio::join!(switch_off, check, report);
+
+    // The switch-off held the Flow writes for its whole 300 ms deadline.
+    assert_eq!(switched, StatusCode::CONFLICT);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(waited < Duration::from_millis(100), "the report waited {waited:?}");
+}
+
+#[tokio::test]
 async fn drafts_left_under_construction_for_24_hours_are_deleted() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;

@@ -87,8 +87,9 @@ impl Pacing {
     }
 }
 
-/// The last check's result, and the lock that serializes checks and the
-/// ledger's readers and writers.
+/// The last check's result, and the lock that serializes the ledger's
+/// readers and writers (a check's failed-run pass and the error workflow's
+/// route).
 pub(super) struct Health {
     last: Mutex<Option<HealthReport>>,
     ledger: Mutex<()>,
@@ -265,7 +266,6 @@ pub(super) async fn check_periodically(state: FlowsState, schedule: HealthSchedu
 
 /// One health check; its result is also kept for [`last_health`].
 pub(super) async fn check(state: &FlowsState) -> HealthReport {
-    let _guard = state.health.ledger.lock().await;
     let now = chrono::Utc::now();
     let checked_at = Some(now.to_rfc3339());
     let report = match N8nApi::from_connection(state).await {
@@ -293,7 +293,13 @@ async fn check_flows(
         .all_pages("/workflows", &[("tags", FLOW_TAG), ("limit", "250")])
         .await?;
     let mut report = HealthReport::n8n(Some(now.to_rfc3339()), "reachable");
-    report_failed_runs(state, api, &workflows, now, &mut report).await?;
+    {
+        let _ledger = state.health.ledger.lock().await;
+        report_failed_runs(state, api, &workflows, now, &mut report).await?;
+    }
+    // Not under the ledger lock: the cleanup waits for the Flow writes in
+    // progress (a switch-off waits up to 90 s for n8n's running email), and
+    // the error workflow's report must not wait behind it.
     report.deleted_drafts = delete_abandoned_drafts(state, api, now).await?;
     Ok(report)
 }
