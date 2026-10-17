@@ -103,7 +103,10 @@ fn error_workflow(screenpipe_url: &str) -> Value {
 /// through the health check.
 async fn error_workflow_id(state: &FlowsState, api: &N8nApi) -> Result<Option<String>, FlowError> {
     let installed = api
-        .all_pages("/workflows", &[("tags", ERROR_WORKFLOW_TAG), ("limit", "250")])
+        .all_pages(
+            "/workflows",
+            &[("tags", ERROR_WORKFLOW_TAG), ("limit", "250")],
+        )
         .await?;
     let existing = installed.iter().find(|workflow| {
         workflow["isArchived"] != true
@@ -124,6 +127,146 @@ async fn error_workflow_id(state: &FlowsState, api: &N8nApi) -> Result<Option<St
         .await?;
     let created = api.add_tag(created, ERROR_WORKFLOW_TAG).await?;
     workflow_id(&created).map(Some)
+}
+
+/// What ScreenPipe's error workflow sends: the failed execution, or only the
+/// error when the trigger itself failed (no execution then).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct FailureReport {
+    #[serde(default)]
+    execution_id: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// `POST /:id/failures`, called by the error workflow: notifies the failed
+/// run of Flow `id`. Changes nothing in n8n. Only a run of that Flow is
+/// notified.
+pub(super) async fn report_failure(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+    Json(report): Json<FailureReport>,
+) -> Result<Json<Value>, FlowError> {
+    let (api, _, workflow) = load_flow(&state, &id).await?;
+    let execution = match report.execution_id.as_deref() {
+        Some(execution_id) if valid_workflow_id(execution_id) => {
+            let (status, execution) = api
+                .send(
+                    Method::GET,
+                    &format!("/executions/{execution_id}"),
+                    &[("includeData", "true")],
+                    None,
+                )
+                .await?;
+            match status {
+                200..=299 if execution["workflowId"] == id.as_str() => Some(execution),
+                200..=299 | 404 => return Err(FlowError::FlowNotFound),
+                _ => return Err(upstream_error(status, &execution)),
+            }
+        }
+        Some(_) => return Err(FlowError::FlowNotFound),
+        None => None,
+    };
+    let notice = failure_notice(
+        &id,
+        workflow["name"].as_str().unwrap_or_default(),
+        execution.as_ref(),
+        report.error.as_deref(),
+    );
+    Ok(Json(match notify(&state, &notice).await {
+        Ok(()) => json!({"notified": true}),
+        Err(reason) => {
+            tracing::warn!("automation flows: failure of {id} not notified: {reason}");
+            json!({"notified": false, "reason": reason})
+        }
+    }))
+}
+
+/// The notification of a failed run of Flow `flow_id`: the email's sender
+/// and subject when the run had one, the failing step and its error, and the
+/// Review Screen link. Its id names the run, so the notification server
+/// shows each failed run once however many times it is reported.
+pub(super) fn failure_notice(
+    flow_id: &str,
+    flow_name: &str,
+    execution: Option<&Value>,
+    reported_error: Option<&str>,
+) -> Value {
+    let result = execution.map(|e| &e["data"]["resultData"]);
+    let mut lines = Vec::new();
+    if let Some((sender, subject)) = result.and_then(handled_email) {
+        lines.push(format!("E-mail de {sender} : « {subject} »."));
+    }
+    let error = result
+        .and_then(|r| r["error"]["message"].as_str())
+        .or(reported_error)
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .unwrap_or("erreur inconnue");
+    match result.and_then(|r| r["lastNodeExecuted"].as_str()) {
+        Some(step) => lines.push(format!("Échec à l'étape « {step} » : {error}")),
+        None => lines.push(format!("Échec : {error}")),
+    }
+    lines.push("Le Flow reste actif.".to_string());
+    let review = format!("screenpipe://flows/{flow_id}");
+    let run = execution
+        .and_then(|e| e["id"].as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("trigger-{}", chrono::Utc::now().timestamp_millis()));
+    json!({
+        "id": format!("automation-flow-failure:{flow_id}:{run}"),
+        "title": format!("Échec du Flow « {flow_name} »"),
+        "body": lines.join("\n"),
+        "type": "pipe",
+        "priority": "high",
+        "transient": false,
+        "source_url": review,
+        "actions": [{"type": "deeplink", "label": "Voir le Flow", "url": review, "primary": true}],
+    })
+}
+
+/// Sender and subject of the email the run handled: the first item of the
+/// node n8n ran first (the trigger), in the IMAP node's simple (`from`
+/// string) or resolved (`from.text`) format.
+fn handled_email(result: &Value) -> Option<(String, String)> {
+    let mut runs: Vec<(&Value, &Value)> = result["runData"]
+        .as_object()?
+        .values()
+        .filter_map(|runs| runs.as_array()?.first())
+        .map(|run| (&run["startTime"], run))
+        .collect();
+    runs.sort_by(|a, b| {
+        let at = |v: &Value| v.as_f64().unwrap_or(f64::MAX);
+        at(a.0).total_cmp(&at(b.0))
+    });
+    let email = &runs.first()?.1["data"]["main"][0][0]["json"];
+    let subject = email["subject"].as_str()?.trim().to_string();
+    let sender = email["from"]
+        .as_str()
+        .or(email["from"]["text"].as_str())?
+        .trim()
+        .to_string();
+    Some((sender, subject))
+}
+
+/// Sends `notice` to the app's notification server; `Err` says why it is
+/// not shown (unreachable, or a delivery gate: pause, quiet hours, repeat).
+async fn notify(state: &FlowsState, notice: &Value) -> Result<(), String> {
+    let response = state
+        .http
+        .post(&state.failure_reports.notify_url)
+        .json(notice)
+        .send()
+        .await
+        .map_err(|e| format!("notification server unreachable: {e}"))?;
+    let status = response.status();
+    let answer: Value = response.json().await.unwrap_or(Value::Null);
+    match answer["message"].as_str() {
+        Some("Notification sent successfully") if status.is_success() => Ok(()),
+        Some(message) => Err(message.to_string()),
+        None => Err(format!("notification server answered {status}")),
+    }
 }
 
 /// Makes the Flow about to be written to n8n (`body`) name ScreenPipe's

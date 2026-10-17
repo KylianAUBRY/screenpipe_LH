@@ -246,6 +246,7 @@ where
         .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
         .route("/:id/deactivate", post(deactivate_flow))
+        .route("/:id/failures", post(failures::report_failure))
         .layer(middleware::from_fn(require_json))
         .with_state(state)
 }
