@@ -64,19 +64,6 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
       <p className="mt-1.5 break-words text-xs leading-snug text-muted-foreground">
         {node.sentence ?? "Pas d'explication pour cette étape."}
       </p>
-      {/* An engine from before ticket 22 sends no facts. */}
-      {(node.facts ?? []).length > 0 && (
-        <ul
-          aria-label="Détails fixes"
-          className="mt-1.5 space-y-0.5 border-t border-border pt-1.5 font-mono text-[10px] leading-snug text-muted-foreground"
-        >
-          {node.facts.map((fact) => (
-            <li key={fact} className="break-all">
-              {fact}
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }
