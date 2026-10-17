@@ -446,6 +446,33 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(exists({})).toBe(false);
   });
 
+  test("a failed creation is checked in Jira before trying again, so a Jira timeout after creating never duplicates the ticket", () => {
+    // n8n's Retry and a node's own retries both run the failing step again as
+    // is: the create step must never be the one that fails the run.
+    const create = jiraNode();
+    expect(create.onError).toBe("continueErrorOutput");
+    expect(create.retryOnFail ?? false).toBe(false);
+    expect(next(create.name, 0)).toEqual([]);
+    const check = failedCreationGate();
+    expect(next(create.name, 1)).toEqual([check.name]);
+
+    // Back to the search: a ticket Jira did create ends the run, else it is created again.
+    const tryAgain = (runIndex: number) => evaluateIf(check, { $json: { error: JIRA_ERROR }, $runIndex: runIndex });
+    expect(next(check.name, 0)).toEqual([dedupeSearch().name]);
+    expect(tryAgain(0)).toBe(true);
+    expect(tryAgain(1)).toBe(true);
+    // A Jira that keeps refusing the ticket fails the run after the third try, with its reason.
+    expect(tryAgain(2)).toBe(false);
+    const stop = workflow.nodes.find((n) => n.name === next(check.name, 1)[0])!;
+    expect(stop.type).toBe("n8n-nodes-base.stopAndError");
+    expect(stop.parameters.errorType).toBe("errorMessage");
+    const message = String(evaluate(stop.parameters.errorMessage, { $json: { error: JIRA_ERROR } }));
+    expect(message).toContain(JIRA_ERROR.message);
+    // A request n8n could not even build carries its reason as plain text.
+    expect(String(evaluate(stop.parameters.errorMessage, { $json: { error: "Invalid URL" } }))).toContain("Invalid URL");
+    expect(String(evaluate(stop.parameters.errorMessage, { $json: {} })).length).toBeGreaterThan(10);
+  });
+
   test("an improvement idea becomes a Tâche with the AI's priority and label", () => {
     const issue = jiraRequestFor(
       aiAnswer({ type: "Tâche", summary: "Filtre Dernière relance", priority: "Low", label: "front" }),
@@ -475,6 +502,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
       "n8n-nodes-base.if": 2.3,
       "n8n-nodes-base.set": 3.5,
       "n8n-nodes-base.httpRequest": 4.5,
+      "n8n-nodes-base.stopAndError": 1,
       "n8n-nodes-base.stickyNote": 1,
       // Our custom node, loaded from infra/automation-flows/custom-nodes.
       "CUSTOM.screenPipeTool": 1,
@@ -644,6 +672,9 @@ const EMAIL: Email = {
   metadata: { "message-id": "<CAK7dQ9xYz1@mail.gmail.com>" },
 };
 
+/** The error item an HTTP Request step sends to its error output (n8n 2.42.2). */
+const JIRA_ERROR = { message: "The connection timed out, consider setting the 'Retry on Fail' option" };
+
 const EMAIL_OPEN = "<email>";
 const EMAIL_CLOSE = "</email>";
 
@@ -674,7 +705,7 @@ function aiAnswer(overrides: Record<string, string> = {}) {
 // Only evaluates expressions from the committed fixture above, never external
 // input. Keep the fixture's expressions plain JS so this stays faithful to n8n.
 
-type Ctx = { $json: any; nodes?: Record<string, any>; $execution?: { id: string } };
+type Ctx = { $json: any; nodes?: Record<string, any>; $execution?: { id: string }; $runIndex?: number };
 
 function evaluate(value: unknown, ctx: Ctx): unknown {
   if (typeof value !== "string" || !value.startsWith("=")) return value;
@@ -685,7 +716,7 @@ function evaluate(value: unknown, ctx: Ctx): unknown {
     return { item: { json }, first: () => ({ json }) };
   };
   const run = (code: string) =>
-    new Function("$json", "$", "$execution", `return (${code});`)(ctx.$json, $, ctx.$execution);
+    new Function("$json", "$", "$execution", "$runIndex", `return (${code});`)(ctx.$json, $, ctx.$execution, ctx.$runIndex ?? 0);
   const whole = template.match(/^\{\{([\s\S]*)\}\}$/);
   if (whole && !whole[1].includes("{{")) return run(whole[1]);
   return template.replace(/\{\{([\s\S]*?)\}\}/g, (_, code) => String(run(code)));
@@ -758,6 +789,15 @@ function jiraNode(): N8nNode {
 /** The JQL search for a ticket already created for this email (D20). */
 function dedupeSearch(): N8nNode {
   return onlyRequestTo("https://kylianaubry.atlassian.net/rest/api/3/search/jql");
+}
+
+/** The gate a failed creation goes to: check Jira again, or give up. */
+function failedCreationGate(): N8nNode {
+  const after = next(jiraNode().name, 1);
+  expect(after).toHaveLength(1);
+  const gate = workflow.nodes.find((n) => n.name === after[0])!;
+  expect(gate.type).toBe("n8n-nodes-base.if");
+  return gate;
 }
 
 /** The gate after the search: is there already a ticket for this email? */

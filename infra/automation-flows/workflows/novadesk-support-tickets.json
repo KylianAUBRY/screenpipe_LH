@@ -292,6 +292,7 @@
       "name": "Créer le ticket Jira",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
+      "onError": "continueErrorOutput",
       "position": [1420, 0],
       "parameters": {
         "method": "POST",
@@ -307,6 +308,51 @@
         "jiraSoftwareCloudApi": { "id": "spNovaJira000001", "name": "NovaDesk Jira" }
       },
       "notes": "Le ticket est créé sans IA dans le projet Jira NOVA à partir des champs de l'IA, titré « Produit - résumé », avec l'email d'origine cité en texte brut et sans personne assignée.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a00000000f",
+      "name": "Création à vérifier",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1660, 200],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6d0f5c1e-0b7a-4c55-9f1e-01a0000000f1",
+              "leftValue": "={{ $runIndex }}",
+              "rightValue": 2,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "notes": "Si Jira répond par une erreur, n8n recherche le ticket avant de réessayer, car Jira a pu le créer malgré tout, et abandonne après trois essais.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000010",
+      "name": "Création refusée par Jira",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [1900, 200],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "={{ \"Jira n'a pas créé le ticket après 3 essais : \" + String($json.error?.message ?? $json.error ?? 'raison inconnue').slice(0, 300) }}"
+      },
+      "notes": "Après trois refus de Jira, l'exécution échoue avec la raison donnée par Jira, et l'email reste visible dans l'historique des exécutions de n8n.",
       "notesInFlow": true
     },
     {
@@ -356,6 +402,15 @@
     },
     "Ticket déjà créé ?": {
       "main": [[], [{ "node": "Créer le ticket Jira", "type": "main", "index": 0 }]]
+    },
+    "Créer le ticket Jira": {
+      "main": [[], [{ "node": "Création à vérifier", "type": "main", "index": 0 }]]
+    },
+    "Création à vérifier": {
+      "main": [
+        [{ "node": "Chercher le ticket de cet email", "type": "main", "index": 0 }],
+        [{ "node": "Création refusée par Jira", "type": "main", "index": 0 }]
+      ]
     }
   },
   "settings": {
