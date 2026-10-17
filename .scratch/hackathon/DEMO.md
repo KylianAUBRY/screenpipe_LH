@@ -65,6 +65,14 @@ and the history lines « Mis en pause pour modification par le chat » /
 rehearsal 0). Then click « Activer » on the current Flow and continue; the
 Flow keeps working without the change.
 
+## If something goes wrong
+
+- **No ticket 60 s after the email:** the AI call is retried after 30 s; if
+  n8n still shows the run as running, keep talking over the Review Screen and
+  show the Jira ticket of a previous rehearsal (NOVA-42).
+- **A rehearsal stopped mid-typing left text in the answers:** the draft lives
+  in the app's session; clear the fields by hand or relaunch the app.
+
 ## Known limits
 
 - The Workflows view needs the PostHog `workflows` flag or the local build

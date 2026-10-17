@@ -12,9 +12,9 @@ state between runs.
 
 **Blocked by:** 01, 04, 05, 06, 07, 08, 13, 14, 15, 16.
 
-**Status:** in progress — 3 timed rehearsals done (journey 105–110 s), reset verified; acceptance re-run after tickets 21–23; runbook and fallback in `.scratch/hackathon/DEMO.md`
+**Status:** done — 6 rehearsals, the final one on the build with every fix: 50 s to Activer, ticket at 70 s, whole journey 110 s; acceptance list checked in `SPEC.md`; runbook and fallback in `.scratch/hackathon/DEMO.md`; the machine is left in the start state
 
-- [ ] Every item of the acceptance list in `SPEC.md` is checked with its observed result.
+- [x] Every item of the acceptance list in `SPEC.md` is checked with its observed result.
 - [x] Three consecutive rehearsals fit in 3 minutes. 106–110 s for the whole journey (rehearsals 1–3).
 - [x] Reset between rehearsals restores the start state (no leftover Flow, answers or unread demo emails).
 - [x] A fallback is written down if the live chat change fails rehearsal (e.g. a recorded clip). `.scratch/hackathon/DEMO.md`.

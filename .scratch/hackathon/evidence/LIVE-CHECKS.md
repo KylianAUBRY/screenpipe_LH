@@ -117,6 +117,9 @@ this machine builds with `NEXT_PUBLIC_SCREENPIPE_WORKFLOWS_ROLLOUT=1`.)
 | 1 | 54 s | — | 92 s | 110 s | email arrived in the same second as « Activer », before the IMAP listener was ready → missed (fixed: catch-up seed) |
 | 2 | 48 s | **80 s** (NOVA-39) | 87 s | **106 s** | full journey in 1 min 46 s |
 | 3 | 51 s | — | 87 s | 105 s | email being processed when the chat change paused the Flow: execution orphaned, email lost → ticket 21 |
+| 4 | 52 s (second try; first try typed before the page was ready — script issue) | NOVA-40 | 72 s | 90 s | Jira markup test email: inert (ticket 23) |
+| 5 | 52 s | — | — (`flow_running` after 90 s) | — | AI proxy call never answered (10-min client default) → AI step now times out after 30 s and retries |
+| 6 (final build) | **50 s** | **NOVA-42 at 70 s** | 83 s | **110 s** | clean run on the build with every fix |
 
 Every rehearsal: « Créer l'automatisation » disabled at 0 and 1 answer,
 enabled at 2; Review Screen with 8 sentences; n8n one inactive tagged
