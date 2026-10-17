@@ -10,7 +10,6 @@
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { FlowsApiError, type Flow, type FlowsApi } from "./api";
-import { ACTION_BUTTON } from "./common";
 
 type Problem =
   | { kind: "changed" }
@@ -18,12 +17,18 @@ type Problem =
 
 export function FlowActivation({
   flow,
+  readVersionId,
   api,
   onChange,
 }: {
   flow: Flow;
+  /**
+   * The version the user loaded. "Activer" always names it: when a background
+   * read showed a newer one, the engine refuses it (409) and the user reloads.
+   */
+  readVersionId: string;
   api: FlowsApi;
-  onChange: (flow: Flow) => void;
+  onChange: (flow: Flow, options?: { read?: boolean }) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<Problem | null>(null);
@@ -34,17 +39,18 @@ export function FlowActivation({
     try {
       onChange(
         action === "activate"
-          ? await api.activate(flow.id, flow.versionId)
+          ? await api.activate(flow.id, readVersionId)
           : await api.deactivate(flow.id),
       );
     } catch (caught) {
       const error =
         caught instanceof FlowsApiError ? caught : new FlowsApiError("unknown", String(caught));
       if (error.code === "version_changed") {
-        // Show what n8n holds now; the user activates it after reading it.
+        // Show what n8n holds now, as the user's own reload: the banner asks
+        // them to read it, and their next click activates it.
         setProblem({ kind: "changed" });
         try {
-          onChange(await api.get(flow.id));
+          onChange(await api.get(flow.id), { read: true });
         } catch {
           // The banner already asks to re-read; the old content stays visible.
         }
@@ -60,32 +66,22 @@ export function FlowActivation({
   // An active Flow edited in n8n still runs its old version: the user can
   // activate the version shown here once they have read it.
   const canActivate = !active || flow.reviewOutdated;
+  const changedSinceRead = canActivate && flow.versionId !== readVersionId;
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
         {canActivate && (
-          <Button
-            size="sm"
-            className={ACTION_BUTTON}
-            disabled={busy}
-            onClick={() => void run("activate")}
-          >
+          <Button size="sm" disabled={busy} onClick={() => void run("activate")}>
             {active ? "Activer cette version" : "Activer"}
           </Button>
         )}
         {active && (
-          <Button
-            size="sm"
-            variant="outline"
-            className={ACTION_BUTTON}
-            disabled={busy}
-            onClick={() => void run("deactivate")}
-          >
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void run("deactivate")}>
             Désactiver
           </Button>
         )}
       </div>
-      {problem?.kind === "changed" && (
+      {(problem?.kind === "changed" || changedSinceRead) && (
         <p role="status" className="border border-border bg-accent p-3 text-sm">
           Ce Flow a changé depuis que vous l&apos;avez ouvert : relisez cette
           version avant de l&apos;activer.

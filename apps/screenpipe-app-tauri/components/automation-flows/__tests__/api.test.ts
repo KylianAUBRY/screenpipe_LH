@@ -10,7 +10,10 @@ const localFetch = vi.hoisted(() => vi.fn());
 const showChatWithPrefill = vi.hoisted(() => vi.fn(async (_prefill: Record<string, unknown>) => {}));
 const getFlowActivationKey = vi.hoisted(() => vi.fn(async (): Promise<string> => "ui-key"));
 vi.mock("@/lib/api", () => ({ localFetch }));
-vi.mock("@/lib/utils/tauri", () => ({ commands: { getFlowActivationKey } }));
+const searchNavigateToTimeline = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ status: "ok" as const, data: null })),
+);
+vi.mock("@/lib/utils/tauri", () => ({ commands: { getFlowActivationKey, searchNavigateToTimeline } }));
 vi.mock("@/lib/chat-utils", () => ({ showChatWithPrefill }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
@@ -138,6 +141,26 @@ describe("flowsApi", () => {
     expect(prefill.prompt).toContain(fixtureFlow.name);
     expect(prefill.prompt).toContain("automation-flows");
     // Opening the chat changes nothing in the Flow service.
+    expect(localFetch).not.toHaveBeenCalled();
+  });
+
+  it("opens the task's moment through the Timeline handoff the Task Page evidence uses", async () => {
+    searchNavigateToTimeline.mockClear();
+    const timestamp = "2026-10-17T02:07:12.733Z";
+
+    await flowsApi.openTimeline({ frameId: 4242, timestamp });
+    expect(searchNavigateToTimeline).toHaveBeenLastCalledWith(timestamp, 4242, null, null, null, null);
+    // A moment without a recorder frame opens the Timeline at its time.
+    await flowsApi.openTimeline({ frameId: null, timestamp });
+    expect(searchNavigateToTimeline).toHaveBeenLastCalledWith(timestamp, null, null, null, null, null);
+
+    for (const moment of [{ frameId: -1, timestamp }, { frameId: 4242, timestamp: "not a date" }]) {
+      await expect(flowsApi.openTimeline(moment)).rejects.toThrow("Invalid captured moment");
+    }
+    expect(searchNavigateToTimeline).toHaveBeenCalledTimes(2);
+
+    searchNavigateToTimeline.mockResolvedValueOnce({ status: "error", error: "Timeline unavailable" } as never);
+    await expect(flowsApi.openTimeline({ frameId: null, timestamp })).rejects.toThrow("Timeline unavailable");
     expect(localFetch).not.toHaveBeenCalled();
   });
 

@@ -80,7 +80,7 @@ function FlowRow({ flow, onOpen }: { flow: FlowSummary; onOpen: () => void }) {
             Dernière exécution : {lastRunLabel(flow.lastExecution)}
           </div>
         </div>
-        <StatusBadge status={flow.status} />
+        <StatusBadge status={flow.status} running={flow.lastExecution?.status === "running"} />
         <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden />
       </button>
     </li>
