@@ -20,7 +20,7 @@ export const fixtureFlow: Flow = {
   sourceTaskId: "wf-novadesk-support-tickets",
   // The scripted task's first evidence (an embedded image, so no recorder frame).
   sourceMoment: { frameId: null, timestamp: "2026-10-17T02:05:41Z" },
-  summary: "Ce flux transforme chaque email de bug ou d'idée reçu sur la boîte support NovaDesk (servicedesk.novadesk@gmail.com) en ticket dans le projet Jira NOVA. Dès qu'un email non lu arrive, n8n le lit puis le marque comme lu, pour qu'il ne soit jamais traité deux fois. Une seule IA, fournie par votre abonnement ChatGPT, lit l'email comme une donnée, jamais comme une instruction. Pour reprendre vos habitudes, elle consulte d'abord dans Screenpipe vos tickets NOVA créés à la main pour des emails similaires et votre activité de la semaine, puis propose le type (Bug, Tâche ou aucun ticket), le produit, un résumé court, la priorité, l'étiquette back ou front, et sa confiance (haute ou basse) avec sa raison. Si elle hésite, rien n'est créé : Screenpipe vous envoie la notification « À trier à la main » avec l'expéditeur, l'objet et sa raison. Si aucun ticket n'est nécessaire, ou si sa réponse sort des valeurs autorisées, rien n'est créé. Sinon, le ticket est créé sans IA : titre « Produit - résumé », email d'origine cité en texte brut dans la description, aucune personne assignée. Rien ne tourne tant que vous n'avez pas cliqué sur Activer.",
+  summary: "Ce flux transforme chaque email de bug ou d'idée reçu sur la boîte support NovaDesk (servicedesk.novadesk@gmail.com) en ticket dans le projet Jira NOVA. n8n lit chaque email non lu puis le marque comme lu, pour ne jamais le traiter deux fois. Une seule IA (votre abonnement ChatGPT) lit l'email comme une donnée, jamais comme une instruction. Elle consulte d'abord dans Screenpipe vos tickets NOVA créés à la main pour des emails similaires et votre activité de la semaine, puis propose le type (Bug, Tâche ou aucun ticket), le produit, un résumé court, la priorité, l'étiquette back ou front, et sa confiance avec sa raison. Si elle hésite, rien n'est créé : Screenpipe vous envoie la notification « À trier à la main » avec l'expéditeur, l'objet et sa raison. Rien n'est créé non plus si aucun ticket n'est nécessaire ou si sa réponse sort des valeurs autorisées. Sinon, le ticket est créé sans IA : titre « Produit - résumé », email d'origine en texte brut, sans personne assignée, avec une étiquette propre à l'email. Si Jira a déjà un ticket avec cette étiquette, rien n'est recréé : une relance ne fait jamais de doublon. Rien ne tourne tant que vous n'avez pas cliqué sur Activer.",
   nodes: [
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000001",
@@ -86,11 +86,39 @@ export const fixtureFlow: Flow = {
       sentence: "Le flux s'arrête ici sans rien créer si l'IA répond qu'aucun ticket n'est nécessaire (par exemple pour une alerte de sécurité) ou si un champ de sa réponse sort des valeurs autorisées.",
     },
     {
+      id: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000d",
+      name: "Chercher le ticket de cet email",
+      type: "n8n-nodes-base.httpRequest",
+      position: [940, 0],
+      sentence: "Avant de créer quoi que ce soit, n8n cherche dans Jira NOVA un ticket portant l'étiquette « mail-… » calculée à partir de l'identifiant unique de l'email (Message-ID).",
+    },
+    {
+      id: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000e",
+      name: "Ticket déjà créé ?",
+      type: "n8n-nodes-base.if",
+      position: [1180, 0],
+      sentence: "Si cet email a déjà son ticket, par exemple parce qu'une relance a suivi une coupure de Jira, le flux s'arrête sans erreur et sans créer de doublon.",
+    },
+    {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000007",
       name: "Créer le ticket Jira",
       type: "n8n-nodes-base.httpRequest",
-      position: [940, 0],
+      position: [1420, 0],
       sentence: "Le ticket est créé sans IA dans le projet Jira NOVA à partir des champs de l'IA, titré « Produit - résumé », avec l'email d'origine cité en texte brut et sans personne assignée.",
+    },
+    {
+      id: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000f",
+      name: "Création à vérifier",
+      type: "n8n-nodes-base.if",
+      position: [1660, 200],
+      sentence: "Si Jira répond par une erreur, n8n recherche le ticket avant de réessayer, car Jira a pu le créer malgré tout, et abandonne après trois essais.",
+    },
+    {
+      id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000010",
+      name: "Création refusée par Jira",
+      type: "n8n-nodes-base.stopAndError",
+      position: [1900, 200],
+      sentence: "Après trois refus de Jira, l'exécution échoue avec la raison donnée par Jira, et l'email reste visible dans l'historique des exécutions de n8n.",
     },
   ],
   edges: [
@@ -102,7 +130,12 @@ export const fixtureFlow: Flow = {
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000b" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000b", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000b", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000c" },
-    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000007" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000d" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000d", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000e" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000e", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000007" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000007", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000f" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000f", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000d" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000f", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000010" },
   ],
   versionId: "fixture-version-1",
   reviewedVersionId: null,
