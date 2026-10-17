@@ -5024,6 +5024,18 @@ mod tests {
     }
 
     #[test]
+    fn automation_flows_skill_looks_a_node_up_before_using_it() {
+        // The chat builds from the nodes this n8n has, not from memory: it
+        // searches, reads the card, and builds only from what they return.
+        let skill = include_str!("../../assets/skills/automation-flows/SKILL.md");
+        assert!(skill.contains("**Look every node up first.**"));
+        assert!(skill.contains("| `GET /automation-flows/nodes?q=<words>` "));
+        assert!(skill.contains("| `GET /automation-flows/nodes/card?type=<type>"));
+        assert!(skill.contains("switchedOff"));
+        assert!(skill.contains("inN8n"));
+    }
+
+    #[test]
     fn automation_flows_skill_names_the_screenpipe_node_types_n8n_loads() {
         // The local n8n loads the package as custom extensions, so its node
         // types are `CUSTOM.<name>`; a wrong prefix makes n8n refuse the
