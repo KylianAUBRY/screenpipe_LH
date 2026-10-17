@@ -229,11 +229,70 @@
       "notesInFlow": true
     },
     {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a00000000d",
+      "name": "Chercher le ticket de cet email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "position": [940, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://kylianaubry.atlassian.net/rest/api/3/search/jql",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraSoftwareCloudApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jql: 'project = NOVA AND labels = \"' + (e => 'mail-' + (String(e.metadata?.['message-id'] ?? '').trim() || [e.from, e.date, e.subject].join('|')).split('').reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(16).padStart(8, '0'))($('Nouvel email support').item.json) + '\"', maxResults: 1, fields: ['key'] }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "credentials": {
+        "jiraSoftwareCloudApi": { "id": "spNovaJira000001", "name": "NovaDesk Jira" }
+      },
+      "notes": "Avant de créer quoi que ce soit, n8n cherche dans Jira NOVA un ticket portant l'étiquette « mail-… » calculée à partir de l'identifiant unique de l'email (Message-ID).",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a00000000e",
+      "name": "Ticket déjà créé ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1180, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6d0f5c1e-0b7a-4c55-9f1e-01a0000000e1",
+              "leftValue": "={{ ($json.issues ?? []).length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "notes": "Si cet email a déjà son ticket, par exemple parce qu'une relance a suivi une coupure de Jira, le flux s'arrête sans erreur et sans créer de doublon.",
+      "notesInFlow": true
+    },
+    {
       "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000007",
       "name": "Créer le ticket Jira",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
-      "position": [940, 0],
+      "position": [1420, 0],
       "parameters": {
         "method": "POST",
         "url": "https://kylianaubry.atlassian.net/rest/api/3/issue",
@@ -241,7 +300,7 @@
         "nodeCredentialType": "jiraSoftwareCloudApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ fields: { project: { key: 'NOVA' }, issuetype: { name: $json.output.type }, summary: $json.output.product + ' - ' + $json.output.summary, priority: { name: $json.output.priority }, labels: [ $json.output.label, (e => 'mail-' + (String(e.metadata?.['message-id'] ?? '').trim() || [e.from, e.date, e.subject].join('|')).split('').reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(16).padStart(8, '0'))($('Nouvel email support').item.json) ], description: { type: 'doc', version: 1, content: [ { type: 'paragraph', content: [ { type: 'text', text: 'Email reçu par la boîte support :' } ] }, { type: 'codeBlock', content: [ { type: 'text', text: (e => ('De : ' + e.from + '\\nDate : ' + e.date + '\\nObjet : ' + e.subject + '\\n\\n' + (e.textPlain || e.textHtml || '')).slice(0, 20000))($('Nouvel email support').item.json) } ] } ] } } }) }}",
+        "jsonBody": "={{ JSON.stringify((o => ({ fields: { project: { key: 'NOVA' }, issuetype: { name: o.type }, summary: o.product + ' - ' + o.summary, priority: { name: o.priority }, labels: [ o.label, (e => 'mail-' + (String(e.metadata?.['message-id'] ?? '').trim() || [e.from, e.date, e.subject].join('|')).split('').reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(16).padStart(8, '0'))($('Nouvel email support').item.json) ], description: { type: 'doc', version: 1, content: [ { type: 'paragraph', content: [ { type: 'text', text: 'Email reçu par la boîte support :' } ] }, { type: 'codeBlock', content: [ { type: 'text', text: (e => ('De : ' + e.from + '\\nDate : ' + e.date + '\\nObjet : ' + e.subject + '\\n\\n' + (e.textPlain || e.textHtml || '')).slice(0, 20000))($('Nouvel email support').item.json) } ] } ] } } }))($(\"Analyser l'email (IA)\").item.json.output)) }}",
         "options": {}
       },
       "credentials": {
@@ -290,7 +349,13 @@
       ]
     },
     "Ticket nécessaire": {
-      "main": [[{ "node": "Créer le ticket Jira", "type": "main", "index": 0 }], []]
+      "main": [[{ "node": "Chercher le ticket de cet email", "type": "main", "index": 0 }], []]
+    },
+    "Chercher le ticket de cet email": {
+      "main": [[{ "node": "Ticket déjà créé ?", "type": "main", "index": 0 }]]
+    },
+    "Ticket déjà créé ?": {
+      "main": [[], [{ "node": "Créer le ticket Jira", "type": "main", "index": 0 }]]
     }
   },
   "settings": {
