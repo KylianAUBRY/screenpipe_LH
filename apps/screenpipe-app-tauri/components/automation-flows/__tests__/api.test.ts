@@ -122,7 +122,11 @@ describe("flowsApi", () => {
     expect(path).toBe("/automation-flows/wf%2F1/runs/e%2F4/retry");
     expect(init.method).toBe("POST");
     expect(sentHeaders(init).get("content-type")).toBe("application/json");
+    // Like activation, the engine retries only on the user's click.
+    expect(sentHeaders(init).get(ACTIVATION_HEADER)).toBe("ui-key");
 
+    respond(403, { error: "retry_requires_user" });
+    await expect(flowsApi.retry("wf1", "e4")).rejects.toMatchObject({ code: "retry_requires_user" });
     respond(409, { error: "run_not_failed", detail: "this run did not fail" });
     await expect(flowsApi.retry("wf1", "e4")).rejects.toMatchObject({ code: "run_not_failed" });
     respond(404, { error: "run_not_found" });

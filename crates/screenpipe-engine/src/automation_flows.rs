@@ -133,7 +133,8 @@ const SETTINGS_KEYS: &[&str] = &[
     // the Review Screen.
 ];
 
-/// Header that carries the [`FlowActivationKey`] on `POST /:id/activate`.
+/// Header that carries the [`FlowActivationKey`] on `POST /:id/activate` and
+/// `POST /:id/runs/:run/retry`.
 pub const ACTIVATION_HEADER: &str = "x-screenpipe-flow-activation";
 
 /// The credential that lets only the desktop UI activate a Flow.
@@ -442,6 +443,8 @@ enum FlowError {
     Internal(String),
     /// Activation without the UI credential: not the user's click.
     ActivationRequiresUser,
+    /// A retry without the UI credential: not the user's click (SPEC D17).
+    RetryRequiresUser,
     /// Activation without the `versionId` the user reviewed.
     VersionRequired,
     /// A state-changing request that is not `Content-Type: application/json`.
@@ -508,6 +511,13 @@ impl IntoResponse for FlowError {
                 json!({
                     "error": "activation_requires_user",
                     "detail": "Only the user can activate a Flow, with the Activer button on its Review Screen in ScreenPipe.",
+                }),
+            ),
+            FlowError::RetryRequiresUser => (
+                StatusCode::FORBIDDEN,
+                json!({
+                    "error": "retry_requires_user",
+                    "detail": "Only the user can retry a Flow's run, with « Relancer » on its Review Screen or on the failure notification in ScreenPipe.",
                 }),
             ),
             FlowError::VersionRequired => (

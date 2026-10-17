@@ -193,6 +193,10 @@ export function mockAutomationFlowsResponse(
   if (method === "GET" && flow && !action) return Response.json(flow);
   if (method === "GET" && flow && action === "activity") return Response.json(mockActivity);
   if (method === "POST" && flow && action === "runs" && rawRun && runAction === "retry") {
+    // Like the engine: the user's click only, with the UI credential.
+    if (new Headers(init?.headers).get("x-screenpipe-flow-activation") !== BROWSER_MOCK_FLOW_ACTIVATION_KEY) {
+      return Response.json({ error: "retry_requires_user" }, { status: 403 });
+    }
     return retryMockRun(decodeURIComponent(rawRun));
   }
   if (method === "DELETE" && flow && !action) {

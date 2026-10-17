@@ -231,8 +231,10 @@ pub(super) fn failure_notice(
         .unwrap_or_else(|| format!("trigger-{}", chrono::Utc::now().timestamp_millis()));
     let mut actions =
         vec![json!({"type": "deeplink", "label": "Voir le Flow", "url": review, "primary": true})];
-    // « Relancer » (D17): the app calls the retry route with its local API
-    // key, then opens the Review Screen, whose Activity shows how it ended.
+    // « Relancer » (D17): the app's webview calls the retry route with its
+    // local API key and the UI credential (the click is the user's; the
+    // route refuses any other caller), then opens the Review Screen, whose
+    // Activity shows how it ended.
     // A failing trigger has no run to retry.
     if let Some(execution_id) = execution_id {
         actions.push(json!({

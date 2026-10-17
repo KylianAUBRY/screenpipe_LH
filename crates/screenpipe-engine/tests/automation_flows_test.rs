@@ -4647,6 +4647,30 @@ async fn retrying_a_failed_run_runs_it_again_in_n8n_and_says_how_it_ended() {
 }
 
 #[tokio::test]
+async fn only_the_users_click_retries_a_run() {
+    // The chat agent, pipes and MCP clients share the local API key: they
+    // cannot rerun a Flow's emails, only the Review Screen and the
+    // notification's « Relancer » (both hold the UI credential) can.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("exec-failed", &id));
+    n8n.retry_ends_as(ticket_created_on_retry());
+    let uri = format!("/automation-flows/{id}/runs/exec-failed/retry");
+
+    for headers in [vec![JSON], vec![JSON, (ACTIVATION_HEADER, "guessed")]] {
+        let (status, body) = app.send("POST", &uri, &headers, Some(json!({}))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "retry_requires_user");
+    }
+    assert!(posts_ending_with(&server, "/retry").await.is_empty());
+
+    let (status, run) = retry(&app, &id, "exec-failed").await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+}
+
+#[tokio::test]
 async fn a_retry_that_fails_again_says_where_and_why() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;

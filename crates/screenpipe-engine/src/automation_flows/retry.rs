@@ -10,6 +10,13 @@
 //! failed step with the input it had, and the rest of the run after it. The
 //! demo Flow searches Jira for the email's ticket before creating one (D20),
 //! so a retry never makes a second ticket.
+//!
+//! Like activation, a retry needs the user's click: the route refuses a
+//! request without the UI credential ([`FlowActivationKey`]), which only the
+//! Review Screen and the failure notification's « Relancer » (handled by the
+//! app's webview) send. The chat agent, pipes and MCP clients share the local
+//! API key and cannot rerun a Flow's emails. A Flow switched off since its run
+//! failed can still be retried by the user: it is their explicit click.
 
 use super::activity::{flow_run, FlowRun};
 use super::*;
@@ -23,7 +30,11 @@ const RETRY_WAIT: Duration = Duration::from_secs(180);
 pub(super) async fn retry_run(
     State(state): State<FlowsState>,
     Path((id, run)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Result<Json<FlowRun>, FlowError> {
+    if !from_user(&state, &headers) {
+        return Err(FlowError::RetryRequiresUser);
+    }
     let (api, store, workflow) = load_flow(&state, &id).await?;
     if !valid_workflow_id(&run) {
         return Err(FlowError::RunNotFound);

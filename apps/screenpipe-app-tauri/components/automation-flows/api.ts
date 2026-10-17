@@ -109,6 +109,8 @@ export type FlowsErrorCode =
   | "activation_failed"
   /** Activation without the desktop app's UI credential (e.g. `bun run dev:web:live`). */
   | "activation_requires_user"
+  /** « Relancer » without the desktop app's UI credential: not the user's click. */
+  | "retry_requires_user"
   /** « Relancer » on a run that did not fail (or is still running). */
   | "run_not_failed"
   /** n8n is still running the retried run after the engine stopped waiting. */
@@ -124,6 +126,7 @@ const SERVER_CODES: readonly FlowsErrorCode[] = [
   "version_changed",
   "activation_failed",
   "activation_requires_user",
+  "retry_requires_user",
   "run_not_failed",
   "retry_still_running",
 ];
@@ -152,6 +155,19 @@ async function activationKey(): Promise<string | null> {
 async function clickHeaders(): Promise<Record<string, string>> {
   const key = await activationKey();
   return key ? { ...JSON_HEADERS, [ACTIVATION_HEADER]: key } : JSON_HEADERS;
+}
+
+/** « Relancer »'s route in a failure notification (engine `failures.rs`). */
+const RETRY_PATH = /^\/automation-flows\/[A-Za-z0-9_-]+\/runs\/[A-Za-z0-9_-]+\/retry$/;
+
+/**
+ * The headers of a notification's `api` action. A click on « Relancer » is
+ * the user's, and the engine retries only with the UI credential, so that
+ * route gets it. No other action does: any local caller (a pipe, the chat
+ * agent) chooses a notification's actions and their URLs.
+ */
+export async function notificationApiHeaders(url: string): Promise<Record<string, string>> {
+  return RETRY_PATH.test(url) ? clickHeaders() : JSON_HEADERS;
 }
 
 export class FlowsApiError extends Error {
@@ -196,13 +212,17 @@ export const flowsApi = {
 
   /**
    * « Relancer » (D17): n8n runs the failed run `executionId` again with the
-   * input it kept. Answers the retried run, as the Activity lists it.
+   * input it kept. Answers the retried run, as the Activity lists it. Only
+   * ever called from the user's click; the engine refuses it without the UI
+   * credential.
    */
-  retry: (id: string, executionId: string) =>
-    request<FlowRun>(
+  async retry(id: string, executionId: string) {
+    return request<FlowRun>(
       `/automation-flows/${encodeURIComponent(id)}/runs/${encodeURIComponent(executionId)}/retry`,
-      { method: "POST", headers: JSON_HEADERS, body: "{}" },
-    ),
+      // Like activation, the engine retries only on the user's click.
+      { method: "POST", headers: await clickHeaders(), body: "{}" },
+    );
+  },
 
   /** The last health check; reading it never contacts n8n. */
   health: () => request<FlowsHealth>("/automation-flows/health"),

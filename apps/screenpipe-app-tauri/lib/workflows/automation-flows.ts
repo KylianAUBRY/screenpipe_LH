@@ -25,6 +25,7 @@ const CREATION_ERROR: Record<FlowsErrorCode, string> = {
   version_changed: CREATION_FAILED,
   activation_failed: CREATION_FAILED,
   activation_requires_user: CREATION_FAILED,
+  retry_requires_user: CREATION_FAILED,
   run_not_failed: CREATION_FAILED,
   retry_still_running: CREATION_FAILED,
   unknown: CREATION_FAILED,

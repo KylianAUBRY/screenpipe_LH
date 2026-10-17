@@ -135,6 +135,8 @@ function retryErrorMessage(error: FlowsApiError): string {
       return "n8n n'a plus cette exécution : elle ne peut pas être relancée.";
     case "retry_still_running":
       return "La relance tourne encore dans n8n : son résultat apparaîtra ici.";
+    case "retry_requires_user":
+      return "Seule l'app ScreenPipe peut relancer une exécution : rien n'a été relancé.";
     default:
       return `La relance n'a pas pu être lancée${error.detail ? ` : ${error.detail}` : "."}`;
   }

@@ -7,6 +7,7 @@ import { flowIdFromReviewLink, flowReviewPage } from "@/lib/workflows/automation
 import { emit } from "@tauri-apps/api/event";
 import { commands } from "@/lib/utils/tauri";
 import { localFetch, isLocalApiUrl } from "@/lib/api";
+import { notificationApiHeaders } from "@/components/automation-flows/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import {
   artifactOpenRequestFromUrl,
@@ -323,7 +324,7 @@ export async function executeNotificationAction(
         }
         const res = await localFetch(action.url, {
           method: action.method || "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: await notificationApiHeaders(action.url),
           body: action.body ? JSON.stringify(action.body) : undefined,
         });
         // "open note + HD": the meeting-start HD action embeds the live-note
