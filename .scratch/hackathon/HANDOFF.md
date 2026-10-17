@@ -93,6 +93,7 @@ the integration branch, fix findings in one implementer, set every ticket's
 
 ## Open decisions
 
+- **Failure handling decided, not yet ticketed:** SPEC.md D16–D20 (failure notification, Retry of a Failed Run, AI Abstention + Activity list, health check at app start and every 15 min, idempotent Retry via a `mail-<hash>` Jira label). Turn them into tickets with `/to-tickets` before building.
 - **Teammate divergence:** `origin/main` has another Review Screen
   ("Recommendations" tab, questions on the Review Screen, notification opens
   the Review Screen, demo backend) by a teammate. Our branch follows the
