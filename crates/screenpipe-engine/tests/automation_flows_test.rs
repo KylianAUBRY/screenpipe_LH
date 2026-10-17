@@ -10,6 +10,7 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use screenpipe_audio::audio_manager::AudioManagerBuilder;
 use screenpipe_db::DatabaseManager;
+use screenpipe_engine::automation_flows::{FlowActivationKey, ACTIVATION_HEADER};
 use screenpipe_engine::SCServer;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -22,6 +23,7 @@ use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
 const TASK_ID: &str = "wf-novadesk-support-tickets";
 const API_KEY: &str = "test-n8n-key";
 const STICKY_NOTE: &str = "n8n-nodes-base.stickyNote";
+const JSON: (&str, &str) = ("content-type", "application/json");
 
 // ---------------------------------------------------------------------------
 // Fake n8n: a tiny in-memory public API (workflows, tags, executions)
@@ -271,10 +273,30 @@ async fn start_fake_n8n() -> (MockServer, FakeN8n) {
 struct App {
     router: Router,
     dir: tempfile::TempDir,
+    /// The credential the desktop app hands only to its Review Screen.
+    ui_key: Option<FlowActivationKey>,
 }
 
+/// The local API key the app, the chat agent (Pi), pipes and MCP clients share.
+const LOCAL_API_KEY: &str = "sp-local-test-key";
+
 impl App {
+    /// The desktop app's engine, local API auth off (as in the tests above).
     async fn new() -> Self {
+        Self::build(Some(FlowActivationKey::generate()), false).await
+    }
+
+    /// The desktop app's engine with the local API key required.
+    async fn with_local_api_key() -> Self {
+        Self::build(Some(FlowActivationKey::generate()), true).await
+    }
+
+    /// The engine without the desktop app (CLI): nobody holds a UI credential.
+    async fn headless() -> Self {
+        Self::build(None, false).await
+    }
+
+    async fn build(ui_key: Option<FlowActivationKey>, local_api_auth: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(
             DatabaseManager::new("sqlite::memory:", Default::default())
@@ -289,7 +311,7 @@ impl App {
                 .await
                 .unwrap(),
         );
-        let server = SCServer::new(
+        let mut server = SCServer::new(
             db,
             SocketAddr::from(([127, 0, 0, 1], 0)),
             dir.path().to_path_buf(),
@@ -299,8 +321,17 @@ impl App {
             false,
             "balanced".to_string(),
         );
+        server.flow_activation_key = ui_key.clone();
+        if local_api_auth {
+            server.api_auth = true;
+            server.api_auth_key = Some(LOCAL_API_KEY.to_string());
+        }
         let router = server.create_router().await;
-        Self { router, dir }
+        Self {
+            router,
+            dir,
+            ui_key,
+        }
     }
 
     /// Fill in ScreenPipe's n8n connection (no SecretStore in tests, so the
@@ -328,11 +359,18 @@ impl App {
         .unwrap();
     }
 
-    async fn call(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-        let request = Request::builder()
-            .method(method)
-            .uri(uri)
-            .header("content-type", "application/json");
+    /// A request with exactly these headers.
+    async fn send(
+        &self,
+        method: &str,
+        uri: &str,
+        headers: &[(&str, &str)],
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let mut request = Request::builder().method(method).uri(uri);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
         let request = match body {
             Some(body) => request.body(Body::from(body.to_string())).unwrap(),
             None => request.body(Body::empty()).unwrap(),
@@ -344,6 +382,19 @@ impl App {
             status,
             serde_json::from_slice(&bytes).unwrap_or(Value::Null),
         )
+    }
+
+    /// A JSON request from any local caller (the chat agent, a pipe, a script).
+    async fn call(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+        self.send(method, uri, &[JSON], body).await
+    }
+
+    /// A JSON request from the Review Screen: it carries the UI credential the
+    /// desktop app hands to its webview.
+    async fn ui_call(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+        let key = self.ui_key.as_ref().expect("desktop app engine").expose();
+        self.send(method, uri, &[JSON, (ACTIVATION_HEADER, key)], body)
+            .await
     }
 
     async fn create_from_task(&self) -> (StatusCode, Value) {
@@ -773,7 +824,7 @@ async fn activate_publishes_the_reviewed_version_and_logs_it() {
     let id = created["id"].as_str().unwrap().to_string();
 
     let (status, flow) = app
-        .call(
+        .ui_call(
             "POST",
             &format!("/automation-flows/{id}/activate"),
             Some(json!({"versionId": "version-1"})),
@@ -822,7 +873,7 @@ async fn deactivate_unpublishes_and_logs_then_the_status_follows_the_versions() 
     let activate = format!("/automation-flows/{id}/activate");
     let deactivate = format!("/automation-flows/{id}/deactivate");
     let (_, flow) = app
-        .call("POST", &activate, Some(json!({"versionId": "version-1"})))
+        .ui_call("POST", &activate, Some(json!({"versionId": "version-1"})))
         .await;
     assert_eq!(flow["status"], "active");
 
@@ -862,7 +913,7 @@ async fn deactivate_unpublishes_and_logs_then_the_status_follows_the_versions() 
         .await;
     assert_eq!(flow["status"], "needs_review");
     let (_, flow) = app
-        .call("POST", &activate, Some(json!({"versionId": "version-2"})))
+        .ui_call("POST", &activate, Some(json!({"versionId": "version-2"})))
         .await;
     assert_eq!(flow["status"], "active");
     assert_eq!(flow["reviewedVersionId"], "version-2");
@@ -882,7 +933,7 @@ async fn activation_is_refused_without_publishing_or_logging() {
     // The workflow changed in n8n after the user opened the Review Screen.
     n8n.edit_workflow(&id, |w| w["versionId"] = json!("version-2"));
     let (status, body) = app
-        .call("POST", &activate, Some(json!({"versionId": "version-1"})))
+        .ui_call("POST", &activate, Some(json!({"versionId": "version-1"})))
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "version_changed");
@@ -891,7 +942,7 @@ async fn activation_is_refused_without_publishing_or_logging() {
     // n8n refuses to publish: its reason reaches the user.
     n8n.0.lock().unwrap().refuse_publish = Some("IMAP credentials are invalid".into());
     let (status, body) = app
-        .call("POST", &activate, Some(json!({"versionId": "version-2"})))
+        .ui_call("POST", &activate, Some(json!({"versionId": "version-2"})))
         .await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(body["error"], "activation_failed");
@@ -927,7 +978,7 @@ async fn repeated_clicks_switch_once_and_log_once() {
     assert_eq!(flow["activationLog"], json!([]));
 
     for _ in 0..2 {
-        let (status, flow) = app.call("POST", &activate, reviewed.clone()).await;
+        let (status, flow) = app.ui_call("POST", &activate, reviewed.clone()).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(flow["status"], "active");
     }
@@ -959,7 +1010,7 @@ async fn activating_the_version_edited_in_n8n_clears_the_flag() {
     let (_, created) = app.create_from_task().await;
     let id = created["id"].as_str().unwrap().to_string();
     let activate = format!("/automation-flows/{id}/activate");
-    app.call("POST", &activate, Some(json!({"versionId": "version-1"})))
+    app.ui_call("POST", &activate, Some(json!({"versionId": "version-1"})))
         .await;
 
     // Edited in the n8n editor: n8n keeps running version-1.
@@ -972,7 +1023,7 @@ async fn activating_the_version_edited_in_n8n_clears_the_flag() {
 
     // The user reads version-2 and activates it.
     let (status, flow) = app
-        .call("POST", &activate, Some(json!({"versionId": "version-2"})))
+        .ui_call("POST", &activate, Some(json!({"versionId": "version-2"})))
         .await;
     assert_eq!(status, StatusCode::OK, "{flow}");
     assert_eq!(flow["reviewOutdated"], false);
@@ -1024,18 +1075,32 @@ async fn nothing_but_the_activate_route_switches_a_flow_on() {
 #[tokio::test]
 async fn activation_routes_report_setup_and_unknown_flows() {
     let app = App::new().await;
+    // The Review Screen's clicks: Activer carries the UI credential and the
+    // reviewed version, Désactiver needs neither.
+    let reviewed = Some(json!({"versionId": "version-1"}));
+    let click = |uri: &'static str| {
+        let body = reviewed.clone();
+        let app = &app;
+        async move {
+            if uri.ends_with("/activate") {
+                app.ui_call("POST", uri, body).await
+            } else {
+                app.call("POST", uri, None).await
+            }
+        }
+    };
     for uri in [
         "/automation-flows/wf1/activate",
         "/automation-flows/wf1/deactivate",
     ] {
-        let (status, body) = app.call("POST", uri, None).await;
+        let (status, body) = click(uri).await;
         assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{uri}");
         assert_eq!(body["error"], "n8n_not_configured");
     }
 
     app.configure_n8n(&closed_port_url());
     let (status, body) = app
-        .call("POST", "/automation-flows/wf1/activate", None)
+        .ui_call("POST", "/automation-flows/wf1/activate", reviewed.clone())
         .await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(body["error"], "n8n_unreachable");
@@ -1047,11 +1112,75 @@ async fn activation_routes_report_setup_and_unknown_flows() {
         "/automation-flows/wf404/deactivate",
         "/automation-flows/..%2Fcredentials/activate",
     ] {
-        let (status, body) = app.call("POST", uri, None).await;
+        let (status, body) = click(uri).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
         assert_eq!(body["error"], "flow_not_found");
     }
     assert!(posts_ending_with(&server, "/publish").await.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Only a user click activates (ticket 14)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_local_api_key_alone_cannot_activate_a_flow() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::with_local_api_key().await;
+    app.configure_n8n(&server.uri());
+    let bearer = format!("Bearer {LOCAL_API_KEY}");
+    let auth = ("authorization", bearer.as_str());
+    let (status, created) = app
+        .send(
+            "POST",
+            "/automation-flows/from-task",
+            &[auth, JSON],
+            Some(json!({"taskId": TASK_ID, "answers": {}})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap().to_string();
+    let activate = format!("/automation-flows/{id}/activate");
+    let reviewed = json!({"versionId": "version-1"});
+
+    // The chat agent (Pi), a pipe or an MCP client: same local API key, any
+    // client header, a guessed credential or the API key in its place.
+    for extra in [
+        vec![],
+        vec![("x-screenpipe-client", "app")],
+        vec![("x-screenpipe-client", "api"), ("x-screenpipe-agent", "pi")],
+        vec![("x-screenpipe-client", "mcp")],
+        vec![(ACTIVATION_HEADER, "guessed")],
+        vec![(ACTIVATION_HEADER, LOCAL_API_KEY)],
+    ] {
+        let headers = [vec![auth, JSON], extra.clone()].concat();
+        let (status, body) = app
+            .send("POST", &activate, &headers, Some(reviewed.clone()))
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{extra:?}: {body}");
+        assert_eq!(body["error"], "activation_requires_user", "{extra:?}");
+    }
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    assert_eq!(n8n.workflows()[0]["active"], false);
+    let (_, flow) = app
+        .send("GET", &format!("/automation-flows/{id}"), &[auth], None)
+        .await;
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(flow["activationLog"], json!([]));
+
+    // The Review Screen's "Activer" click carries the UI credential.
+    let ui_key = app.ui_key.as_ref().unwrap().expose();
+    let (status, flow) = app
+        .send(
+            "POST",
+            &activate,
+            &[auth, JSON, (ACTIVATION_HEADER, ui_key)],
+            Some(reviewed),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["status"], "active");
+    assert_eq!(events(&flow), vec![event("activated", "version-1", "user")]);
 }
 
 #[tokio::test]
@@ -1153,7 +1282,7 @@ async fn chat_update_switches_an_active_flow_off_first_and_leaves_it_needing_rev
     app.configure_n8n(&server.uri());
     let (_, created) = app.create_from_task().await;
     let id = created["id"].as_str().unwrap().to_string();
-    app.call(
+    app.ui_call(
         "POST",
         &format!("/automation-flows/{id}/activate"),
         Some(json!({"versionId": "version-1"})),
@@ -1266,7 +1395,7 @@ async fn chat_update_is_refused_untouched_when_a_node_has_no_sentence() {
     app.configure_n8n(&server.uri());
     let (_, created) = app.create_from_task().await;
     let id = created["id"].as_str().unwrap().to_string();
-    app.call(
+    app.ui_call(
         "POST",
         &format!("/automation-flows/{id}/activate"),
         Some(json!({"versionId": "version-1"})),
@@ -1329,7 +1458,7 @@ async fn chat_update_refused_by_n8n_leaves_the_flow_switched_off() {
     app.configure_n8n(&server.uri());
     let (_, created) = app.create_from_task().await;
     let id = created["id"].as_str().unwrap().to_string();
-    app.call(
+    app.ui_call(
         "POST",
         &format!("/automation-flows/{id}/activate"),
         Some(json!({"versionId": "version-1"})),
@@ -1407,7 +1536,7 @@ async fn chat_update_of_a_paused_flow_leaves_it_needing_review_without_switching
     let (_, created) = app.create_from_task().await;
     let id = created["id"].as_str().unwrap().to_string();
     let reviewed = Some(json!({"versionId": "version-1"}));
-    app.call(
+    app.ui_call(
         "POST",
         &format!("/automation-flows/{id}/activate"),
         reviewed,

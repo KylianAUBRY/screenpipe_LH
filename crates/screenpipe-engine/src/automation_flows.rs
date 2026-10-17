@@ -24,7 +24,7 @@
 use crate::atomic_file;
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -112,17 +112,72 @@ const SETTINGS_KEYS: &[&str] = &[
     "availableInMCP",
 ];
 
+/// Header that carries the [`FlowActivationKey`] on `POST /:id/activate`.
+pub const ACTIVATION_HEADER: &str = "x-screenpipe-flow-activation";
+
+/// The credential that lets only the desktop UI activate a Flow.
+///
+/// The chat agent (Pi), pipes and MCP clients call the local API with the same
+/// API key as the app, so that key cannot tell a user's click from an agent.
+/// This one is random per app process, held in its memory (engine and Tauri
+/// side) and handed to the webview only through a Tauri command. It is never
+/// put in an environment variable (child processes such as Pi inherit them),
+/// a file or a log, and is never the local API key. A server started without
+/// one (the CLI, no Review Screen) refuses every activation.
+#[derive(Clone)]
+pub struct FlowActivationKey(Arc<str>);
+
+impl FlowActivationKey {
+    /// A fresh key from the OS random generator (two v4 UUIDs, 244 bits).
+    pub fn generate() -> Self {
+        let key = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        Self(key.into())
+    }
+
+    /// The key itself, for the Tauri command that hands it to the webview.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// Constant-time comparison: a caller cannot find the key byte by byte.
+    fn matches(&self, candidate: &[u8]) -> bool {
+        let key = self.0.as_bytes();
+        key.len() == candidate.len()
+            && key
+                .iter()
+                .zip(candidate)
+                .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+                == 0
+    }
+}
+
+impl std::fmt::Debug for FlowActivationKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FlowActivationKey(<redacted>)")
+    }
+}
+
 #[derive(Clone)]
 struct FlowsState {
     screenpipe_dir: PathBuf,
     secret_store: Option<Arc<SecretStore>>,
+    /// `None` without the desktop UI: activation is then always refused.
+    activation_key: Option<FlowActivationKey>,
     http: reqwest::Client,
     /// Serializes store writes and imports so a double click on "create"
     /// cannot import the same task twice.
     write_lock: Arc<Mutex<()>>,
 }
 
-pub fn router<S>(screenpipe_dir: PathBuf, secret_store: Option<Arc<SecretStore>>) -> Router<S>
+pub fn router<S>(
+    screenpipe_dir: PathBuf,
+    secret_store: Option<Arc<SecretStore>>,
+    activation_key: Option<FlowActivationKey>,
+) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -134,6 +189,7 @@ where
     let state = FlowsState {
         screenpipe_dir,
         secret_store,
+        activation_key,
         http,
         write_lock: Arc::new(Mutex::new(())),
     };
@@ -253,6 +309,8 @@ enum FlowError {
     /// rejected; the detail says what to fix.
     InvalidWorkflow(String),
     Internal(String),
+    /// Activation without the UI credential: not the user's click.
+    ActivationRequiresUser,
 }
 
 impl IntoResponse for FlowError {
@@ -278,6 +336,13 @@ impl IntoResponse for FlowError {
             FlowError::InvalidWorkflow(detail) => (
                 StatusCode::BAD_REQUEST,
                 json!({"error": "invalid_workflow", "detail": detail}),
+            ),
+            FlowError::ActivationRequiresUser => (
+                StatusCode::FORBIDDEN,
+                json!({
+                    "error": "activation_requires_user",
+                    "detail": "Only the user can activate a Flow, with the Activer button on its Review Screen in ScreenPipe.",
+                }),
             ),
             FlowError::Internal(detail) => {
                 tracing::error!("automation flows: {detail}");
@@ -876,12 +941,23 @@ async fn load_flow(state: &FlowsState, id: &str) -> Result<(N8nApi, FlowStore, V
 
 /// Activation: publishes in n8n exactly the version the user reviewed, records
 /// it as the reviewed version and logs it. Only the Review Screen's
-/// "Activer" button calls this route; nothing in the engine calls it.
+/// "Activer" button calls this route; nothing in the engine calls it, and it
+/// is refused without the UI credential ([`FlowActivationKey`]).
 async fn activate_flow(
     State(state): State<FlowsState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     body: Option<Json<ActivateRequest>>,
 ) -> Result<Json<Flow>, FlowError> {
+    // The local API key is shared with the chat agent, pipes and MCP clients;
+    // only the desktop UI holds this credential.
+    let from_user = headers
+        .get(ACTIVATION_HEADER)
+        .zip(state.activation_key.as_ref())
+        .is_some_and(|(sent, key)| key.matches(sent.as_bytes()));
+    if !from_user {
+        return Err(FlowError::ActivationRequiresUser);
+    }
     let request = body.map(|Json(request)| request).unwrap_or_default();
     let _guard = state.write_lock.lock().await;
     let (api, mut store, workflow) = load_flow(&state, &id).await?;
