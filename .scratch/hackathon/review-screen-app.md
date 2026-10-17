@@ -1,7 +1,6 @@
 # Review screen in the app (Automations > Recommendations)
 
-Implementation of the review screen validated in
-`prototypes/review-screen.html`, inside `apps/screenpipe-app-tauri`. The app
+The Automation Flow review screen, inside `apps/screenpipe-app-tauri`. The app
 code holds no proposal data: Flows come from a FlowSource.
 
 ## What is in the app
