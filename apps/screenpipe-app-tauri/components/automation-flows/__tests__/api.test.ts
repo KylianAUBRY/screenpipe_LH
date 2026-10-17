@@ -78,6 +78,7 @@ describe("flowsApi", () => {
     [409, { error: "version_changed" }, "version_changed"],
     [502, { error: "activation_failed", detail: "n8n answered 400: bad trigger" }, "activation_failed"],
     [412, { error: "n8n_not_configured" }, "n8n_not_configured"],
+    [412, { error: "n8n_unauthorized", detail: "n8n answered 401: unauthorized" }, "n8n_unauthorized"],
     [502, { error: "n8n_unreachable", detail: "connection refused" }, "n8n_unreachable"],
     [404, { error: "flow_not_found" }, "not_found"],
     [500, { error: "internal" }, "unknown"],

@@ -59,6 +59,7 @@ describe("desktop createAutomationFlow", () => {
 
   it.each([
     ["not-configured", /n8n n'est pas configuré.*Connexions/],
+    ["unauthorized", /n8n a refusé la clé API.*Connexions → n8n/],
     ["unreachable", /Impossible de joindre n8n/],
   ])("explains a %s Flow service and stays on the Task Page", async (state, message) => {
     window.history.replaceState({}, "", `/home?mode=workflows&flowsState=${state}`);

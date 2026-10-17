@@ -153,6 +153,26 @@ export function FlowsErrorMessage({
       </div>
     );
   }
+  if (error.code === "n8n_unauthorized") {
+    return (
+      <div role="alert" className="space-y-3 border border-border p-4">
+        <p className="text-sm font-medium">n8n a refusé la clé API</p>
+        <p className="text-sm text-muted-foreground">
+          n8n répond, mais refuse la clé API renseignée dans Connexions → n8n.
+          Créez une clé dans n8n (Settings → n8n API), collez-la dans Connexions → n8n,
+          puis revenez ici.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" className={ACTION_BUTTON} onClick={() => void api.openN8nConnection()}>
+            Ouvrir Connexions
+          </Button>
+          <Button size="sm" variant="outline" className={ACTION_BUTTON} onClick={onRetry}>
+            Réessayer
+          </Button>
+        </div>
+      </div>
+    );
+  }
   const title =
     error.code === "n8n_unreachable"
       ? "Impossible de joindre n8n"

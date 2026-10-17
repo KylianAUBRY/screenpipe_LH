@@ -124,6 +124,22 @@ describe("Flows list", () => {
     expect(api.openN8nConnection).toHaveBeenCalled();
   });
 
+  it("says that n8n refused the API key and links to Connections", async () => {
+    const api = fakeApi({
+      list: vi.fn(async () => {
+        throw new FlowsApiError("n8n_unauthorized", "n8n answered 401: unauthorized");
+      }),
+    });
+    render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("n8n a refusé la clé API")).toBeTruthy();
+    expect(within(alert).getByText(/clé API.*Connexions → n8n/)).toBeTruthy();
+    expect(within(alert).queryByText("Impossible de joindre n8n")).toBeNull();
+    fireEvent.click(within(alert).getByRole("button", { name: "Ouvrir Connexions" }));
+    expect(api.openN8nConnection).toHaveBeenCalled();
+  });
+
   it("explains that n8n is unreachable and retries", async () => {
     let calls = 0;
     const api = fakeApi({
