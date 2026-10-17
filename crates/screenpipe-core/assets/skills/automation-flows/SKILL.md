@@ -95,11 +95,13 @@ request once more; if it is refused again, tell the user to try again later).
 
 In the NovaDesk Flow, the node « Créer le ticket Jira » (`httpRequest`) builds
 the Jira issue in `parameters.jsonBody`, which ends with
-`labels: [ $json.label ]`. Change it to `labels: [ $json.label, 'auto' ]` and set
-that node's `notes` to a sentence such as « Le ticket est créé dans le projet
-Jira NOVA avec le type, la priorité, l'étiquette back ou front et l'étiquette
-auto, sans personne assignée. » Nothing else changes; the summary can mention
-the `auto` label.
+`labels: [ t.label, t.mailLabel ]`. Change it to
+`labels: [ t.label, t.mailLabel, 'auto' ]` and set that node's `notes` to a
+sentence such as « Le ticket est créé dans le projet Jira NOVA avec le type, la
+priorité, l'étiquette back ou front, l'étiquette de l'email et l'étiquette
+auto, sans personne assignée. » Keep `t.mailLabel`: the node « Chercher un
+ticket existant » looks for it so that an email handled twice never makes a
+second ticket. Nothing else changes; the summary can mention the `auto` label.
 
 ## Create a Flow
 

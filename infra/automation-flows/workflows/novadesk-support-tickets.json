@@ -190,13 +190,75 @@
               "name": "description",
               "value": "={{ (e => 'Email reçu par la boîte support, cité en texte brut :\\n{noformat}\\n' + (s => s.length > 19800 ? s.slice(0, 19800) + '\\n[…] email tronqué' : s)(('De : ' + String(e.from || '') + '\\nDate : ' + String(e.date || '') + '\\nObjet : ' + String(e.subject || '') + '\\n\\n' + (String(e.textPlain || '').slice(0, 100000).trim() || String(e.textHtml || '').slice(0, 100000).replace(/<(style|script)\\b[^<>]*>[^<]*/gi, '').replace(/<br\\b[^<>]*>|<\\/(p|div|li|tr|h[1-6])\\s*>/gi, '\\n').replace(/<[^<>]*>/g, '').replace(/&nbsp;/gi, ' ').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '\"').replace(/&#(\\d{1,7});/g, (m, n) => String.fromCharCode(Number(n))).replace(/&amp;/gi, '&').replace(/\\n{3,}/g, '\\n\\n').trim())).replace(/\\{\\s*noformat[^{}\\n]*\\}/gi, '').replace(/(\\{\\s*)noformat/gi, '$1no format')) + '\\n{noformat}')($('Nouvel email support').item.json) }}",
               "type": "string"
+            },
+            {
+              "id": "6d0f5c1e-0b7a-4c55-9f1e-01a0000000a6",
+              "name": "mailLabel",
+              "value": "={{ 'mail-' + (e => String((e.metadata || {})['message-id'] || '').trim() || ['sans-message-id', e.from, e.date, e.subject].map(v => String(v || '')).join('\\n'))($('Nouvel email support').item.json).hash('sha256').slice(0, 8) }}",
+              "type": "string"
             }
           ]
         },
         "includeOtherFields": false,
         "options": {}
       },
-      "notes": "Le titre du ticket est construit sans IA au format « Produit - résumé », et l'email d'origine est cité en texte brut dans la description, sans mise en forme ni lien actif.",
+      "notes": "Sans IA, le titre est construit au format « Produit - résumé », l'email d'origine est cité en texte brut sans mise en forme ni lien actif, et une étiquette « mail-… » est tirée de l'identifiant unique de l'email.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a00000000a",
+      "name": "Chercher un ticket existant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [1100, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "https://kylianaubry.atlassian.net/rest/api/2/search/jql",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraSoftwareCloudApi",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            { "name": "jql", "value": "=project = NOVA AND labels = \"{{ $json.mailLabel }}\"" },
+            { "name": "maxResults", "value": "1" }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "jiraSoftwareCloudApi": { "id": "spNovaJira000001", "name": "NovaDesk Jira" }
+      },
+      "notes": "Avant de créer quoi que ce soit, n8n cherche dans le projet Jira NOVA un ticket qui porte déjà l'étiquette propre à cet email.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a00000000b",
+      "name": "Aucun ticket pour cet email",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1340, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6d0f5c1e-0b7a-4c55-9f1e-01a0000000c6",
+              "leftValue": "={{ Array.isArray($json.issues) ? $json.issues.length : 'réponse de recherche Jira inattendue' }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "notes": "Si un ticket porte déjà cette étiquette, par exemple quand une exécution est relancée, le flux s'arrête sans erreur au lieu de créer un doublon.",
       "notesInFlow": true
     },
     {
@@ -204,7 +266,7 @@
       "name": "Créer le ticket Jira",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
-      "position": [1100, 0],
+      "position": [1580, 0],
       "parameters": {
         "method": "POST",
         "url": "https://kylianaubry.atlassian.net/rest/api/2/issue",
@@ -212,13 +274,13 @@
         "nodeCredentialType": "jiraSoftwareCloudApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ fields: { project: { key: 'NOVA' }, issuetype: { name: $json.issueType }, summary: $json.summary, description: $json.description, priority: { name: $json.priority }, labels: [ $json.label ] } }) }}",
+        "jsonBody": "={{ (t => JSON.stringify({ fields: { project: { key: 'NOVA' }, issuetype: { name: t.issueType }, summary: t.summary, description: t.description, priority: { name: t.priority }, labels: [ t.label, t.mailLabel ] } }))($('Préparer le ticket').item.json) }}",
         "options": {}
       },
       "credentials": {
         "jiraSoftwareCloudApi": { "id": "spNovaJira000001", "name": "NovaDesk Jira" }
       },
-      "notes": "Le ticket est créé dans le projet Jira NOVA avec le type, la priorité et l'étiquette choisis, sans personne assignée.",
+      "notes": "Le ticket est créé dans le projet Jira NOVA avec le type, la priorité et l'étiquette choisis, plus l'étiquette de l'email, sans personne assignée.",
       "notesInFlow": true
     },
     {
@@ -255,7 +317,13 @@
       "main": [[{ "node": "Préparer le ticket", "type": "main", "index": 0 }], []]
     },
     "Préparer le ticket": {
-      "main": [[{ "node": "Créer le ticket Jira", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Chercher un ticket existant", "type": "main", "index": 0 }]]
+    },
+    "Chercher un ticket existant": {
+      "main": [[{ "node": "Aucun ticket pour cet email", "type": "main", "index": 0 }]]
+    },
+    "Aucun ticket pour cet email": {
+      "main": [[{ "node": "Créer le ticket Jira", "type": "main", "index": 0 }], []]
     }
   },
   "settings": {
