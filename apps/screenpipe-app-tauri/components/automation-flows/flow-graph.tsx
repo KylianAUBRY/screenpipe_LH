@@ -58,24 +58,12 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
           className={HIDDEN_HANDLE}
         />
       ))}
-      {/* The step in plain words; the n8n node type is for n8n, not the reader. */}
+      {/* What the step does, in plain words. The n8n node type and the fixed
+          facts (credentials, hosts) stay in n8n: "Open in n8n" shows them. */}
       <p className="text-sm font-medium leading-tight">{node.name}</p>
       <p className="mt-1.5 break-words text-xs leading-snug text-muted-foreground">
         {node.sentence ?? "No explanation for this step."}
       </p>
-      {/* An engine from before ticket 22 sends no facts. */}
-      {(node.facts ?? []).length > 0 && (
-        <ul
-          aria-label="Fixed details"
-          className="mt-1.5 space-y-0.5 border-t border-border pt-1.5 font-mono text-[10px] leading-snug text-muted-foreground"
-        >
-          {node.facts.map((fact) => (
-            <li key={fact} className="break-all">
-              {fact}
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }

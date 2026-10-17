@@ -51,33 +51,23 @@ describe("Review Screen graph", () => {
     expect(within(card).getByText("No explanation for this step.")).toBeTruthy();
   });
 
-  it("lists the facts the AI did not write under each step's sentence", async () => {
-    const [trigger, agent, ...rest] = fixtureFlow.nodes;
+  it("keeps each card to what the step does: no n8n type, credential or host", async () => {
+    const [trigger, ...rest] = fixtureFlow.nodes;
     const jira = rest.at(-1)!;
     const graph = await renderGraph({
       ...fixtureFlow,
       nodes: [
-        { ...trigger, facts: ["Identifiant n8n : NovaDesk Gmail (IMAP)"] },
-        { ...agent, facts: [] },
+        { ...trigger, facts: ["n8n credential: NovaDesk Gmail (IMAP)"] },
         ...rest.slice(0, -1),
-        { ...jira, facts: ["Identifiant n8n : NovaDesk Jira", "POST kylianaubry.atlassian.net"] },
+        { ...jira, facts: ["n8n credential: NovaDesk Jira", "POST kylianaubry.atlassian.net"] },
       ],
     });
 
     const card = within(graph).getByTestId(`flow-node-${jira.id}`);
-    // React Flow keeps nodes invisible until it measures them, which jsdom
-    // never does: roles need `hidden`, and the label is read from aria-label.
-    const facts = within(card).getByLabelText("Fixed details");
-    expect(facts.tagName).toBe("UL");
-    expect(within(facts).getAllByRole("listitem", { hidden: true }).map((item) => item.textContent)).toEqual([
-      "Identifiant n8n : NovaDesk Jira",
-      "POST kylianaubry.atlassian.net",
-    ]);
-    // Under the sentence, not instead of it.
-    const sentence = within(card).getByText(jira.sentence!);
-    expect(sentence.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(within(graph).getByTestId(`flow-node-${trigger.id}`)).getByText("Identifiant n8n : NovaDesk Gmail (IMAP)")).toBeTruthy();
-    expect(within(within(graph).getByTestId(`flow-node-${agent.id}`)).queryByRole("list", { hidden: true })).toBeNull();
+    expect(within(card).getByText(jira.name)).toBeTruthy();
+    expect(within(card).getByText(jira.sentence!)).toBeTruthy();
+    expect(card.textContent).toBe(jira.name + jira.sentence);
+    expect(within(graph).queryByText(/n8n credential|atlassian|httpRequest|emailReadImap/)).toBeNull();
   });
 
   it("links the nodes along the n8n connections", async () => {
