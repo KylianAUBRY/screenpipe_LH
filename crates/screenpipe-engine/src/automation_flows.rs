@@ -693,11 +693,21 @@ impl N8nApi {
 
     /// Switches a workflow off once n8n runs no execution of it, so the one
     /// in progress finishes (see [`RunningWait`]). Still running at the
-    /// deadline: nothing changes, [`FlowError::FlowRunning`].
-    async fn unpublish(&self, workflow_id: &str, wait: RunningWait) -> Result<Value, FlowError> {
+    /// deadline: nothing changes, [`FlowError::FlowRunning`] — unless the
+    /// user clicked « Désactiver » (`user_stop`): their explicit stop wins
+    /// over an execution that may never end (a hung AI call, a crash).
+    async fn unpublish(
+        &self,
+        workflow_id: &str,
+        wait: RunningWait,
+        user_stop: bool,
+    ) -> Result<Value, FlowError> {
         let started = tokio::time::Instant::now();
         while self.is_running(workflow_id).await? {
             if started.elapsed() >= wait.deadline {
+                if user_stop {
+                    break;
+                }
                 return Err(FlowError::FlowRunning);
             }
             tokio::time::sleep(wait.interval).await;
@@ -1041,7 +1051,13 @@ fn node_facts(node: &Value) -> Vec<String> {
 /// The host of a fixed URL; `None` for an n8n expression that builds it.
 fn url_host(url: &str) -> Option<String> {
     let url = url.strip_prefix('=').unwrap_or(url).trim();
-    let host = reqwest::Url::parse(url).ok()?.host_str()?.to_string();
+    let parsed = reqwest::Url::parse(url).ok()?;
+    // `https://{{ … }}@host/` parses with the expression as userinfo, but at
+    // run time the expression can rewrite the real host: no fact then.
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
+    let host = parsed.host_str()?.to_string();
     (!host.contains('{') && !host.contains('$')).then_some(host)
 }
 
@@ -1310,7 +1326,7 @@ async fn deactivate_flow(
     }
     let running = running_version(&workflow);
 
-    let unpublished = api.unpublish(&id, state.running_wait).await?;
+    let unpublished = api.unpublish(&id, state.running_wait, by == "user").await?;
     store.record_mut(&id).log("deactivated", running, by);
     store.save(&state.screenpipe_dir)?;
 
@@ -1344,7 +1360,7 @@ async fn update_flow(
 
     if current["active"] == true {
         let running = running_version(&current);
-        api.unpublish(&id, state.running_wait).await?;
+        api.unpublish(&id, state.running_wait, false).await?;
         // Saved at once: the Flow is off even if the update below fails.
         store
             .record_mut(&id)
@@ -1512,7 +1528,7 @@ async fn create_from_task(
         // it is recorded. Nothing is logged: the user never activated it.
         Some(workflow) if workflow["active"] == true => {
             let id = workflow_id(&workflow)?;
-            let unpublished = api.unpublish(&id, state.running_wait).await?;
+            let unpublished = api.unpublish(&id, state.running_wait, false).await?;
             api.workflow(&id).await?.unwrap_or(unpublished)
         }
         Some(workflow) => workflow,
@@ -1549,6 +1565,18 @@ async fn create_from_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_url_hiding_its_real_host_behind_userinfo_has_no_host_fact() {
+        // `https://{{ $json.x }}@jira/…` would show « jira » while an email
+        // could send the request (and the Jira credential) elsewhere.
+        assert_eq!(url_host("=https://{{ $json.x }}@kylianaubry.atlassian.net/rest/api/2/issue"), None);
+        assert_eq!(url_host("https://user:pass@kylianaubry.atlassian.net/"), None);
+        assert_eq!(
+            url_host("=https://kylianaubry.atlassian.net/rest/api/2/issue/{{ $json.id }}").as_deref(),
+            Some("kylianaubry.atlassian.net")
+        );
+    }
 
     fn record(reviewed: Option<&str>) -> FlowRecord {
         FlowRecord {

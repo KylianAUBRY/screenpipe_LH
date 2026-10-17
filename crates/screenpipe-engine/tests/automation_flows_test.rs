@@ -2594,9 +2594,9 @@ async fn a_flow_still_processing_at_the_deadline_is_left_running_with_409() {
     n8n.start_execution(&id, None);
     let writes = n8n_writes(&server).await;
 
-    // « Désactiver » on the Review Screen, then a chat change.
+    // A switch-off that is not the user's click, then a chat change.
     let (status, answer) = app
-        .ui_call("POST", &format!("{uri}/deactivate"), None)
+        .call("POST", &format!("{uri}/deactivate"), Some(json!({})))
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{answer}");
     assert_eq!(answer["error"], "flow_running");
@@ -2614,6 +2614,32 @@ async fn a_flow_still_processing_at_the_deadline_is_left_running_with_409() {
     let (_, flow) = app.call("GET", &uri, None).await;
     assert_eq!(flow["status"], "active");
     assert_eq!(events(&flow), [event("activated", "version-1", "user")]);
+}
+
+#[tokio::test]
+async fn the_users_desactiver_switches_off_even_when_an_execution_never_ends() {
+    // An execution n8n reports as running forever (a hung AI call, a crash)
+    // must never leave the user unable to stop their Flow.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.start_execution(&id, None);
+
+    let (status, flow) = app
+        .ui_call("POST", &format!("/automation-flows/{id}/deactivate"), None)
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["status"], "paused");
+    assert_eq!(
+        n8n_writes(&server).await.last().unwrap(),
+        &format!("POST /api/v1/workflows/{id}/unpublish")
+    );
+    assert_eq!(
+        events(&flow),
+        [event("activated", "version-1", "user"), event("deactivated", "version-1", "user")]
+    );
 }
 
 #[tokio::test]
