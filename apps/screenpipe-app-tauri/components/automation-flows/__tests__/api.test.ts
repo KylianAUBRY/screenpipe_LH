@@ -13,7 +13,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
 import { flowsApi, FlowsApiError } from "../api";
 import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "../fixtures";
-import { mockAutomationFlowsResponse } from "../mock";
+import { mockAutomationFlowsResponse, resetAutomationFlowsMock } from "../mock";
 
 const ENGINE = "http://localhost:3030";
 
@@ -32,6 +32,7 @@ function respond(status: number, body: unknown) {
 
 beforeEach(() => {
   localFetch.mockReset();
+  resetAutomationFlowsMock();
   window.history.replaceState({}, "", "/home?section=pipes");
 });
 
@@ -55,7 +56,24 @@ describe("flowsApi", () => {
     expect(JSON.parse(init.body)).toEqual({ taskId: DEMO_TASK_ID, answers: { q1: "oui" } });
   });
 
+  it("activates the reviewed version and deactivates", async () => {
+    respond(200, fixtureFlow);
+    await flowsApi.activate("wf/1", "version-7");
+    let [path, init] = localFetch.mock.lastCall!;
+    expect(path).toBe("/automation-flows/wf%2F1/activate");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ versionId: "version-7" });
+
+    respond(200, fixtureFlow);
+    await flowsApi.deactivate("wf/1");
+    [path, init] = localFetch.mock.lastCall!;
+    expect(path).toBe("/automation-flows/wf%2F1/deactivate");
+    expect(init.method).toBe("POST");
+  });
+
   it.each([
+    [409, { error: "version_changed" }, "version_changed"],
+    [502, { error: "activation_failed", detail: "n8n answered 400: bad trigger" }, "activation_failed"],
     [412, { error: "n8n_not_configured" }, "n8n_not_configured"],
     [502, { error: "n8n_unreachable", detail: "connection refused" }, "n8n_unreachable"],
     [404, { error: "flow_not_found" }, "not_found"],
@@ -84,6 +102,24 @@ describe("browser mock", () => {
     expect(first.id).toBe(second.id);
     await expect(flowsApi.createFromTask("wf-unknown", {})).rejects.toMatchObject({ code: "not_found" });
     await expect(flowsApi.get("missing")).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("activates and deactivates the fixture Flow in memory", async () => {
+    useBrowserMock();
+    const active = await flowsApi.activate(fixtureFlow.id, fixtureFlow.versionId);
+    expect(active.status).toBe("active");
+    expect(active.reviewedVersionId).toBe(fixtureFlow.versionId);
+    expect((await flowsApi.list())[0].status).toBe("active");
+
+    const paused = await flowsApi.deactivate(fixtureFlow.id);
+    expect(paused.status).toBe("paused");
+    expect(paused.activationLog.map((entry) => [entry.event, entry.by])).toEqual([
+      ["activated", "user"],
+      ["deactivated", "user"],
+    ]);
+    await expect(flowsApi.activate(fixtureFlow.id, "stale-version")).rejects.toMatchObject({
+      code: "version_changed",
+    });
   });
 
   it.each([

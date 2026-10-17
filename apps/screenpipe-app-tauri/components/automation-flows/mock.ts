@@ -6,7 +6,46 @@
 // `?flowsState=not-configured`, `unreachable` or `empty` to the page URL to
 // see the other states. Never contacts n8n.
 
+import type { Flow } from "./api";
 import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "./fixtures";
+
+// Activate / Deactivate change this copy until the page reloads.
+let mockFlow: Flow = structuredClone(fixtureFlow);
+
+export function resetAutomationFlowsMock() {
+  mockFlow = structuredClone(fixtureFlow);
+}
+
+/** What the engine does on activate / deactivate, without n8n. */
+function switchMockFlow(action: string, body: { versionId?: string }): Response {
+  const at = new Date().toISOString();
+  if (action === "activate") {
+    if (body.versionId && body.versionId !== mockFlow.versionId) {
+      return Response.json({ error: "version_changed" }, { status: 409 });
+    }
+    if (mockFlow.status !== "active") {
+      mockFlow = {
+        ...mockFlow,
+        status: "active",
+        reviewedVersionId: mockFlow.versionId,
+        activationLog: [
+          ...mockFlow.activationLog,
+          { at, event: "activated", versionId: mockFlow.versionId, by: "user" },
+        ],
+      };
+    }
+  } else if (mockFlow.status === "active") {
+    mockFlow = {
+      ...mockFlow,
+      status: "paused",
+      activationLog: [
+        ...mockFlow.activationLog,
+        { at, event: "deactivated", versionId: mockFlow.versionId, by: "user" },
+      ],
+    };
+  }
+  return Response.json(mockFlow);
+}
 
 function flowsState(): string | null {
   if (typeof window === "undefined") return null;
@@ -33,7 +72,7 @@ export function mockAutomationFlowsResponse(
       { status: 502 },
     );
   }
-  const flows = state === "empty" ? [] : [fixtureFlow];
+  const flows = state === "empty" ? [] : [mockFlow];
   const method = (init?.method ?? "GET").toUpperCase();
 
   if (url.pathname === "/automation-flows" && method === "GET") {
@@ -44,10 +83,14 @@ export function mockAutomationFlowsResponse(
     if (body.taskId !== DEMO_TASK_ID) {
       return Response.json({ error: "task_not_found" }, { status: 404 });
     }
-    return Response.json(fixtureFlow);
+    return Response.json(mockFlow);
   }
-  const id = decodeURIComponent(url.pathname.slice("/automation-flows/".length));
+  const [rawId, action] = url.pathname.slice("/automation-flows/".length).split("/");
+  const id = decodeURIComponent(rawId);
   const flow = flows.find((candidate) => candidate.id === id);
-  if (method === "GET" && flow) return Response.json(flow);
+  if (method === "GET" && flow && !action) return Response.json(flow);
+  if (method === "POST" && flow && (action === "activate" || action === "deactivate")) {
+    return switchMockFlow(action, JSON.parse(String(init?.body ?? "{}")));
+  }
   return Response.json({ error: "flow_not_found" }, { status: 404 });
 }

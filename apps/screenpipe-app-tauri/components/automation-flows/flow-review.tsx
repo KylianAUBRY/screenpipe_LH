@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import type { Flow, FlowsApi } from "./api";
 import { ACTION_BUTTON, FlowsErrorMessage, SectionLabel, StatusBadge, useFlowsLoad } from "./common";
 import { activationLabel, lastRunLabel, shortNodeType } from "./labels";
+import { FlowActivation } from "./flow-activation";
 
 export function FlowReview({
   flowId,
@@ -24,7 +25,7 @@ export function FlowReview({
   onBack: () => void;
   api: FlowsApi;
 }) {
-  const [flow, reload] = useFlowsLoad(() => api.get(flowId), flowId);
+  const [flow, reload, replace] = useFlowsLoad(() => api.get(flowId), flowId);
 
   return (
     <div className="space-y-6">
@@ -38,12 +39,22 @@ export function FlowReview({
       {flow.state === "error" && (
         <FlowsErrorMessage error={flow.error} onRetry={reload} api={api} />
       )}
-      {flow.state === "ready" && <ReviewContent flow={flow.data} api={api} />}
+      {flow.state === "ready" && (
+        <ReviewContent flow={flow.data} api={api} onChange={replace} />
+      )}
     </div>
   );
 }
 
-function ReviewContent({ flow, api }: { flow: Flow; api: FlowsApi }) {
+function ReviewContent({
+  flow,
+  api,
+  onChange,
+}: {
+  flow: Flow;
+  api: FlowsApi;
+  onChange: (flow: Flow) => void;
+}) {
   // The n8n node order: sorting by position would put an AI agent's model
   // and tools (drawn below it, further left) before the agent itself.
   const steps = flow.nodes;
@@ -58,6 +69,7 @@ function ReviewContent({ flow, api }: { flow: Flow; api: FlowsApi }) {
         <p className="text-xs text-muted-foreground">
           Dernière exécution : {lastRunLabel(flow.lastExecution)}
         </p>
+        <FlowActivation flow={flow} api={api} onChange={onChange} />
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" className={ACTION_BUTTON} onClick={() => void api.openInN8n(flow.n8nUrl)}>
             <ExternalLink className="mr-1 h-4 w-4" aria-hidden />
@@ -123,7 +135,7 @@ function ReviewContent({ flow, api }: { flow: Flow; api: FlowsApi }) {
         {flow.activationLog.length === 0 ? (
           <p className="text-sm text-muted-foreground">Jamais activé.</p>
         ) : (
-          <ul className="space-y-1 text-sm">
+          <ul className="space-y-1 text-sm" aria-label="Historique d'activation">
             {flow.activationLog.map((entry) => (
               <li key={`${entry.at}-${entry.event}`}>{activationLabel(entry)}</li>
             ))}

@@ -9,11 +9,34 @@ import { FlowsApiError, type Flow, type FlowsApi } from "../api";
 import { FlowsTab } from "../flows-tab";
 import { fixtureFlow, summaryOf } from "../fixtures";
 
+const activation = {
+  at: "2026-10-17T09:00:00.000Z",
+  event: "activated" as const,
+  versionId: fixtureFlow.versionId,
+  by: "user" as const,
+};
+const activeFlow: Flow = {
+  ...fixtureFlow,
+  status: "active",
+  reviewedVersionId: fixtureFlow.versionId,
+  activationLog: [activation],
+};
+const pausedFlow: Flow = {
+  ...activeFlow,
+  status: "paused",
+  activationLog: [
+    activation,
+    { ...activation, at: "2026-10-17T10:00:00.000Z", event: "deactivated" },
+  ],
+};
+
 function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
   return {
     list: vi.fn(async () => [summaryOf(fixtureFlow)]),
     get: vi.fn(async () => fixtureFlow),
     createFromTask: vi.fn(async () => fixtureFlow),
+    activate: vi.fn(async () => activeFlow),
+    deactivate: vi.fn(async () => pausedFlow),
     openInN8n: vi.fn(async () => {}),
     openTaskPage: vi.fn(async () => {}),
     openN8nConnection: vi.fn(async () => {}),
@@ -150,6 +173,99 @@ describe("Review Screen", () => {
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={onSelectFlow} api={fakeApi()} />);
     fireEvent.click(await screen.findByRole("button", { name: /Tous les Flows/ }));
     expect(onSelectFlow).toHaveBeenCalledWith(null);
+  });
+
+  it("activates a Draft with the version on screen and shows the result", async () => {
+    const api = fakeApi();
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Activer" }));
+
+    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("Active"));
+    expect(api.activate).toHaveBeenCalledTimes(1);
+    expect(api.activate).toHaveBeenCalledWith(fixtureFlow.id, fixtureFlow.versionId);
+    expect(screen.getByText(/^Activé par vous/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Désactiver" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Activer" })).toBeNull();
+  });
+
+  it("deactivates an Active Flow and lists who did what, when, on which version", async () => {
+    const api = fakeApi({ get: vi.fn(async () => activeFlow) });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Désactiver" }));
+
+    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("En pause"));
+    expect(api.deactivate).toHaveBeenCalledWith(fixtureFlow.id);
+    const history = screen.getByRole("list", { name: "Historique d'activation" });
+    const entries = within(history).getAllByRole("listitem").map((item) => item.textContent);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatch(/^Activé par vous · .+ · version fixture-/);
+    expect(entries[1]).toMatch(/^Désactivé par vous · .+ · version fixture-/);
+    expect(screen.getByRole("button", { name: "Activer" })).toBeTruthy();
+  });
+
+  it("says why n8n refused the activation and leaves the Flow as it was", async () => {
+    const api = fakeApi({
+      activate: vi.fn(async () => {
+        throw new FlowsApiError("activation_failed", "n8n answered 400: IMAP credentials are invalid");
+      }),
+    });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Activer" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Activation impossible")).toBeTruthy();
+    expect(within(alert).getByText(/IMAP credentials are invalid/)).toBeTruthy();
+    expect(screen.getByTestId("flow-status").textContent).toBe("Brouillon");
+    expect((screen.getByRole("button", { name: "Activer" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("reloads a Flow that changed since it was opened instead of activating it", async () => {
+    const changed: Flow = { ...fixtureFlow, versionId: "fixture-version-2" };
+    const get = vi.fn().mockResolvedValueOnce(fixtureFlow).mockResolvedValue(changed);
+    const api = fakeApi({
+      get,
+      activate: vi.fn(async () => {
+        throw new FlowsApiError("version_changed");
+      }),
+    });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Activer" }));
+
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(/a changé depuis que vous l'avez ouvert/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Activer" }));
+    expect(api.activate).toHaveBeenLastCalledWith(fixtureFlow.id, "fixture-version-2");
+  });
+
+  it("offers to activate the version edited in n8n while the old one runs", async () => {
+    const edited: Flow = { ...activeFlow, versionId: "fixture-version-2", reviewOutdated: true };
+    const api = fakeApi({ get: vi.fn(async () => edited) });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    expect(await screen.findByText(/modifié directement dans n8n/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Désactiver" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Activer cette version" }));
+    expect(api.activate).toHaveBeenCalledWith(fixtureFlow.id, "fixture-version-2");
+  });
+
+  it("never switches a Flow on or off without a click", async () => {
+    for (const status of ["draft", "paused", "needs_review", "active"] as const) {
+      const api = fakeApi({ get: vi.fn(async () => ({ ...fixtureFlow, status })) });
+      const { unmount } = render(
+        <FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />,
+      );
+      await screen.findByRole("heading", { name: fixtureFlow.name });
+      unmount();
+      const list = render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
+      await screen.findByTestId(`flow-row-${fixtureFlow.id}`);
+      list.unmount();
+      expect(api.activate).not.toHaveBeenCalled();
+      expect(api.deactivate).not.toHaveBeenCalled();
+    }
   });
 
   it("shows the n8n message when the Flow cannot be loaded", async () => {
