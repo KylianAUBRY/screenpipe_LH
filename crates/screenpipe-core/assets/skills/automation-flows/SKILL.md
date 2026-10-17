@@ -120,6 +120,24 @@ off; the user reviews it and switches it on.
      `CUSTOM.screenPipeAiTrigger` (an AI-judged condition);
      `CUSTOM.screenPipe` searches the user's ScreenPipe history, and
      `CUSTOM.screenPipeTool` is the same search as an AI Agent tool.
+     Their exact parameters (all `typeVersion: 1`; they need the user's
+     « ScreenPipe API » credential, picked in n8n):
+     - `CUSTOM.screenPipeTrigger`: `event` (`keyword`, `window`, `pipe` or
+       `flow`), then the field for that event: `keyword` (words said aloud),
+       `appName` and/or `windowName` (part of the app name / window title),
+       `pipeId` (a pipe's name), `flowId` (another Flow's n8n id); and
+       `pollTimes`: `{"item": [{"mode": "everyMinute"}]}`. Example:
+       `{"event": "keyword", "keyword": "point d'étape", "pollTimes": {"item": [{"mode": "everyMinute"}]}}`.
+     - `CUSTOM.screenPipeAiTrigger`: `conditionPrompt` (the situation, in
+       plain French), `lookbackMinutes` (default 15), `cooldownMinutes`
+       (default 60), and `pollTimes` as above.
+     - `CUSTOM.screenPipe` / `CUSTOM.screenPipeTool`: `operation`
+       `searchContent` with `query`, `contentType` (`all`, `accessibility`,
+       `ocr`, `audio`, `input` or `memory`), `limit` and `filters`
+       (`appName`, `windowName`, `startTime`, `endTime`); or `operation`
+       `activitySummary` with `startTime` (e.g. `1h ago`), `endTime`
+       (`now`) and `summaryFilters` (`appName`, `query`); both take
+       `maxTextLength` (default 1000).
 3. Write `body.json` as `{"workflow": <workflow>, "summary": "<2 to 4 plain
    French sentences: what the Flow does and how>"}`.
 4. Send it **once**:
