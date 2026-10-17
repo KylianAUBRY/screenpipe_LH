@@ -30,6 +30,10 @@
 //! app's `/notify`. A Flow shows its Failed Run (`failedRun`) until a later
 //! Run succeeds. Nothing is switched off on failure. The [`health`] check
 //! (SPEC D19) catches the Failed Runs nothing could report.
+//!
+//! Abstentions (SPEC D18): when a Flow's AI is unsure, the Flow itself calls
+//! `POST /abstentions` with its ids, the email's sender and subject and the
+//! AI's reason; the user gets one « À trier à la main » notification.
 
 mod health;
 pub use health::FlowHealthCheck;
@@ -270,6 +274,7 @@ where
         .route("/failed-runs", post(failed_run))
         .route("/health", get(health::n8n_health))
         .route("/health/check", post(health::check_now))
+        .route("/abstentions", post(abstained))
         .route("/:id", get(get_flow).put(update_flow))
         .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
@@ -1050,6 +1055,10 @@ struct FlowStore {
     /// the next check looks at the Runs that stopped since (ticket 29).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     health_checked_at: Option<String>,
+    /// Notification ids of the Abstentions already notified, oldest first
+    /// (at most [`NOTIFIED_RUNS_KEPT`]): one per email of a Run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    notified_abstentions: Vec<String>,
 }
 
 const NOTIFIED_RUNS_KEPT: usize = 500;
@@ -1850,19 +1859,7 @@ async fn notify_failed_run(
         return not_notified("no_notifier");
     };
     let notification = failed_run_notification(&workflow, &execution, &execution_id);
-    let response = state
-        .http
-        .post(url)
-        .json(&notification)
-        .send()
-        .await
-        .map_err(|e| FlowError::NotifyFailed(format!("cannot reach ScreenPipe's notifications: {e}")))?;
-    if !response.status().is_success() {
-        return Err(FlowError::NotifyFailed(format!(
-            "ScreenPipe's notifications answered {}",
-            response.status()
-        )));
-    }
+    notify(&state, url, &notification).await?;
     store.notified_failed_runs.push(execution_id);
     let excess = store
         .notified_failed_runs
@@ -1937,6 +1934,139 @@ fn handled_email(workflow: &Value, result: &Value) -> Option<(String, String)> {
                 .unwrap_or("expéditeur inconnu");
             Some((plain_text(from, 120), plain_text(subject, 160)))
         })
+}
+
+// ---------------------------------------------------------------------------
+// Abstentions (SPEC D18, ticket 27)
+// ---------------------------------------------------------------------------
+
+/// What a Flow's abstention step sends when its AI is unsure: the Run's ids
+/// and the three fields the notification shows. Never the email body.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AbstentionReport {
+    #[serde(default)]
+    workflow_id: Value,
+    #[serde(default)]
+    execution_id: Value,
+    #[serde(default)]
+    from: Value,
+    #[serde(default)]
+    subject: Value,
+    #[serde(default)]
+    reason: Value,
+}
+
+/// A Flow's AI was not sure enough to decide (called by the Flow itself,
+/// e.g. the demo's « À trier à la main » step): nothing was done, so the user
+/// gets one notification « À trier à la main » with the Flow, the email's
+/// sender and subject, and the AI's reason, all as capped plain text. The
+/// answer names the Run's outcome, `abstained`.
+async fn abstained(
+    State(state): State<FlowsState>,
+    Json(report): Json<AbstentionReport>,
+) -> Result<Json<Value>, FlowError> {
+    let answer = |notified: bool, reason: Option<&str>| {
+        let mut answer = json!({"notified": notified, "outcome": "abstained"});
+        if let Some(reason) = reason {
+            answer["reason"] = json!(reason);
+        }
+        Ok(Json(answer))
+    };
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_string();
+    let Some(execution_id) =
+        execution_id(&json!({"id": report.execution_id})).filter(|id| valid_workflow_id(id))
+    else {
+        return answer(false, Some("no_run"));
+    };
+    let workflow_id = text(&report.workflow_id);
+    if !valid_workflow_id(&workflow_id) {
+        return answer(false, Some("not_a_flow"));
+    }
+    let api = N8nApi::from_connection(&state).await?;
+    let workflow = api.workflow(&workflow_id).await?;
+
+    let _guard = state.write_lock.lock().await;
+    let mut store = FlowStore::load(&state.screenpipe_dir)?;
+    let known = store.flows.contains_key(&workflow_id);
+    let Some(workflow) = workflow.filter(|w| has_flow_tag(w) || known) else {
+        return answer(false, Some("not_a_flow"));
+    };
+    let from = plain_text(&text(&report.from), 120);
+    let subject = plain_text(&text(&report.subject), 160);
+    let reason = plain_text(&text(&report.reason), 240);
+    // One notification per email of a Run, even when n8n retries the call.
+    let notification_id = format!(
+        "automation-flow-abstention:{execution_id}:{:016x}",
+        fnv1a(&format!("{from}\n{subject}"))
+    );
+    if store.notified_abstentions.contains(&notification_id) {
+        return answer(false, Some("already_notified"));
+    }
+    let Some(url) = state.notify_url.as_deref() else {
+        return answer(false, Some("no_notifier"));
+    };
+    let name = plain_text(workflow["name"].as_str().unwrap_or("Flow"), 120);
+    let flow_id = workflow["id"].as_str().unwrap_or(&workflow_id);
+    let review = format!("screenpipe://flows/{flow_id}");
+    let from = if from.is_empty() {
+        "expéditeur inconnu".to_string()
+    } else {
+        from
+    };
+    let reason = if reason.is_empty() {
+        "l'IA n'a pas donné de raison.".to_string()
+    } else {
+        reason
+    };
+    let notification = json!({
+        "id": notification_id,
+        "title": "À trier à la main",
+        "body": format!(
+            "Le Flow « {name} » n'a rien fait pour cet e-mail : son IA n'était pas sûre d'elle.\n\nE-mail de {from} : « {subject} »\n\nRaison de l'IA : {reason}"
+        ),
+        "type": "pipe",
+        "priority": "high",
+        "transient": false,
+        "source_url": review,
+        "actions": [{"type": "deeplink", "label": "Voir le Flow", "url": review, "primary": true}],
+    });
+    notify(&state, url, &notification).await?;
+    store.notified_abstentions.push(notification_id);
+    let excess = store
+        .notified_abstentions
+        .len()
+        .saturating_sub(NOTIFIED_RUNS_KEPT);
+    store.notified_abstentions.drain(..excess);
+    store.save(&state.screenpipe_dir)?;
+    answer(true, None)
+}
+
+/// Hands a notification to the desktop app's `/notify`.
+async fn notify(state: &FlowsState, url: &str, notification: &Value) -> Result<(), FlowError> {
+    let response = state
+        .http
+        .post(url)
+        .json(notification)
+        .send()
+        .await
+        .map_err(|e| {
+            FlowError::NotifyFailed(format!("cannot reach ScreenPipe's notifications: {e}"))
+        })?;
+    if !response.status().is_success() {
+        return Err(FlowError::NotifyFailed(format!(
+            "ScreenPipe's notifications answered {}",
+            response.status()
+        )));
+    }
+    Ok(())
+}
+
+/// A stable 64-bit FNV-1a hash, for ids kept across app versions.
+fn fnv1a(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 /// Text from an email or a workflow, made safe for a markdown notification

@@ -3344,3 +3344,142 @@ async fn the_app_checks_on_its_own_at_start_and_then_on_schedule() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(app.notifications().await.len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Abstentions (SPEC D18, ticket 27)
+// ---------------------------------------------------------------------------
+
+const UNSURE_REASON: &str = "Je ne sais pas si c'est un bug de NovaPay ou une question d'usage.";
+
+/// What the demo workflow's « À trier à la main » step sends when the AI is unsure.
+fn abstention(workflow_id: &str, execution_id: &str, subject: &str) -> Value {
+    json!({
+        "workflowId": workflow_id,
+        "executionId": execution_id,
+        "from": "Arthur Noteris <arthur@novacrm.example>",
+        "subject": subject,
+        "reason": UNSURE_REASON,
+    })
+}
+
+async fn report_abstention(app: &App, body: Value) -> (StatusCode, Value) {
+    app.call("POST", "/automation-flows/abstentions", Some(body))
+        .await
+}
+
+#[tokio::test]
+async fn an_unsure_ai_leaves_the_email_to_the_user_with_one_notification() {
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+
+    let report = abstention(&id, "500", "Question sur NovaPay");
+    let (status, answer) = report_abstention(&app, report.clone()).await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["notified"], true);
+    // The step's output names the Run's outcome (D18).
+    assert_eq!(answer["outcome"], "abstained");
+    let sent = app.notifications().await;
+    assert_eq!(sent.len(), 1);
+    let notification = &sent[0];
+    assert!(
+        notification["title"]
+            .as_str()
+            .unwrap()
+            .contains("À trier à la main"),
+        "{notification}"
+    );
+    let body = notification["body"].as_str().unwrap();
+    for shown in [
+        created["name"].as_str().unwrap(),
+        "Arthur Noteris",
+        "Question sur NovaPay",
+        "Je ne sais pas si c'est un bug de NovaPay",
+    ] {
+        assert!(body.contains(shown), "{shown} missing: {body}");
+    }
+    // Clicking it opens the Flow's Review Screen; it stays until read.
+    let review = format!("screenpipe://flows/{id}");
+    assert_eq!(notification["actions"][0]["type"], "deeplink");
+    assert_eq!(notification["actions"][0]["url"], review.as_str());
+    assert_eq!(notification["transient"], false);
+
+    // n8n retries the call: still one notification.
+    let (status, answer) = report_abstention(&app, report).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(answer["notified"], false);
+    assert_eq!(answer["outcome"], "abstained");
+    assert_eq!(app.notifications().await.len(), 1);
+
+    // Another email the same Run left to the user gets its own notification.
+    let (_, answer) = report_abstention(&app, abstention(&id, "500", "Autre question")).await;
+    assert_eq!(answer["notified"], true);
+    let sent = app.notifications().await;
+    assert_eq!(sent.len(), 2);
+    assert_ne!(sent[0]["id"], sent[1]["id"]);
+}
+
+#[tokio::test]
+async fn the_ai_reason_and_the_email_cannot_put_links_or_markup_in_the_notification() {
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let hostile = format!(
+        "Urgent [cliquez ici](https://evil.example) **gras** <img src=x>\nligne 2 {}",
+        "x".repeat(1_000)
+    );
+    let mut report = abstention(&id, "501", &hostile);
+    report["from"] = json!(hostile);
+    report["reason"] = json!(hostile);
+
+    let (status, _) = report_abstention(&app, report).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let body = app.notifications().await[0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!body.contains("](https://"), "{body}");
+    assert!(!body.contains("**"), "{body}");
+    // HTML stays text: every `<` is escaped.
+    assert_eq!(
+        body.matches('<').count(),
+        body.matches("\\<").count(),
+        "{body}"
+    );
+    assert!(!body.contains("ligne 2\n"), "{body}");
+    assert!(body.contains("Urgent"), "{body}");
+    assert!(
+        body.chars().count() < 1_000,
+        "fields cut: {} chars",
+        body.chars().count()
+    );
+}
+
+#[tokio::test]
+async fn only_an_abstention_of_a_flow_notifies() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    n8n.add_workflow(json!({
+        "id": "other", "name": "Perso", "active": true, "versionId": "v",
+        "tags": [], "nodes": [], "connections": {}
+    }));
+
+    for (body, expected) in [
+        (abstention("other", "600", "Sujet"), StatusCode::OK),
+        (abstention("unknown", "601", "Sujet"), StatusCode::OK),
+        (abstention("../x", "602", "Sujet"), StatusCode::OK),
+        (json!({"workflowId": "other"}), StatusCode::OK),
+    ] {
+        let (status, answer) = report_abstention(&app, body.clone()).await;
+        assert_eq!(status, expected, "{body} → {answer}");
+        assert_eq!(answer["notified"], false, "{body}");
+    }
+    assert!(app.notifications().await.is_empty());
+}
