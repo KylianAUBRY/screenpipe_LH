@@ -29,7 +29,7 @@ follows. Where it conflicts with `CONVERSATION_NOTES.md`, this file wins.
 | D4 | Demo Flow creation is fully scripted: answers are saved but ignored; the pre-built n8n workflow and its pre-written review material are imported as is. | User choice: maximum reliability. |
 | D5 | Creation chat (Add) and modification chat use the existing ScreenPipe chat (Pi agent) plus an `automation-flows` skill that calls `/automation-flows/*`. | Live AI with no new chat UI. |
 | D6 | Frontend: a "Flows" tab in the Automations section (`components/pipe-store.tsx:380`), all code in `apps/screenpipe-app-tauri/components/automation-flows/`; its only seam is one typed client over `/automation-flows/*`. Plain and basic, built to be replaced. | User request: simple, easily replaceable frontend. |
-| D7 | One Flow = one n8n workflow. A chat modification of an active Flow deactivates it and updates the same n8n workflow in place; the "version" is n8n's `versionId`. Edits made directly in the n8n editor are not auto-paused; the app only flags them. | User choice: simplest version model. |
+| D7 | One Flow = one n8n workflow. A chat modification of an active Flow unpublishes it and updates the same n8n workflow in place; the "version" is n8n's `versionId`. Edits made directly in the n8n editor are not auto-paused; the app only flags them. Verified on n8n 2.42.2: switch on = `POST /api/v1/workflows/{id}/publish` with `{versionId}` (publishes exactly the reviewed version); switch off = `POST …/unpublish` (`activate`/`deactivate` still exist but are deprecated). A workflow carries `versionId` (latest draft) and `activeVersionId` (the published one): an edit creates a new draft while the published version keeps running, so `reviewOutdated` = `active && versionId !== activeVersionId`. | User choice: simplest version model. |
 | D8 | Task Page Evidence is key frames extracted from the team's screen recording (`.mov`, 2026-10-17 04:05–04:15), embedded in the demo fixture. Implementation note: `packages/workflows-ui/src/screenshots.ts:19` strips `dataUrl` for positive `frameId`s and `:9` drops non-positive ones, so the fixture images must go through `loadWorkflowScreenshot` (or that serialization needs a narrow exception). | User choice. |
 | D9 | The demo n8n workflow: IMAP trigger (unread only, marks read — this is the dedupe) → one n8n AI Agent with a structured output `{type: Bug\|Tâche\|none, product, summary, priority, label: back\|front}` → stop if `none` → deterministic title `<product> - <summary>`, description = quoted email, unassigned → Jira create issue in `NOVA`. | AI only for judgment (AGENTS.md "keep AI minimal"). |
 | D10 | Two scripted Clarification Questions: « Les idées d'amélioration (comme NOVA-27) doivent-elles aussi devenir des tickets ? » (expected: oui, en Tâche) and « Comment choisis-tu la priorité ? » (expected: bloquant = Highest, contournement possible = Medium, idée = Low). Free-text answers in the existing UI. | User choice: keep the demo short. |
@@ -183,6 +183,16 @@ chaque ticket créé ».
    ScreenPipe local API key), ScreenPipe API.
 4. In ScreenPipe → Connections → n8n: `api_url` `http://localhost:5678` and the API key.
 5. If the demo runs on this Mac: re-record the 3 repetitions with ScreenPipe on (D11).
+
+## Verified on the local n8n 2.42.2
+
+- Activation API: see D7 (`publish`/`unpublish`, `versionId` vs `activeVersionId`).
+- Node types available for the demo workflow (latest versions): IMAP Email
+  trigger `emailReadImap` 2.2, `jira` 1, `if` 2.3, `set` 3.5, `stickyNote` 1,
+  AI Agent `@n8n/n8n-nodes-langchain.agent` 3.1, OpenAI Chat Model
+  `lmChatOpenAi` 1.3, Structured Output Parser `outputParserStructured` 1.3.
+- Instance-level MCP endpoint: `http://localhost:5678/mcp-server/http`
+  (Bearer token); registered in Claude Code for this project (local scope).
 
 ## Risks to check first (golden path)
 
