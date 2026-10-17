@@ -28,7 +28,7 @@
 //! before n8n sees it ([`crate::flow_checks`]).
 
 use crate::atomic_file;
-use crate::flow_checks::{check_and_wire, N8nCredential};
+use crate::flow_checks::{check_and_wire, inspect, N8nCredential, NO_TRIGGER};
 use crate::n8n_nodes;
 use crate::routes::workflows::{read_catalog, workflow_id as task_id_of, WorkflowCatalogSource};
 use axum::{
@@ -55,6 +55,9 @@ pub use failures::{FailureReports, ERROR_WORKFLOW_TAG};
 
 /// n8n tag that marks a workflow as a ScreenPipe Automation Flow.
 pub const FLOW_TAG: &str = "screenpipe-flow";
+/// n8n tag that marks a Flow still under construction by the chat: hidden
+/// from the Flows list and never activated until « Terminer » removes it.
+pub const BUILDING_TAG: &str = "screenpipe-flow-building";
 const STORE_FILE: &str = "automation-flows.json";
 const STICKY_NOTE: &str = "n8n-nodes-base.stickyNote";
 
@@ -247,6 +250,9 @@ where
         .route("/from-task", post(create_from_task))
         .route("/nodes", get(search_nodes))
         .route("/nodes/card", get(node_card))
+        .route("/drafts", post(start_draft))
+        .route("/drafts/:id", get(draft_state).put(update_draft))
+        .route("/drafts/:id/finish", post(finish_draft))
         .route("/:id", get(get_flow).put(update_flow).delete(delete_flow))
         .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
@@ -409,6 +415,10 @@ enum FlowError {
     InvalidQuery(String),
     /// A node type this n8n does not have.
     NodeTypeUnknown(String),
+    /// A draft the chat is still building, on a route for finished Flows.
+    UnderConstruction,
+    /// A finished Flow, on a route for drafts under construction.
+    NotUnderConstruction,
 }
 
 impl IntoResponse for FlowError {
@@ -480,6 +490,20 @@ impl IntoResponse for FlowError {
                 json!({
                     "error": "node_type_unknown",
                     "detail": format!("`{kind}` is not a node type this n8n has; search the nodes and use a `type` from the results"),
+                }),
+            ),
+            FlowError::UnderConstruction => (
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "flow_under_construction",
+                    "detail": "this Flow is still being built: read its state at GET /automation-flows/drafts/<id> and finish it with POST /automation-flows/drafts/<id>/finish",
+                }),
+            ),
+            FlowError::NotUnderConstruction => (
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "flow_not_under_construction",
+                    "detail": "this Flow is finished: change it with PUT /automation-flows/<id>",
                 }),
             ),
             FlowError::Internal(detail) => {
@@ -627,22 +651,37 @@ impl N8nApi {
 
     /// Adds [`FLOW_TAG`] to the workflow's tags and returns it re-read.
     async fn ensure_tagged(&self, workflow: Value) -> Result<Value, FlowError> {
-        if has_flow_tag(&workflow) {
-            return Ok(workflow);
-        }
-        self.add_tag(workflow, FLOW_TAG).await
+        self.retag(workflow, &[FLOW_TAG], &[]).await
     }
 
     /// Adds the tag `name` to the workflow's tags and returns it re-read.
     async fn add_tag(&self, workflow: Value, name: &str) -> Result<Value, FlowError> {
+        self.retag(workflow, &[name], &[]).await
+    }
+
+    /// Adds the tags named `add` and removes those named `remove`, then
+    /// returns the workflow re-read; unchanged when it already is so.
+    async fn retag(
+        &self,
+        workflow: Value,
+        add: &[&str],
+        remove: &[&str],
+    ) -> Result<Value, FlowError> {
+        let has = |name: &str| has_tag(&workflow, name);
+        if add.iter().all(|name| has(name)) && !remove.iter().any(|name| has(name)) {
+            return Ok(workflow);
+        }
         let id = workflow_id(&workflow)?;
         let mut tags: Vec<Value> = workflow["tags"]
             .as_array()
             .into_iter()
             .flatten()
+            .filter(|tag| !remove.iter().any(|name| tag["name"] == *name))
             .filter_map(|tag| tag["id"].as_str().map(|id| json!({"id": id})))
             .collect();
-        tags.push(json!({"id": self.tag_id(name).await?}));
+        for name in add.iter().filter(|name| !has(name)) {
+            tags.push(json!({"id": self.tag_id(name).await?}));
+        }
         self.expect_ok(
             Method::PUT,
             &format!("/workflows/{id}/tags"),
@@ -796,9 +835,19 @@ fn workflow_id(workflow: &Value) -> Result<String, FlowError> {
 }
 
 fn has_flow_tag(workflow: &Value) -> bool {
+    has_tag(workflow, FLOW_TAG)
+}
+
+fn has_tag(workflow: &Value, name: &str) -> bool {
     workflow["tags"]
         .as_array()
-        .is_some_and(|tags| tags.iter().any(|tag| tag["name"] == FLOW_TAG))
+        .is_some_and(|tags| tags.iter().any(|tag| tag["name"] == name))
+}
+
+/// A Flow the chat is still building: marked in n8n, or recorded so here
+/// (a failed tag call never makes a draft visible).
+fn is_building(workflow: &Value, record: Option<&FlowRecord>) -> bool {
+    has_tag(workflow, BUILDING_TAG) || record.is_some_and(|r| r.building)
 }
 
 /// n8n workflow ids are short alphanumeric strings; anything else would be
@@ -936,6 +985,10 @@ struct FlowRecord {
     #[serde(default)]
     activation_log: Vec<ActivationEvent>,
     created_at: String,
+    /// Under construction by the chat (with [`BUILDING_TAG`] in n8n) until
+    /// « Terminer ».
+    #[serde(default)]
+    building: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -985,6 +1038,7 @@ impl FlowStore {
                 reviewed_version_id: None,
                 activation_log: Vec::new(),
                 created_at: chrono::Utc::now().to_rfc3339(),
+                building: false,
             })
     }
 
@@ -1246,10 +1300,13 @@ async fn list_flows(State(state): State<FlowsState>) -> Result<Json<Vec<FlowSumm
         .await?;
     let mut flows = Vec::new();
     for workflow in &workflows {
-        if !has_flow_tag(workflow) || workflow["isArchived"] == true {
+        let id = workflow["id"].as_str().unwrap_or_default();
+        if !has_flow_tag(workflow)
+            || workflow["isArchived"] == true
+            || is_building(workflow, store.flows.get(id))
+        {
             continue;
         }
-        let id = workflow["id"].as_str().unwrap_or_default();
         let last_execution = api.last_execution(id).await;
         flows.push(flow_summary(workflow, store.flows.get(id), last_execution));
     }
@@ -1282,8 +1339,18 @@ async fn get_editable_workflow(
 }
 
 /// The n8n workflow of Flow `id` (tagged, or known to the local store), with
-/// the n8n client and the local store it was read with.
+/// the n8n client and the local store it was read with. A draft still under
+/// construction is not a Flow yet: `409 flow_under_construction`.
 async fn load_flow(state: &FlowsState, id: &str) -> Result<(N8nApi, FlowStore, Value), FlowError> {
+    let (api, store, workflow) = load_any_flow(state, id).await?;
+    if is_building(&workflow, store.flows.get(id)) {
+        return Err(FlowError::UnderConstruction);
+    }
+    Ok((api, store, workflow))
+}
+
+/// [`load_flow`], drafts under construction included.
+async fn load_any_flow(state: &FlowsState, id: &str) -> Result<(N8nApi, FlowStore, Value), FlowError> {
     if !valid_workflow_id(id) {
         return Err(FlowError::FlowNotFound);
     }
@@ -1526,6 +1593,296 @@ async fn update_flow(
     ))
 }
 
+// ---------------------------------------------------------------------------
+// Building a Flow step by step (flows-round-two 07)
+// ---------------------------------------------------------------------------
+
+/// A step of a draft: the whole workflow as it stands, and the summary when
+/// the chat has it.
+#[derive(Debug, Deserialize)]
+struct DraftRequest {
+    workflow: Value,
+    #[serde(default)]
+    summary: Option<String>,
+}
+
+/// « Terminer », with the summary when no step sent it.
+#[derive(Debug, Deserialize)]
+struct FinishRequest {
+    #[serde(default)]
+    summary: Option<String>,
+}
+
+const NO_SUMMARY: &str =
+    "a plain-language `summary` is required: send it with a step or with « Terminer »";
+
+/// What a draft still lacks, node by node and as a whole.
+struct DraftCheck {
+    /// `{name, type, complete, missing, credentials}` per node.
+    nodes: Vec<Value>,
+    /// What the workflow as a whole lacks (a trigger, the summary).
+    workflow_problems: Vec<String>,
+    /// Everything above, as « Terminer » reports it.
+    problems: Vec<String>,
+}
+
+/// The full check of a Flow (ticket 26, plus the Review Screen's sentence per
+/// node and summary) on `body`, wiring the credentials ScreenPipe may wire.
+fn check_draft(body: &mut Value, summary: &str, credentials: &[N8nCredential]) -> DraftCheck {
+    let report = inspect(body, credentials);
+    let without_notes: Vec<String> = body["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|node| node["type"] != STICKY_NOTE)
+        .filter(|node| node["notes"].as_str().is_none_or(|n| n.trim().is_empty()))
+        .filter_map(|node| node["name"].as_str().map(str::to_string))
+        .collect();
+    let mut nodes = Vec::new();
+    let mut problems = Vec::new();
+    for node in &report.nodes {
+        let mut missing: Vec<String> = node.invention.iter().chain(&node.missing).cloned().collect();
+        if without_notes.contains(&node.name) {
+            missing.push(format!(
+                "« {} » has no one-sentence `notes` for the Review Screen",
+                node.name
+            ));
+        }
+        let held: Vec<Value> = node
+            .credentials
+            .iter()
+            .map(|(kind, name)| json!({"type": kind, "name": name}))
+            .collect();
+        nodes.push(json!({
+            "name": node.name,
+            "type": node.kind,
+            "complete": missing.is_empty(),
+            "missing": missing,
+            "credentials": held,
+        }));
+        problems.extend(missing);
+    }
+    let mut workflow_problems = Vec::new();
+    if report.nodes.is_empty() {
+        workflow_problems.push("the workflow has no nodes".to_string());
+    } else if !report.has_trigger {
+        workflow_problems.push(NO_TRIGGER.to_string());
+    }
+    if summary.trim().is_empty() {
+        workflow_problems.push(NO_SUMMARY.to_string());
+    }
+    problems.extend(workflow_problems.iter().cloned());
+    DraftCheck {
+        nodes,
+        workflow_problems,
+        problems,
+    }
+}
+
+/// The state the chat reads after each step. Read-only: credentials
+/// n8n gained since the last step show as wired; « Terminer » saves them.
+fn draft_view(
+    api: &N8nApi,
+    workflow: &Value,
+    record: Option<&FlowRecord>,
+    credentials: &[N8nCredential],
+) -> Value {
+    let summary = record.map(|r| r.summary.as_str()).unwrap_or_default();
+    let mut body = importable(workflow);
+    let check = check_draft(&mut body, summary, credentials);
+    let id = workflow["id"].as_str().unwrap_or_default();
+    json!({
+        "id": id,
+        "name": workflow["name"],
+        "building": true,
+        "versionId": workflow["versionId"],
+        "n8nUrl": api.editor_url(id),
+        "summary": summary,
+        "complete": check.problems.is_empty(),
+        "nodes": check.nodes,
+        "problems": check.workflow_problems,
+    })
+}
+
+/// A step's workflow as n8n takes it (an empty first step has no links yet).
+fn draft_body(workflow: &Value) -> Value {
+    let mut body = importable(workflow);
+    if !body["connections"].is_object() {
+        body["connections"] = json!({});
+    }
+    body
+}
+
+/// A step is refused only for what can never become a Flow here: an
+/// invented or switched-off node type, or a version n8n lacks. Wires the
+/// credentials ScreenPipe may wire.
+fn refuse_inventions(body: &mut Value, credentials: &[N8nCredential]) -> Result<(), FlowError> {
+    let inventions = inspect(body, credentials).inventions();
+    if inventions.is_empty() {
+        Ok(())
+    } else {
+        Err(FlowError::InvalidWorkflow(inventions.join("; ")))
+    }
+}
+
+/// Saves `body` as the draft's workflow, never publishing it.
+async fn save_draft(api: &N8nApi, id: &str, body: &Value) -> Result<Value, FlowError> {
+    let (status, updated) = api
+        .send(
+            Method::PUT,
+            &format!("/workflows/{id}"),
+            &[("publishIfActive", "false")],
+            Some(body),
+        )
+        .await?;
+    match status {
+        200..=299 => Ok(api.workflow(id).await?.unwrap_or(updated)),
+        404 => Err(FlowError::FlowNotFound),
+        400 => Err(FlowError::InvalidWorkflow(n8n_answer(status, &updated))),
+        _ => Err(upstream_error(status, &updated)),
+    }
+}
+
+/// The draft `id` under construction, with the n8n client and local store.
+async fn load_draft(state: &FlowsState, id: &str) -> Result<(N8nApi, FlowStore, Value), FlowError> {
+    let (api, store, workflow) = load_any_flow(state, id).await?;
+    if !is_building(&workflow, store.flows.get(id)) {
+        return Err(FlowError::NotUnderConstruction);
+    }
+    Ok((api, store, workflow))
+}
+
+/// `POST /drafts`: starts a Flow as a hidden draft in n8n, switched off and
+/// marked under construction ([`BUILDING_TAG`]); answers its state.
+async fn start_draft(
+    State(state): State<FlowsState>,
+    Json(request): Json<DraftRequest>,
+) -> Result<(StatusCode, Json<Value>), FlowError> {
+    let api = N8nApi::from_connection(&state).await?;
+    if request.workflow["name"]
+        .as_str()
+        .is_none_or(|name| name.trim().is_empty())
+    {
+        return Err(FlowError::InvalidWorkflow("the workflow needs a `name`".into()));
+    }
+    // `importable` drops `active` and `tags`: n8n imports it switched off.
+    let mut body = draft_body(&request.workflow);
+    keep_user_credentials(&mut body, None);
+    let credentials = api.credentials().await?;
+    refuse_inventions(&mut body, &credentials)?;
+
+    let _guard = state.write_lock.lock().await;
+    let dir = &state.screenpipe_dir;
+    let mut store = FlowStore::load(dir)?;
+    let (status, created) = api
+        .send(Method::POST, "/workflows", &[], Some(&body))
+        .await?;
+    match status {
+        200..=299 => {}
+        400 => return Err(FlowError::InvalidWorkflow(n8n_answer(status, &created))),
+        _ => return Err(upstream_error(status, &created)),
+    }
+    let id = workflow_id(&created)?;
+    // Recorded as building before tagging: a failed tag call never shows a
+    // half-built Flow in the list.
+    store.flows.insert(
+        id.clone(),
+        FlowRecord {
+            source_task_id: None,
+            summary: request.summary.unwrap_or_default().trim().to_string(),
+            answers: Value::Null,
+            reviewed_version_id: None,
+            activation_log: Vec::new(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            building: true,
+        },
+    );
+    store.save(dir)?;
+    let workflow = api.retag(created, &[FLOW_TAG, BUILDING_TAG], &[]).await?;
+    let view = draft_view(&api, &workflow, store.flows.get(&id), &credentials);
+    Ok((StatusCode::CREATED, Json(view)))
+}
+
+/// `GET /drafts/:id`: what each node of the draft still lacks.
+async fn draft_state(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, FlowError> {
+    let (api, store, workflow) = load_draft(&state, &id).await?;
+    let credentials = api.credentials().await?;
+    Ok(Json(draft_view(&api, &workflow, store.flows.get(&id), &credentials)))
+}
+
+/// `PUT /drafts/:id`: one step, the whole workflow as it now stands.
+/// Accepted unless it invents a node; answers the state after the step.
+async fn update_draft(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+    Json(request): Json<DraftRequest>,
+) -> Result<Json<Value>, FlowError> {
+    let _guard = state.write_lock.lock().await;
+    let (api, mut store, current) = load_draft(&state, &id).await?;
+    let mut body = draft_body(&request.workflow);
+    if body.get("name").is_none() {
+        body["name"] = current["name"].clone();
+    }
+    keep_user_credentials(&mut body, Some(&current));
+    let credentials = api.credentials().await?;
+    refuse_inventions(&mut body, &credentials)?;
+    let workflow = save_draft(&api, &id, &body).await?;
+    if let Some(summary) = request.summary.map(|s| s.trim().to_string()) {
+        if !summary.is_empty() {
+            store.record_mut(&id).summary = summary;
+            store.save(&state.screenpipe_dir)?;
+        }
+    }
+    Ok(Json(draft_view(&api, &workflow, store.flows.get(&id), &credentials)))
+}
+
+/// `POST /drafts/:id/finish` (« Terminer »): the full check; refused while
+/// anything is missing, listing every problem. Accepted, the building mark
+/// is removed and the Flow is a Draft: listed, switched off, to review.
+async fn finish_draft(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+    request: Option<Json<FinishRequest>>,
+) -> Result<Json<Flow>, FlowError> {
+    let sent = request
+        .and_then(|Json(request)| request.summary)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let _guard = state.write_lock.lock().await;
+    let (api, mut store, current) = load_draft(&state, &id).await?;
+    let summary = sent
+        .or_else(|| store.flows.get(&id).map(|r| r.summary.clone()))
+        .unwrap_or_default();
+    let credentials = api.credentials().await?;
+    let mut body = importable(&current);
+    keep_user_credentials(&mut body, Some(&current));
+    let check = check_draft(&mut body, &summary, &credentials);
+    if !check.problems.is_empty() {
+        return Err(FlowError::InvalidWorkflow(check.problems.join("; ")));
+    }
+    // Its failed runs are reported, like any Flow's (D16).
+    failures::name_error_workflow(&state, &api, &mut body).await;
+    // Saved when that setting, or a credential n8n gained since the last
+    // step and wired just now, changed the draft.
+    let saved = importable(&current);
+    let workflow = if body["nodes"] != saved["nodes"] || body["settings"] != saved["settings"] {
+        save_draft(&api, &id, &body).await?
+    } else {
+        current
+    };
+    let workflow = api.retag(workflow, &[FLOW_TAG], &[BUILDING_TAG]).await?;
+    let record = store.record_mut(&id);
+    record.building = false;
+    record.summary = summary;
+    store.save(&state.screenpipe_dir)?;
+    Ok(Json(
+        build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
+    ))
+}
+
 /// Chat creation (`automation-flows` skill, "Ajouter"): imports the workflow
 /// switched off and tagged and records its summary. It is a Draft until the
 /// user activates it from the Review Screen. Refused before anything is
@@ -1569,6 +1926,7 @@ async fn create_flow(
             reviewed_version_id: None,
             activation_log: Vec::new(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            building: false,
         },
     );
     store.save(dir)?;
@@ -1676,6 +2034,7 @@ async fn create_from_task(
             reviewed_version_id: None,
             activation_log: Vec::new(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            building: false,
         },
     );
     store.save(dir)?;
@@ -1696,6 +2055,7 @@ mod tests {
             reviewed_version_id: reviewed.map(str::to_string),
             activation_log: Vec::new(),
             created_at: String::new(),
+            building: false,
         }
     }
 

@@ -907,6 +907,16 @@ impl PiExecutor {
             std::fs::write(&skill_path, content)?;
             debug!("{} skill installed at {:?}", name, skill_path);
         }
+        // Files a skill links to, written beside its SKILL.md: Pi resolves a
+        // skill's relative links against that folder.
+        let skill_files: &[(&str, &str, &str)] = &[(
+            "automation-flows",
+            "n8n-guide.md",
+            include_str!("../../assets/skills/automation-flows/n8n-guide.md"),
+        )];
+        for (name, file, content) in skill_files {
+            std::fs::write(skills_root.join(name).join(file), content)?;
+        }
 
         // Migration cleanup only. Enterprise capabilities are injected by the
         // Enterprise app with Pi's explicit `--skill` flag from a path outside
@@ -5033,6 +5043,71 @@ mod tests {
         assert!(skill.contains("| `GET /automation-flows/nodes/card?type=<type>"));
         assert!(skill.contains("switchedOff"));
         assert!(skill.contains("inN8n"));
+    }
+
+    #[test]
+    fn automation_flows_skill_builds_step_by_step_and_deletes_abandoned_drafts() {
+        // flows-round-two 07: a hidden draft, a state read after every step,
+        // « Terminer » once nothing is missing, and no draft left behind.
+        let skill = include_str!("../../assets/skills/automation-flows/SKILL.md");
+        for row in [
+            "| `POST /automation-flows/drafts` ",
+            "| `PUT /automation-flows/drafts/<id>` ",
+            "| `GET /automation-flows/drafts/<id>` ",
+            "| `POST /automation-flows/drafts/<id>/finish` ",
+        ] {
+            assert!(skill.contains(row), "{row} missing from the skill");
+        }
+        assert!(skill.contains("## Build a Flow step by step"));
+        assert!(skill.contains("**Delete a draft you abandon**"));
+        assert!(skill.contains("flow_under_construction"));
+    }
+
+    #[test]
+    fn automation_flows_guide_ships_beside_the_skill_and_is_linked_from_it() {
+        // Pi resolves a skill's relative links against its folder: the guide
+        // must be written there, in the chat only, and SKILL.md must point at it.
+        let chat = tempfile::tempdir().unwrap();
+        PiExecutor::ensure_screenpipe_skill(chat.path()).unwrap();
+        let guide = include_str!("../../assets/skills/automation-flows/n8n-guide.md");
+        assert_eq!(
+            std::fs::read_to_string(chat.path().join(".pi/skills/automation-flows/n8n-guide.md"))
+                .unwrap(),
+            guide
+        );
+        let skill = include_str!("../../assets/skills/automation-flows/SKILL.md");
+        assert!(skill.contains("(n8n-guide.md)"));
+        for topic in [
+            "$('",
+            "n8n-nodes-base.if",
+            "n8n-nodes-base.switch",
+            "n8n-nodes-base.merge",
+            "onError",
+            "ai_languageModel",
+        ] {
+            assert!(guide.contains(topic), "{topic} missing from the guide");
+        }
+    }
+
+    #[test]
+    fn automation_flows_skill_takes_node_versions_from_the_lookup_only() {
+        // The catalog is the only source of node versions: a version written
+        // in the skill would contradict it after the next n8n image.
+        let skill = include_str!("../../assets/skills/automation-flows/SKILL.md");
+        let mut rest = skill;
+        while let Some(at) = rest.find("typeVersion") {
+            rest = &rest[at + "typeVersion".len()..];
+            let after: String = rest
+                .chars()
+                .skip_while(|c| matches!(c, '`' | '"' | ':' | ' '))
+                .take(1)
+                .collect();
+            assert!(
+                !after.chars().all(|c| c.is_ascii_digit()) || after.is_empty(),
+                "a node version is written in the skill near {:?}",
+                &rest[..rest.len().min(40)]
+            );
+        }
     }
 
     #[test]
