@@ -2336,6 +2336,56 @@ async fn chat_create_wires_the_only_credential_n8n_holds_of_a_type() {
     );
 }
 
+/// The request bodies of the example Flows in the chat's n8n guide: every
+/// ```json block that holds a `workflow`.
+fn guide_examples() -> Vec<Value> {
+    let guide = include_str!("../../screenpipe-core/assets/skills/automation-flows/n8n-guide.md");
+    guide
+        .split("```json\n")
+        .skip(1)
+        .filter_map(|block| block.split("\n```").next())
+        .map(|block| {
+            serde_json::from_str::<Value>(block).unwrap_or_else(|e| panic!("{e}: {block}"))
+        })
+        .filter(|body| body.get("workflow").is_some())
+        .collect()
+}
+
+#[tokio::test]
+async fn every_example_flow_of_the_guide_passes_the_flow_check() {
+    // The chat copies these patterns: each one must be a Flow ScreenPipe
+    // accepts as is, against the credentials the user's n8n holds.
+    let examples = guide_examples();
+    let triggers: Vec<String> = examples
+        .iter()
+        .map(|body| {
+            body["workflow"]["nodes"][0]["type"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    for expected in [
+        "CUSTOM.screenPipeTrigger",
+        "n8n-nodes-base.emailReadImap",
+        "n8n-nodes-base.scheduleTrigger",
+    ] {
+        assert!(
+            triggers.iter().any(|t| t == expected),
+            "no example starts with {expected}: {triggers:?}"
+        );
+    }
+    for body in examples {
+        let (server, _n8n) = start_fake_n8n().await;
+        let app = App::new().await;
+        app.configure_n8n(&server.uri());
+        let name = body["workflow"]["name"].clone();
+        let (status, flow) = chat_create(&app, body).await;
+        assert_eq!(status, StatusCode::CREATED, "{name}: {flow}");
+        assert_eq!(flow["status"], "draft", "{name}");
+    }
+}
+
 #[tokio::test]
 async fn chat_update_of_a_draft_keeps_it_a_draft_and_its_summary() {
     let (server, n8n) = start_fake_n8n().await;

@@ -146,7 +146,8 @@ against: what the lookup returns is what a Flow can use.
      -o flow.json
    ```
 2. Find the nodes the request concerns (`workflow.nodes[].name`, `type`,
-   `parameters`, `notes`). n8n expressions start with `=` and use `{{ }}`.
+   `parameters`, `notes`). n8n expressions start with `=` and use `{{ }}`;
+   for anything beyond one value, read [n8n-guide.md](n8n-guide.md).
 3. Edit with a script file (write tool, then `bun edit.js`), never by retyping
    the JSON. Write `body.json` as `{"workflow": <edited workflow>}`, plus
    `"summary"` when rule 9 applies.
@@ -189,7 +190,9 @@ off; the user reviews it and switches it on.
    hold, tell the user now instead of building.
 3. Build the n8n workflow JSON with a script file (write tool, then
    `bun build-flow.js`), never by typing the JSON inline, each node from its
-   card's `skeleton`:
+   card's `skeleton`. Read [n8n-guide.md](n8n-guide.md) first: expressions,
+   `$('Node')` references, IF/Switch/Merge, error handling, AI sub-nodes and
+   complete example Flows to follow.
    - `name`: short, in French, says what the Flow does.
    - `nodes`: the trigger first; each node has `id` (a fresh UUID), `name`
      (unique, French), `type`, `typeVersion`, `position` (`[x, y]`, left to
@@ -203,8 +206,8 @@ off; the user reviews it and switches it on.
      filled, every node connected, a trigger first (rule 6).
    - AI nodes only where judgment is needed (rule 3); plain n8n nodes for the
      rest. Their model is the user's ChatGPT subscription: an OpenAI Chat
-     Model node (`@n8n/n8n-nodes-langchain.lmChatOpenAi`, `typeVersion: 1.3`)
-     with `{"model": {"__rl": true, "mode": "id", "value": "chatgpt/gpt-5.6-luna:max"}, "responsesApiEnabled": false}`;
+     Model node (`@n8n/n8n-nodes-langchain.lmChatOpenAi`, version from its
+     card) with `{"model": {"__rl": true, "mode": "id", "value": "chatgpt/gpt-5.6-luna:max"}, "responsesApiEnabled": false}`;
      its credential is « ScreenPipe AI proxy ».
    - ScreenPipe nodes (package `n8n-nodes-screenpipe`, loaded by this n8n
      as custom nodes, so their type starts with `CUSTOM.`) start a Flow on
@@ -213,8 +216,8 @@ off; the user reviews it and switches it on.
      `CUSTOM.screenPipeAiTrigger` (an AI-judged condition);
      `CUSTOM.screenPipe` searches the user's ScreenPipe history, and
      `CUSTOM.screenPipeTool` is the same search as an AI Agent tool.
-     Their exact parameters (all `typeVersion: 1`; they need the user's
-     « ScreenPipe API » credential, picked in n8n):
+     Their exact parameters (versions from their cards; they need the
+     user's « ScreenPipe API » credential, picked in n8n):
      - `CUSTOM.screenPipeTrigger`: `event` (`keyword`, `window`, `pipe` or
        `flow`), then the field for that event: `keyword` (words said aloud),
        `appName` and/or `windowName` (part of the app name / window title),
