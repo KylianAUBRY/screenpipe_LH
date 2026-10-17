@@ -39,9 +39,9 @@ const FIT_VIEW = { padding: 0.08, maxZoom: 1 };
 // n8n positions this close are the same row / the same column.
 const SAME_ROW = 100;
 const SAME_COLUMN = 60;
-// Links leave and enter at the title's height, the same on every card, so a
-// row's links stay horizontal whatever each card's height.
-const HANDLE_Y = 24;
+// Links leave and enter at the middle of the card's side; every card has the
+// same height, so a row's links stay horizontal.
+const HANDLE_Y = NODE_HEIGHT / 2;
 const NO_SENTENCE = "No explanation for this step.";
 
 type StepNode = Node<{ node: FlowNode }, "step">;

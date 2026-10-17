@@ -157,6 +157,15 @@ describe("Review Screen graph", () => {
     }
   });
 
+  it("attaches the links along a row to the middle of each card's side", async () => {
+    const graph = await renderGraph();
+    const card = within(graph).getByTestId(`flow-node-${fixtureFlow.nodes[0].id}`);
+    const height = parseFloat(card.closest<HTMLElement>(".react-flow__node")!.style.height);
+    const sides = [...card.querySelectorAll<HTMLElement>(".react-flow__handle-left, .react-flow__handle-right")];
+    expect(sides).toHaveLength(2);
+    for (const side of sides) expect(parseFloat(side.style.top)).toBe(height / 2);
+  });
+
   it("gives every card the same height and keeps room between cards", async () => {
     const graph = await renderGraph();
     const wrappers = fixtureFlow.nodes.map(
