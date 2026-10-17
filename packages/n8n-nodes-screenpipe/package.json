@@ -15,7 +15,11 @@
   "n8n": {
     "n8nNodesApiVersion": 1,
     "credentials": ["dist/credentials/ScreenPipeApi.credentials.js"],
-    "nodes": ["dist/nodes/ScreenPipe/ScreenPipe.node.js", "dist/nodes/ScreenPipeAiTrigger/ScreenPipeAiTrigger.node.js"]
+    "nodes": [
+      "dist/nodes/ScreenPipe/ScreenPipe.node.js",
+      "dist/nodes/ScreenPipeTrigger/ScreenPipeTrigger.node.js",
+      "dist/nodes/ScreenPipeAiTrigger/ScreenPipeAiTrigger.node.js"
+    ]
   },
   "devDependencies": {
     "@types/bun": "1.3.13",

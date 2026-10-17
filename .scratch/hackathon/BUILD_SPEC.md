@@ -2,7 +2,8 @@
 
 Working document for the team. Not agent context: product direction lives in
 `AGENTS.md`; this file holds build/ops decisions and open items. Contracts and
-the decisions that closed the open items below live in `SPEC.md`.
+the decisions that closed the open items below live in `SPEC.md`. Current state and
+next steps for whoever picks this up: `HANDOFF.md`.
 
 ## Definition of done (user decision: everything live)
 
