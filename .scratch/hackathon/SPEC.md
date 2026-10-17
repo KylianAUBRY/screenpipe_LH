@@ -97,12 +97,14 @@ excluded from `nodes`. `sentence` is the node's `notes`.
 | `GET /automation-flows/:id` | `Flow` |
 | `POST /automation-flows/from-task` `{taskId, answers}` | Demo: maps `taskId` to the bundled fixture (unknown → 404); imports it inactive, tags it, stores summary + `sourceTaskId`. Idempotent per `taskId`. Returns `Flow` (`draft`). |
 | `POST /automation-flows` `{workflow, summary}` | Chat creation: imports `workflow` (n8n JSON with per-node `notes`) inactive and tagged. Returns `Flow`. |
-| `PUT /automation-flows/:id` `{workflow, summary?}` | Chat modification: if active, deactivate first (log `paused_for_edit`); update in place; log `modified`. Returns `Flow`. |
+| `GET /automation-flows/:id/workflow` | For the chat: `{id, versionId, summary, workflow}`, the n8n workflow reduced to what an update accepts (no `active`, no tags). |
+| `PUT /automation-flows/:id` `{workflow, summary?}` | Chat modification: refuses (`400 invalid_workflow`, nothing changed) a workflow without nodes or connections or with a non-sticky node lacking `notes`; if active, unpublish first (log `paused_for_edit`); update in place with `publishIfActive=false`; log `modified`; both events `by: "chat"`. n8n's 400 → `400 invalid_workflow` with its message. Returns `Flow`. |
 | `POST /automation-flows/:id/activate` | n8n activate; `reviewedVersionId = versionId`; log `activated`. Only called from a user click. |
 | `POST /automation-flows/:id/deactivate` | n8n deactivate; log `deactivated`. |
 
 Errors: `412 {error: "n8n_not_configured"}`, `502 {error: "n8n_unreachable"}`,
-`404` for an unknown Flow or task. Storage: one JSON file in the ScreenPipe
+`404` for an unknown Flow or task, `400 {error: "invalid_workflow", detail}` for
+a chat change that cannot be applied. Storage: one JSON file in the ScreenPipe
 data dir, keyed by n8n workflow id.
 
 Fixture: `crates/screenpipe-engine/assets/automation-flows/` holds the n8n

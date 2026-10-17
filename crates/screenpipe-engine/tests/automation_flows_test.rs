@@ -33,6 +33,10 @@ struct N8nState {
     tags: Vec<Value>,
     executions: Vec<Value>,
     next_id: u32,
+    /// Workflow updates so far; each one saves version `edit-<n>`.
+    updates: u32,
+    /// When set, updating a workflow answers 400 with this message.
+    refuse_update: Option<String>,
     /// When set, publishing answers 400 with this message (e.g. a trigger
     /// whose credentials n8n cannot use).
     refuse_publish: Option<String>,
@@ -135,6 +139,47 @@ impl Respond for FakeN8n {
                 Some(workflow) => json_response(200, workflow.clone()),
                 None => json_response(404, json!({"message": "Not Found"})),
             },
+            // n8n 2.x: an update saves a new version; on a published workflow
+            // it is re-published at once unless `publishIfActive=false`.
+            ("PUT", ["workflows", id]) => {
+                let read_only = ["id", "active", "tags", "versionId", "activeVersionId"];
+                if read_only.iter().any(|key| body.get(*key).is_some()) {
+                    return json_response(
+                        400,
+                        json!({"message": "request/body must NOT have additional properties"}),
+                    );
+                }
+                if ["name", "nodes", "connections", "settings"]
+                    .iter()
+                    .any(|key| body.get(*key).is_none())
+                {
+                    return json_response(
+                        400,
+                        json!({"message": "request/body must have required property"}),
+                    );
+                }
+                if let Some(message) = &state.refuse_update {
+                    return json_response(400, json!({"message": message}));
+                }
+                let republish = query("publishIfActive").as_deref() != Some("false");
+                state.updates += 1;
+                let version = format!("edit-{}", state.updates);
+                match state.workflows.iter_mut().find(|w| w["id"] == *id) {
+                    Some(workflow) => {
+                        for key in ["name", "nodes", "connections", "settings", "staticData"] {
+                            if let Some(value) = body.get(key) {
+                                workflow[key] = value.clone();
+                            }
+                        }
+                        workflow["versionId"] = json!(version);
+                        if workflow["active"] == true && republish {
+                            workflow["activeVersionId"] = json!(version);
+                        }
+                        json_response(200, workflow.clone())
+                    }
+                    None => json_response(404, json!({"message": "Not Found"})),
+                }
+            }
             ("PUT", ["workflows", id, "tags"]) => {
                 let wanted: Vec<Value> = body
                     .as_array()
@@ -363,6 +408,12 @@ async fn not_configured_returns_412() {
             "/automation-flows/from-task",
             Some(json!({"taskId": TASK_ID, "answers": {}})),
         ),
+        ("GET", "/automation-flows/wf1/workflow", None),
+        (
+            "PUT",
+            "/automation-flows/wf1",
+            Some(json!({"workflow": {"nodes": [], "connections": {}}})),
+        ),
     ] {
         let (status, body) = app.call(method, uri, body).await;
         assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{method} {uri}");
@@ -515,6 +566,15 @@ async fn unknown_task_or_flow_returns_404() {
     assert!(workflow_posts(&server).await.is_empty());
 
     let (status, body) = app.call("GET", "/automation-flows/wf404", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "flow_not_found");
+    let (status, body) = app
+        .call(
+            "PUT",
+            "/automation-flows/wf404",
+            Some(json!({"workflow": {"nodes": [], "connections": {}}})),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "flow_not_found");
 
@@ -927,6 +987,17 @@ async fn nothing_but_the_activate_route_switches_a_flow_on() {
         .await;
     app.call("POST", &format!("/automation-flows/{id}/deactivate"), None)
         .await;
+    // A chat modification asking for it cannot switch the Flow on either.
+    let workflow = edited_workflow(&n8n, &id, |w| w["active"] = json!(true));
+    let (status, flow) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["status"], "draft");
 
     let switched_on: Vec<String> = server
         .received_requests()
@@ -1002,4 +1073,365 @@ async fn review_screen_shows_the_last_execution() {
             chrono::DateTime::parse_from_rfc3339("2026-10-17T09:00:00.000Z").unwrap()
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Chat modification (ticket 08)
+// ---------------------------------------------------------------------------
+
+/// `METHOD /path` of every request that changes something in the fake n8n,
+/// in the order it received them.
+async fn n8n_writes(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method.as_str() != "GET")
+        .map(|r| format!("{} {}", r.method, r.url.path()))
+        .collect()
+}
+
+/// The n8n workflow as the chat would send it back: the full n8n JSON with
+/// `edit` applied (read-only fields included, as n8n returns them).
+fn edited_workflow(n8n: &FakeN8n, id: &str, edit: impl FnOnce(&mut Value)) -> Value {
+    let mut workflow = n8n
+        .workflows()
+        .into_iter()
+        .find(|w| w["id"] == id)
+        .expect("workflow exists in fake n8n");
+    edit(&mut workflow);
+    workflow
+}
+
+/// Adds the `auto` label to the first real node, as in the rehearsed request
+/// « Ajoute l'étiquette `auto` à chaque ticket créé ».
+fn add_auto_label(workflow: &mut Value) {
+    let node = workflow["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|n| n["type"] != STICKY_NOTE)
+        .unwrap();
+    node["notes"] = json!("Chaque ticket créé reçoit aussi l'étiquette auto.");
+    node["parameters"]["labels"] = json!(["auto"]);
+}
+
+fn events(flow: &Value) -> Vec<(String, String, String)> {
+    flow["activationLog"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["event"].as_str().unwrap().to_string(),
+                e["versionId"].as_str().unwrap().to_string(),
+                e["by"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn event(event: &str, version: &str, by: &str) -> (String, String, String) {
+    (event.into(), version.into(), by.into())
+}
+
+#[tokio::test]
+async fn chat_update_switches_an_active_flow_off_first_and_leaves_it_needing_review() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    app.call(
+        "POST",
+        &format!("/automation-flows/{id}/activate"),
+        Some(json!({"versionId": "version-1"})),
+    )
+    .await;
+    let writes_before = n8n_writes(&server).await.len();
+
+    let workflow = edited_workflow(&n8n, &id, add_auto_label);
+    let (status, flow) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow, "summary": "Résumé mis à jour."})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    // n8n: switched off, then the same workflow updated in place.
+    assert_eq!(
+        n8n_writes(&server).await[writes_before..],
+        [
+            format!("POST /api/v1/workflows/{id}/unpublish"),
+            format!("PUT /api/v1/workflows/{id}"),
+        ]
+    );
+    let stored = n8n.workflows();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0]["active"], false);
+    let new_version = stored[0]["versionId"].as_str().unwrap().to_string();
+    assert_ne!(new_version, "version-1");
+    assert!(stored[0]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["parameters"]["labels"] == json!(["auto"])));
+
+    // The Flow needs review, with the new sentence and summary on screen.
+    assert_eq!(flow["status"], "needs_review");
+    assert_eq!(flow["versionId"], new_version.as_str());
+    assert_eq!(flow["reviewedVersionId"], "version-1");
+    assert_eq!(flow["summary"], "Résumé mis à jour.");
+    assert!(flow["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["sentence"] == "Chaque ticket créé reçoit aussi l'étiquette auto."));
+    assert_eq!(
+        events(&flow),
+        [
+            event("activated", "version-1", "user"),
+            event("paused_for_edit", "version-1", "chat"),
+            event("modified", &new_version, "chat"),
+        ]
+    );
+
+    // It stays that way after a reload.
+    let (_, reloaded) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    assert_eq!(reloaded["status"], "needs_review");
+    assert_eq!(reloaded["activationLog"], flow["activationLog"]);
+}
+
+#[tokio::test]
+async fn chat_reads_the_editable_workflow_and_sends_it_back() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+
+    let (status, editable) = app
+        .call("GET", &format!("/automation-flows/{id}/workflow"), None)
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{editable}");
+    assert_eq!(editable["id"], id.as_str());
+    assert_eq!(editable["versionId"], "version-1");
+    assert_eq!(editable["summary"], created["summary"]);
+    let in_n8n = n8n.workflows()[0].clone();
+    let workflow = &editable["workflow"];
+    assert_eq!(workflow["name"], in_n8n["name"]);
+    assert_eq!(workflow["nodes"], in_n8n["nodes"]);
+    assert_eq!(workflow["connections"], in_n8n["connections"]);
+    // Only what can be sent back: n8n's switch and tags stay out of reach.
+    for read_only in ["id", "active", "activeVersionId", "versionId", "tags"] {
+        assert!(workflow.get(read_only).is_none(), "{read_only}");
+    }
+
+    // Sent back as is, it is accepted.
+    let (status, flow) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+
+    let (status, _) = app
+        .call("GET", "/automation-flows/wf404/workflow", None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn chat_update_is_refused_untouched_when_a_node_has_no_sentence() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    app.call(
+        "POST",
+        &format!("/automation-flows/{id}/activate"),
+        Some(json!({"versionId": "version-1"})),
+    )
+    .await;
+    let writes_before = n8n_writes(&server).await.len();
+
+    // A new node without its one-sentence note; sticky notes need none.
+    let workflow = edited_workflow(&n8n, &id, |workflow| {
+        let nodes = workflow["nodes"].as_array_mut().unwrap();
+        nodes.retain(|n| n["type"] == STICKY_NOTE || n["notes"].is_string());
+        nodes.push(json!({
+            "id": "new-node", "name": "Ajouter l'étiquette", "type": "n8n-nodes-base.set",
+            "typeVersion": 3.5, "position": [900, 0], "parameters": {}, "notes": "  "
+        }));
+    });
+    let (status, body) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_workflow");
+    assert!(body["detail"]
+        .as_str()
+        .unwrap()
+        .contains("Ajouter l'étiquette"));
+
+    // A workflow without its connections is refused the same way.
+    let workflow = edited_workflow(&n8n, &id, |w| {
+        w.as_object_mut().unwrap().remove("connections");
+    });
+    let (status, body) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_workflow");
+
+    // Still running the reviewed version, nothing logged.
+    assert!(n8n_writes(&server).await[writes_before..].is_empty());
+    assert_eq!(n8n.workflows()[0]["active"], true);
+    let (_, flow) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    assert_eq!(flow["status"], "active");
+    assert_eq!(events(&flow), [event("activated", "version-1", "user")]);
+}
+
+#[tokio::test]
+async fn chat_update_refused_by_n8n_leaves_the_flow_switched_off() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    app.call(
+        "POST",
+        &format!("/automation-flows/{id}/activate"),
+        Some(json!({"versionId": "version-1"})),
+    )
+    .await;
+    n8n.0.lock().unwrap().refuse_update =
+        Some("request/body/nodes/0 must have required property 'typeVersion'".into());
+
+    let workflow = edited_workflow(&n8n, &id, add_auto_label);
+    let (status, body) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+
+    // n8n's reason reaches the chat, so it can fix its edit.
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_workflow");
+    assert!(body["detail"].as_str().unwrap().contains("typeVersion"));
+    // The reviewed version no longer runs: the Flow is Paused until the user
+    // activates it again or the chat retries.
+    assert_eq!(n8n.workflows()[0]["active"], false);
+    let (_, flow) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    assert_eq!(flow["status"], "paused");
+    assert_eq!(
+        events(&flow),
+        [
+            event("activated", "version-1", "user"),
+            event("paused_for_edit", "version-1", "chat"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn chat_update_of_a_draft_keeps_it_a_draft_and_its_summary() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let writes_before = n8n_writes(&server).await.len();
+
+    let workflow = edited_workflow(&n8n, &id, add_auto_label);
+    let (status, flow) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(
+        n8n_writes(&server).await[writes_before..],
+        [format!("PUT /api/v1/workflows/{id}")]
+    );
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(flow["summary"], created["summary"]);
+    let new_version = n8n.workflows()[0]["versionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(events(&flow), [event("modified", &new_version, "chat")]);
+}
+
+#[tokio::test]
+async fn chat_update_of_a_paused_flow_leaves_it_needing_review_without_switching() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let reviewed = Some(json!({"versionId": "version-1"}));
+    app.call(
+        "POST",
+        &format!("/automation-flows/{id}/activate"),
+        reviewed,
+    )
+    .await;
+    app.call("POST", &format!("/automation-flows/{id}/deactivate"), None)
+        .await;
+    let writes_before = n8n_writes(&server).await.len();
+
+    let workflow = edited_workflow(&n8n, &id, add_auto_label);
+    let (status, flow) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(
+        n8n_writes(&server).await[writes_before..],
+        [format!("PUT /api/v1/workflows/{id}")]
+    );
+    assert_eq!(flow["status"], "needs_review");
+    let new_version = n8n.workflows()[0]["versionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        events(&flow),
+        [
+            event("activated", "version-1", "user"),
+            event("deactivated", "version-1", "user"),
+            event("modified", &new_version, "chat"),
+        ]
+    );
 }

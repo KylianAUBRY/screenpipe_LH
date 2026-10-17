@@ -3,10 +3,12 @@
 
 // Desktop side of the Task Page's "Créer l'automatisation": the Flow service
 // creates the Flow from the Detected Task (idempotent per task), then the
-// app opens its Review Screen in Automations → Flows.
+// app opens its Review Screen in Automations → Flows. Also opens that Review
+// Screen from the chat's `screenpipe://flows/<id>` link.
 
 import { emit } from "@tauri-apps/api/event";
 import type { WorkflowsPlatform } from "@screenpipe/workflows-ui";
+import { commands } from "@/lib/utils/tauri";
 import { flowsApi, FlowsApiError, type FlowsErrorCode } from "@/components/automation-flows/api";
 
 // Shown on the Task Page, under the action; the answers stay on screen.
@@ -30,6 +32,42 @@ export const createAutomationFlow: NonNullable<WorkflowsPlatform["createAutomati
   }
   await openFlowReview(flowId);
 };
+
+/**
+ * The Review Screen link the `automation-flows` chat skill ends with
+ * (`screenpipe://flows/<id>`).
+ */
+export function flowReviewLink(flowId: string): string {
+  return `screenpipe://flows/${encodeURIComponent(flowId)}`;
+}
+
+function flowIdFromReviewLink(href: string): string | null {
+  try {
+    const url = new URL(href);
+    if (url.protocol !== "screenpipe:" || url.host !== "flows") return null;
+    return decodeURIComponent(url.pathname.replace(/^\/+/, "").split("/")[0] ?? "") || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Opens the Review Screen a chat link points at; false when `href` is not a
+ * Flow link. The Review Screen lives in the Home window: from another window
+ * (the Chat overlay), Home is brought up on it instead.
+ */
+export async function openFlowReviewLink(href: string): Promise<boolean> {
+  const flowId = flowIdFromReviewLink(href);
+  if (!flowId) return false;
+  if (window.location.pathname === "/home") {
+    await openFlowReview(flowId);
+  } else {
+    await commands.showWindowActivated({
+      Home: { page: `pipes&tab=flows&flow=${encodeURIComponent(flowId)}` },
+    });
+  }
+  return true;
+}
 
 async function openFlowReview(flowId: string): Promise<void> {
   const url = `/home?section=pipes&tab=flows&flow=${encodeURIComponent(flowId)}`;

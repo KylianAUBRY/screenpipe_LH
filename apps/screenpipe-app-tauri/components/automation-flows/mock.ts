@@ -4,7 +4,9 @@
 
 // Browser-mock (`bun run dev:web`) answers for `/automation-flows/*`. Add
 // `?flowsState=not-configured`, `unreachable` or `empty` to the page URL to
-// see the other states. Never contacts n8n.
+// see the other states. A `PUT /automation-flows/<id>` (what the chat skill
+// sends) switches the fixture off and leaves it needing review. Never
+// contacts n8n.
 
 import type { Flow } from "./api";
 import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "./fixtures";
@@ -44,6 +46,26 @@ function switchMockFlow(action: string, body: { versionId?: string }): Response 
       ],
     };
   }
+  return Response.json(mockFlow);
+}
+
+/** What the engine does on a chat change (PUT), without n8n. */
+function changeMockFlow(body: { summary?: string }): Response {
+  const at = new Date().toISOString();
+  // Distinct in its first 8 characters, which the history shows.
+  const versionId = `chat${mockFlow.activationLog.length + 1}-edit`;
+  const log = [...mockFlow.activationLog];
+  if (mockFlow.status === "active") {
+    log.push({ at, event: "paused_for_edit", versionId: mockFlow.versionId, by: "chat" });
+  }
+  log.push({ at, event: "modified", versionId, by: "chat" });
+  mockFlow = {
+    ...mockFlow,
+    status: mockFlow.reviewedVersionId ? "needs_review" : "draft",
+    versionId,
+    summary: body.summary?.trim() || mockFlow.summary,
+    activationLog: log,
+  };
   return Response.json(mockFlow);
 }
 
@@ -89,6 +111,9 @@ export function mockAutomationFlowsResponse(
   const id = decodeURIComponent(rawId);
   const flow = flows.find((candidate) => candidate.id === id);
   if (method === "GET" && flow && !action) return Response.json(flow);
+  if (method === "PUT" && flow && !action) {
+    return changeMockFlow(JSON.parse(String(init?.body ?? "{}")));
+  }
   if (method === "POST" && flow && (action === "activate" || action === "deactivate")) {
     return switchMockFlow(action, JSON.parse(String(init?.body ?? "{}")));
   }

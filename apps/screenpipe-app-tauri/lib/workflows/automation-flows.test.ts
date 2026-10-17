@@ -2,12 +2,17 @@
 // https://screenpipe.com
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ localFetch: vi.fn(), emit: vi.fn(async () => {}) }));
+const mocks = vi.hoisted(() => ({
+  localFetch: vi.fn(),
+  emit: vi.fn(async () => {}),
+  showWindowActivated: vi.fn(async (_window: unknown) => ({ status: "ok" as const, data: null })),
+}));
 vi.mock("@/lib/api", () => ({ localFetch: mocks.localFetch }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: mocks.emit }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
+vi.mock("@/lib/utils/tauri", () => ({ commands: { showWindowActivated: mocks.showWindowActivated } }));
 
-import { createAutomationFlow } from "./automation-flows";
+import { createAutomationFlow, flowReviewLink, openFlowReviewLink } from "./automation-flows";
 import { DEMO_TASK_ID, fixtureFlow } from "@/components/automation-flows/fixtures";
 import { mockAutomationFlowsResponse } from "@/components/automation-flows/mock";
 
@@ -66,4 +71,39 @@ describe("desktop createAutomationFlow", () => {
     await expect(createAutomationFlow("wf-other-task", answers)).rejects.toThrow("Cette tâche ne peut pas encore devenir une automatisation.");
     expect(mocks.emit).not.toHaveBeenCalled();
   });
+});
+
+describe("Review Screen link from the chat", () => {
+  const link = flowReviewLink(fixtureFlow.id);
+
+  it("opens the Flow's Review Screen from the Home chat", async () => {
+    window.history.replaceState({}, "", "/home?section=home");
+
+    expect(await openFlowReviewLink(link)).toBe(true);
+
+    expect(link).toBe(`screenpipe://flows/${fixtureFlow.id}`);
+    expect(`${window.location.pathname}${window.location.search}`).toBe(reviewUrl);
+    expect(mocks.emit).toHaveBeenCalledWith("navigate", { url: reviewUrl });
+    expect(mocks.localFetch).not.toHaveBeenCalled();
+  });
+
+  it("brings Home to the Review Screen from another chat window", async () => {
+    window.history.replaceState({}, "", "/chat");
+
+    expect(await openFlowReviewLink(link)).toBe(true);
+
+    expect(window.location.pathname).toBe("/chat");
+    expect(mocks.showWindowActivated).toHaveBeenCalledWith({
+      Home: { page: `pipes&tab=flows&flow=${fixtureFlow.id}` },
+    });
+  });
+
+  it.each(["screenpipe://flows/", "screenpipe://frame/12", "https://example.com/flows/x"])(
+    "leaves %s to other handlers",
+    async (href) => {
+      expect(await openFlowReviewLink(href)).toBe(false);
+      expect(mocks.emit).not.toHaveBeenCalled();
+      expect(mocks.showWindowActivated).not.toHaveBeenCalled();
+    },
+  );
 });

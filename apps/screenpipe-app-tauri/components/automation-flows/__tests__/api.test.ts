@@ -7,7 +7,9 @@ import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const localFetch = vi.hoisted(() => vi.fn());
+const showChatWithPrefill = vi.hoisted(() => vi.fn(async (_prefill: Record<string, unknown>) => {}));
 vi.mock("@/lib/api", () => ({ localFetch }));
+vi.mock("@/lib/chat-utils", () => ({ showChatWithPrefill }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
@@ -90,6 +92,19 @@ describe("flowsApi", () => {
     const error = await flowsApi.list().catch((e) => e);
     expect(error.detail).toBe("connection refused");
   });
+
+  it("requests a change in the Home chat, prefilled with the Flow id, without sending", async () => {
+    await flowsApi.requestChange(fixtureFlow);
+
+    expect(showChatWithPrefill).toHaveBeenCalledTimes(1);
+    const [prefill] = showChatWithPrefill.mock.lastCall!;
+    expect(prefill).toMatchObject({ autoSend: false, useHomeChat: true });
+    expect(prefill.prompt).toContain(`id : ${fixtureFlow.id}`);
+    expect(prefill.prompt).toContain(fixtureFlow.name);
+    expect(prefill.prompt).toContain("automation-flows");
+    // Opening the chat changes nothing in the Flow service.
+    expect(localFetch).not.toHaveBeenCalled();
+  });
 });
 
 describe("browser mock", () => {
@@ -120,6 +135,28 @@ describe("browser mock", () => {
     await expect(flowsApi.activate(fixtureFlow.id, "stale-version")).rejects.toMatchObject({
       code: "version_changed",
     });
+  });
+
+  it("lets a chat change switch the fixture Flow off and leave it needing review", async () => {
+    useBrowserMock();
+    await flowsApi.activate(fixtureFlow.id, fixtureFlow.versionId);
+
+    // What the automation-flows skill sends from the chat.
+    const response = await localFetch(`/automation-flows/${fixtureFlow.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ workflow: {}, summary: "Résumé modifié par le chat." }),
+    });
+    expect(response.status).toBe(200);
+
+    const changed = await flowsApi.get(fixtureFlow.id);
+    expect(changed.status).toBe("needs_review");
+    expect(changed.summary).toBe("Résumé modifié par le chat.");
+    expect(changed.versionId).not.toBe(fixtureFlow.versionId);
+    expect(changed.activationLog.map((entry) => [entry.event, entry.by])).toEqual([
+      ["activated", "user"],
+      ["paused_for_edit", "chat"],
+      ["modified", "chat"],
+    ]);
   });
 
   it.each([
