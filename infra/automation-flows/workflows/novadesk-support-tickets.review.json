@@ -1,0 +1,5 @@
+{
+  "workflowId": "spNovaFlow000001",
+  "sourceTaskId": "wf-novadesk-support-tickets",
+  "summary": "Ce flux transforme chaque email de bug ou d'idée reçu sur la boîte support NovaDesk (servicedesk.novadesk@gmail.com) en ticket dans le projet Jira NOVA. Dès qu'un email non lu arrive, n8n le lit puis le marque comme lu, pour qu'il ne soit jamais traité deux fois. Une IA, fournie par votre abonnement ScreenPipe, ne décide que ce qui demande du jugement : Bug, Tâche (idée d'amélioration) ou aucun ticket (par exemple une alerte de sécurité), le produit concerné, un résumé court, la priorité (Highest si c'est bloquant, Medium si un contournement existe, Low pour une idée) et l'étiquette back ou front. Si aucun ticket n'est nécessaire, rien n'est créé. Sinon, le ticket est construit sans IA : titre « Produit - résumé », email d'origine cité dans la description, aucune personne assignée. Rien ne tourne tant que vous n'avez pas cliqué sur Activer."
+}
