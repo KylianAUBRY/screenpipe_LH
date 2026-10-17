@@ -17,7 +17,11 @@ type Load<T> =
   | { state: "ready"; data: T }
   | { state: "error"; error: FlowsApiError };
 
-/** Runs `load` on mount and whenever `key` changes; `reload` runs it again. */
+/**
+ * Runs `load` on mount and whenever `key` changes; `reload` runs it again;
+ * `replace` shows fresher data already in hand (e.g. the Flow an action
+ * returned) without going back through "loading".
+ */
 export function useFlowsLoad<T>(load: () => Promise<T>, key: string) {
   const [result, setResult] = useState<Load<T>>({ state: "loading" });
   const [attempt, setAttempt] = useState(0);
@@ -43,7 +47,8 @@ export function useFlowsLoad<T>(load: () => Promise<T>, key: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, attempt]);
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
-  return [result, reload] as const;
+  const replace = useCallback((data: T) => setResult({ state: "ready", data }), []);
+  return [result, reload, replace] as const;
 }
 
 /** Status square + label; phosphor marks a Flow that runs (docs/DESIGN.md). */
