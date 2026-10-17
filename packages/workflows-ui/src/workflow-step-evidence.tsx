@@ -7,7 +7,7 @@ import { Loader2, Maximize2, Minimize2, Play, X } from "lucide-react";
 import type { WorkflowMap, WorkflowStage, WorkflowScreenshot } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 import { WorkflowReplay } from "./workflow-replay";
-import { verifiedStageScreenshots } from "./screenshots";
+import { isEmbeddedScreenshot, verifiedStageScreenshots } from "./screenshots";
 import { useSourceScreenshot } from "./use-source-screenshot";
 import styles from "./workflow-step-evidence.module.css";
 
@@ -64,7 +64,7 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
       const suffix = screenshots.length > 1 ? ` ${index + 1}` : "";
       return <EvidenceFigure key={`${capture.frameId}:${capture.timestamp}`} capture={capture} stage={stage} platform={platform} suffix={suffix} expanded={expanded} opening={opening}
         toggle={() => setReduced(previous => { const next = new Set(previous); if (expanded) next.add(capture.frameId); else next.delete(capture.frameId); return next; })}
-        replay={canReplay || !!platform.openCapturedMoment ? () => void openRecording(capture) : undefined}
+        replay={!isEmbeddedScreenshot(capture) && (canReplay || !!platform.openCapturedMoment) ? () => void openRecording(capture) : undefined}
         resolved={capture === preview.image} />;
     })}
     {playing && <div ref={playerRef} className={styles.player}>
@@ -82,9 +82,10 @@ function EvidenceFigure({ capture, stage, platform, suffix, expanded, opening, t
   capture: WorkflowScreenshot; stage: WorkflowStage; platform: WorkflowsPlatform; suffix: string;
   expanded: boolean; opening: boolean; toggle: () => void; replay?: () => void; resolved: boolean;
 }) {
-  const load = resolved ? undefined : platform.loadWorkflowScreenshot;
+  const load = resolved || isEmbeddedScreenshot(capture) ? undefined : platform.loadWorkflowScreenshot;
   const preview = useSourceScreenshot(stage, !load, load, capture);
-  // Desktop images always resolve through the recorder, including legacy embedded images.
+  // Desktop recorder frames always resolve through the recorder, including
+  // legacy positive-ID copies. Only scripted negative-ID images use their own pixels.
   const url = load ? preview.image?.dataUrl : capture.dataUrl;
   const [failed, setFailed] = useState(false);
   const [ratio, setRatio] = useState("16 / 10");
