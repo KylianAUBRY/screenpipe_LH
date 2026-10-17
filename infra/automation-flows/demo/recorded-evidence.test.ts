@@ -77,4 +77,23 @@ describe("demo task evidence from this machine's recordings", () => {
     expect(api.auth.length).toBeGreaterThan(0);
     expect(api.auth.every(header => header === `Bearer ${KEY}`)).toBe(true);
   });
+
+  it("picks the opened email and the Jira window, inside the recording, at the frame nearest each key frame", async () => {
+    const at = (iso: string, frame: Frame, frame_id: number): Frame => ({ ...frame, frame_id, timestamp: iso });
+    const inbox: Frame = { ...R1_EMAIL, frame_id: 7000, timestamp: "2026-10-17T02:05:41Z",
+      window_name: "Boîte de réception (3) - servicedesk.novadesk@gmail.com - Gmail", text: "Export des contacts vide dans NovaCRM NovaPay refuse les montants avec centimes" };
+    // Jira's own notification email quotes the ticket, but in Gmail.
+    const notification: Frame = { ...R1_EMAIL, frame_id: 7153, timestamp: "2026-10-17T02:08:36.5Z",
+      window_name: "Boîte de réception (4) - servicedesk.novadesk@gmail.com - Gmail", text: R1_TICKET.text };
+    // Filling the form produces many frames before the key frame (more than one page of results).
+    const typing = Array.from({ length: 25 }, (_, i) => at(new Date(Date.parse("2026-10-17T02:07:08Z") + i * 2000).toISOString(), R1_FORM, 7110 + i));
+    const api = fakeScreenpipe([
+      inbox, at("2026-10-17T02:04:58.100Z", R1_EMAIL, 7090), at("2026-10-17T02:05:40.902Z", R1_EMAIL, 7102),
+      at("2026-10-17T02:25:00Z", R1_EMAIL, 7900), // after the recording window
+      ...typing, at("2026-10-17T02:08:01.200Z", R1_FORM, 7141),
+      notification, at("2026-10-17T02:08:38.100Z", R1_TICKET, 7154), at("2026-10-17T02:12:30Z", R1_TICKET, 7300),
+    ]);
+    const { task } = await buildDemoTask(now, { url: api.url, key: KEY });
+    expect(task.stages[0].screenshots!.map(image => image.frameId)).toEqual([7102, 7141, 7154]);
+  });
 });
