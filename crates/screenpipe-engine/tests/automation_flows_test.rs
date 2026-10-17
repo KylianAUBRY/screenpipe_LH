@@ -1211,6 +1211,72 @@ async fn activation_needs_the_version_the_user_reviewed() {
 }
 
 #[tokio::test]
+async fn state_changing_routes_take_only_json_requests() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let flow_uri = format!("/automation-flows/{id}");
+    let activate = format!("/automation-flows/{id}/activate");
+    let deactivate = format!("/automation-flows/{id}/deactivate");
+    app.ui_call("POST", &activate, Some(json!({"versionId": "version-1"})))
+        .await;
+    let writes = n8n_writes(&server).await;
+
+    // What a web page can send cross-site without a CORS preflight, or a
+    // request with no type at all.
+    let ui_key = app.ui_key.as_ref().unwrap().expose();
+    for content_type in [
+        None,
+        Some("text/plain"),
+        Some("application/x-www-form-urlencoded"),
+    ] {
+        for (method, uri, body) in [
+            (
+                "POST",
+                "/automation-flows",
+                json!({"workflow": chat_workflow(), "summary": "Résumé."}),
+            ),
+            (
+                "POST",
+                "/automation-flows/from-task",
+                json!({"taskId": TASK_ID, "answers": {}}),
+            ),
+            ("PUT", flow_uri.as_str(), json!({"workflow": chat_workflow()})),
+            ("POST", activate.as_str(), json!({"versionId": "version-1"})),
+            ("POST", deactivate.as_str(), json!({})),
+        ] {
+            let mut headers = vec![(ACTIVATION_HEADER, ui_key)];
+            headers.extend(content_type.map(|value| ("content-type", value)));
+            let (status, answer) = app.send(method, uri, &headers, Some(body)).await;
+            assert_eq!(
+                status,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "{method} {uri} {content_type:?}: {answer}"
+            );
+            assert_eq!(answer["error"], "json_required", "{method} {uri}");
+        }
+    }
+    assert_eq!(n8n_writes(&server).await, writes);
+    assert_eq!(n8n.workflows()[0]["active"], true);
+
+    // Reading needs no type; switching off stays open to any local caller.
+    let (status, _) = app.send("GET", &flow_uri, &[], None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, flow) = app
+        .send(
+            "POST",
+            &deactivate,
+            &[("content-type", "application/json; charset=utf-8")],
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["status"], "paused");
+}
+
+#[tokio::test]
 async fn without_the_desktop_app_no_flow_can_be_activated() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::headless().await;

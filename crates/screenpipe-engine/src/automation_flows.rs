@@ -23,8 +23,9 @@
 
 use crate::atomic_file;
 use axum::{
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Path, Request, State},
+    http::{header, HeaderMap, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -200,7 +201,25 @@ where
         .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
         .route("/:id/deactivate", post(deactivate_flow))
+        .layer(middleware::from_fn(require_json))
         .with_state(state)
+}
+
+/// Every state-changing route takes only JSON. A web page cannot send that
+/// type cross-site without a CORS preflight, which the engine refuses for
+/// non-local origins, so it cannot switch a Flow off or change one.
+async fn require_json(request: Request, next: Next) -> Response {
+    let json = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|essence| essence.trim().eq_ignore_ascii_case("application/json"));
+    if request.method().is_safe() || json {
+        next.run(request).await
+    } else {
+        FlowError::JsonRequired.into_response()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +332,8 @@ enum FlowError {
     ActivationRequiresUser,
     /// Activation without the `versionId` the user reviewed.
     VersionRequired,
+    /// A state-changing request that is not `Content-Type: application/json`.
+    JsonRequired,
 }
 
 impl IntoResponse for FlowError {
@@ -351,6 +372,13 @@ impl IntoResponse for FlowError {
                 json!({
                     "error": "version_required",
                     "detail": "send the `versionId` of the Flow the user reviewed",
+                }),
+            ),
+            FlowError::JsonRequired => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                json!({
+                    "error": "json_required",
+                    "detail": "send `Content-Type: application/json`",
                 }),
             ),
             FlowError::Internal(detail) => {
