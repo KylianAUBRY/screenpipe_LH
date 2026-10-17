@@ -19,7 +19,7 @@ describe("demo Detected Task", () => {
   it("has three repetitions, each with its email, Jira form and created ticket", () => {
     expect(task.id).toBe(DEMO_TASK_ID);
     expect(task.stages.map(stage => stage.name)).toEqual([
-      expect.stringContaining("NOVA-25 (Bug)"), expect.stringContaining("NOVA-26 (Bug)"), expect.stringContaining("NOVA-27 (Tâche)"),
+      expect.stringContaining("NOVA-25 (Bug)"), expect.stringContaining("NOVA-26 (Bug)"), expect.stringContaining("NOVA-27 (Task)"),
     ]);
     for (const stage of task.stages) expect(stage.screenshots!.map(image => image.app)).toEqual(["Gmail", "Jira", "Jira"]);
     expect(task.openQuestions).toEqual(CLARIFICATION_QUESTIONS);
@@ -42,7 +42,7 @@ describe("demo Detected Task", () => {
 
   it("notification opens the Task Page through the existing workflows deeplink", () => {
     const payload = notificationPayload(1);
-    expect(payload.actions).toEqual([{ type: "deeplink", label: "Voir la tâche", url: DEMO_TASK_URL, primary: true }]);
+    expect(payload.actions).toEqual([{ type: "deeplink", label: "View task", url: DEMO_TASK_URL, primary: true }]);
     expect(DEMO_TASK_URL).toBe("screenpipe://workflows?workflow=wf-novadesk-support-tickets&source=notification");
     expect(notificationPayload(2).id).not.toBe(payload.id);
   });

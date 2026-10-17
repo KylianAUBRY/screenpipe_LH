@@ -1010,21 +1010,21 @@ async fn each_step_lists_the_facts_the_ai_did_not_write() {
             .clone()
     };
     assert_eq!(
-        facts("Créer le ticket Jira"),
+        facts("Create the Jira ticket"),
         json!([
-            "Identifiant n8n : NovaDesk Jira",
+            "n8n credential: NovaDesk Jira",
             "POST kylianaubry.atlassian.net"
         ])
     );
     assert_eq!(
-        facts("Nouvel email support"),
-        json!(["Identifiant n8n : NovaDesk Gmail (IMAP)"])
+        facts("New support email"),
+        json!(["n8n credential: NovaDesk Gmail (IMAP)"])
     );
-    assert_eq!(facts("Ticket nécessaire"), json!([]));
+    assert_eq!(facts("Ticket needed"), json!([]));
     // n8n's default method; a URL built at run time has no host to show.
     assert_eq!(
         facts("Appeler le webhook"),
-        json!(["GET (adresse calculée à l'exécution)"])
+        json!(["GET (address worked out when it runs)"])
     );
 }
 
@@ -1449,6 +1449,54 @@ async fn deactivation_is_logged_as_the_users_only_with_the_ui_credential() {
         &event("deactivated", "version-1", "user")
     );
     assert_eq!(n8n.workflows()[0]["active"], false);
+}
+
+#[tokio::test]
+async fn dismiss_sets_a_flow_aside_until_restored_and_never_hides_a_running_one() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let dismiss = format!("/automation-flows/{id}/dismiss");
+    let restore = format!("/automation-flows/{id}/restore");
+
+    // A Draft is set aside: the list says so, n8n is untouched.
+    let (status, flow) = app.ui_call("POST", &dismiss, None).await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["status"], "dismissed");
+    let (_, list) = app.call("GET", "/automation-flows", None).await;
+    assert_eq!(list[0]["status"], "dismissed");
+    assert_eq!(n8n.workflows()[0]["active"], false);
+
+    // A second click logs nothing more; Restore gives back its status.
+    app.ui_call("POST", &dismiss, None).await;
+    let (status, flow) = app.ui_call("POST", &restore, None).await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(
+        events(&flow),
+        vec![
+            event("dismissed", "version-1", "user"),
+            event("restored", "version-1", "user")
+        ]
+    );
+
+    // A Flow n8n runs must be paused first.
+    app.ui_call(
+        "POST",
+        &format!("/automation-flows/{id}/activate"),
+        Some(json!({"versionId": "version-1"})),
+    )
+    .await;
+    let (status, body) = app.ui_call("POST", &dismiss, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "flow_active");
+    let (_, flow) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    assert_eq!(flow["status"], "active");
+    assert_eq!(events(&flow).last().unwrap(), &event("activated", "version-1", "user"));
 }
 
 #[tokio::test]
@@ -2170,8 +2218,8 @@ async fn chat_update_keeps_the_users_credentials_and_never_takes_the_chats() {
     app.configure_n8n(&server.uri());
     let (_, created) = app.create_from_task().await;
     let id = created["id"].as_str().unwrap().to_string();
-    let jira = "Créer le ticket Jira";
-    let imap = "Nouvel email support";
+    let jira = "Create the Jira ticket";
+    let imap = "New support email";
     let user_jira = credentials_of(&n8n.workflows()[0], jira);
     let user_imap = credentials_of(&n8n.workflows()[0], imap);
     assert!(user_jira.is_object() && user_imap.is_object());
@@ -2198,7 +2246,7 @@ async fn chat_update_keeps_the_users_credentials_and_never_takes_the_chats() {
         }));
         let model = nodes
             .iter_mut()
-            .find(|n| n["name"] == "Modèle IA ScreenPipe")
+            .find(|n| n["name"] == "screenpipe AI model")
             .unwrap();
         model["type"] = json!("@n8n/n8n-nodes-langchain.lmChatAnthropic");
     });
@@ -2215,7 +2263,7 @@ async fn chat_update_keeps_the_users_credentials_and_never_takes_the_chats() {
     assert_eq!(credentials_of(&stored, jira), user_jira);
     assert_eq!(credentials_of(&stored, imap), user_imap);
     assert_eq!(credentials_of(&stored, "Prévenir l'équipe"), Value::Null);
-    assert_eq!(credentials_of(&stored, "Modèle IA ScreenPipe"), Value::Null);
+    assert_eq!(credentials_of(&stored, "screenpipe AI model"), Value::Null);
 }
 
 #[tokio::test]

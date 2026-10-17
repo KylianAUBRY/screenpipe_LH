@@ -36,14 +36,14 @@ export function notificationPayload(now = Date.now()) {
   return {
     // Unique per run: the route drops a repeated id ("Notification already sent").
     id: `automation-flows-demo:${DEMO_TASK_ID}:${now}`,
-    title: "Tâche répétitive détectée",
-    body: "Tu as transformé 3 e-mails de bug en tickets Jira NOVA. Réponds à 2 questions pour l'automatiser.",
+    title: "Repetitive task detected",
+    body: "You turned 3 bug emails into NOVA Jira tickets. Answer 2 questions to automate it.",
     type: "pipe",
     priority: "normal",
     transient: false,
     autoDismissMs: 60_000,
     source_url: DEMO_TASK_URL,
-    actions: [{ type: "deeplink", label: "Voir la tâche", url: DEMO_TASK_URL, primary: true }],
+    actions: [{ type: "deeplink", label: "View task", url: DEMO_TASK_URL, primary: true }],
   };
 }
 
@@ -62,7 +62,7 @@ async function notify() {
       ? "The same alert was shown less than 90 s ago; wait and retry."
       : "Check ScreenPipe Settings > Notifications (pipe notifications, pause, quiet hours)."}`);
   }
-  console.log("Notification shown. Click « Voir la tâche » to open the Task Page.");
+  console.log("Notification shown. Click “View task” to open the Task Page.");
 }
 
 function printEvidence(evidence: Awaited<ReturnType<typeof buildDemoTask>>["evidence"]) {

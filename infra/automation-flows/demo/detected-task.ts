@@ -14,8 +14,8 @@ export const DEMO_TASK_URL = `screenpipe://workflows?workflow=${DEMO_TASK_ID}&so
 
 /** D10: the only Clarification Questions, verbatim. */
 export const CLARIFICATION_QUESTIONS = [
-  "Les idées d'amélioration (comme NOVA-27) doivent-elles aussi devenir des tickets ?",
-  "Comment choisis-tu la priorité ?",
+  "Should improvement ideas (like NOVA-27) become tickets too?",
+  "How do you choose the priority?",
 ];
 
 type Capture = { image: string; at: string; app: "Gmail" | "Jira"; quote: string };
@@ -38,39 +38,39 @@ type Repetition = {
 
 const REPETITIONS: Repetition[] = [
   {
-    name: "Répétition 1 · Arthur Noteris → NOVA-25 (Bug)",
-    description: "L'e-mail « Export des contacts vide dans NovaCRM » devient le Bug NOVA-25, priorité Highest, attribué à Nils Laeremans, étiquette back.",
+    name: "Repetition 1 · Arthur Noteris → NOVA-25 (Bug)",
+    description: "The email \"Export des contacts vide dans NovaCRM\" becomes Bug NOVA-25, priority Highest, assigned to Nils Laeremans, label back.",
     email: { image: "r1-email", at: "2026-10-17T02:05:41Z", app: "Gmail", quote: "Export des contacts vide dans NovaCRM" },
     form: { image: "r1-form", at: "2026-10-17T02:08:01Z", app: "Jira", quote: "NovaCRM - Export CSV des contacts filtres vide (en-tetes seuls)" },
     ticket: { image: "r1-ticket", at: "2026-10-17T02:08:36Z", app: "Jira", quote: "NOVA-25 NovaCRM - Export CSV des contacts filtres vide (en-tetes seuls)" },
     procedure: {
-      email: "Lire l'e-mail d'Arthur Noteris : l'export CSV des contacts est vide, c'est un défaut bloquant.",
-      form: "Créer un Bug dans NOVA : titre « NovaCRM - … », description reprise de l'e-mail, Highest, Nils Laeremans, étiquette back.",
-      ticket: "Vérifier le ticket NOVA-25 créé.",
+      email: "Read Arthur Noteris's email: the CSV export of contacts is empty, a blocking defect.",
+      form: "Create a Bug in NOVA: title \"NovaCRM - …\", description taken from the email, Highest, Nils Laeremans, label back.",
+      ticket: "Check the created ticket NOVA-25.",
     },
   },
   {
-    name: "Répétition 2 · Loris Omont → NOVA-26 (Bug)",
-    description: "L'e-mail « NovaPay refuse les montants avec centimes » devient le Bug NOVA-26, priorité Medium (contournement possible), attribué à Arthur Noteris, étiquette back.",
+    name: "Repetition 2 · Loris Omont → NOVA-26 (Bug)",
+    description: "The email \"NovaPay refuse les montants avec centimes\" becomes Bug NOVA-26, priority Medium (a workaround exists), assigned to Arthur Noteris, label back.",
     email: { image: "r2-email", at: "2026-10-17T02:09:41Z", app: "Gmail", quote: "NovaPay refuse les montants avec centimes" },
     form: { image: "r2-form", at: "2026-10-17T02:10:43Z", app: "Jira", quote: "NovaPay - Montant avec virgule refuse dans une note de frais" },
     ticket: { image: "r2-ticket", at: "2026-10-17T02:10:50Z", app: "Jira", quote: "NOVA-26 NovaPay - Montant avec virgule refuse dans une note de frais" },
     procedure: {
-      email: "Lire l'e-mail de Loris Omont : un montant avec virgule est refusé, le point fonctionne en contournement.",
-      form: "Créer un Bug dans NOVA : titre « NovaPay - … », description reprise de l'e-mail, Medium, Arthur Noteris, étiquette back.",
-      ticket: "Vérifier le ticket NOVA-26 créé.",
+      email: "Read Loris Omont's email: an amount with a comma is refused; a dot works as a workaround.",
+      form: "Create a Bug in NOVA: title \"NovaPay - …\", description taken from the email, Medium, Arthur Noteris, label back.",
+      ticket: "Check the created ticket NOVA-26.",
     },
   },
   {
-    name: "Répétition 3 · Nils L. → NOVA-27 (Tâche)",
-    description: "L'idée « filtrer les clients par date de dernière relance » devient la Tâche NOVA-27, priorité Low, attribuée à Arthur Noteris, étiquette front, demandeur Nils Laeremans.",
+    name: "Repetition 3 · Nils L. → NOVA-27 (Task)",
+    description: "The idea \"filtrer les clients par date de dernière relance\" becomes Task NOVA-27, priority Low, assigned to Arthur Noteris, label front, requested by Nils Laeremans.",
     email: { image: "r3-email", at: "2026-10-17T02:12:56Z", app: "Gmail", quote: "Idée : filtrer les clients par date de dernière relance" },
     form: { image: "r3-form", at: "2026-10-17T02:14:02Z", app: "Jira", quote: "NovaCRM - Filtre \"Derniere relance\" enregistrable dans la liste clients" },
     ticket: { image: "r3-ticket", at: "2026-10-17T02:15:11Z", app: "Jira", quote: "NOVA-27 NovaCRM - Filtre \"Derniere relance\" enregistrable dans la liste clients" },
     procedure: {
-      email: "Lire l'e-mail de Nils L. : ce n'est pas un défaut mais une idée d'amélioration.",
-      form: "Créer une Tâche dans NOVA : titre « NovaCRM - … », description reprise de l'e-mail, Low, Arthur Noteris, étiquette front.",
-      ticket: "Renseigner le demandeur (Nils Laeremans) sur le ticket NOVA-27 créé.",
+      email: "Read Nils L.'s email: not a defect but an improvement idea.",
+      form: "Create a Task in NOVA: title \"NovaCRM - …\", description taken from the email, Low, Arthur Noteris, label front.",
+      ticket: "Fill in the requester (Nils Laeremans) on the created ticket NOVA-27.",
     },
   },
 ];
@@ -145,12 +145,12 @@ export function buildDetectedTask(dataUrl: (image: string) => string, now: strin
     revision: 1,
     rank: 1,
     analysisDays: 90,
-    title: "Transformer les e-mails de bug en tickets Jira",
-    description: "Pour chaque e-mail de support qui signale un bug ou propose une amélioration, tu crées un ticket dans le projet Jira NOVA : titre « <Produit> - <résumé court> », Bug pour un défaut ou Tâche pour une idée, description qui reprend l'e-mail, priorité et étiquette back ou front.",
+    title: "Turn bug emails into Jira tickets",
+    description: "For each support email that reports a bug or suggests an improvement, you create a ticket in the Jira project NOVA: title \"<Product> - <short summary>\", Bug for a defect or Task for an idea, a description taken from the email, priority and a back or front label.",
     repetitions: REPETITIONS.length,
     frequency: "",
-    trigger: "Un e-mail de bug ou d'idée d'amélioration arrive dans la boîte servicedesk.novadesk@gmail.com.",
-    outcome: "Un ticket NOVA avec le bon type, le titre « <Produit> - <résumé> », la priorité et l'étiquette.",
+    trigger: "A bug or improvement-idea email arrives in servicedesk.novadesk@gmail.com.",
+    outcome: "A NOVA ticket with the right type, the title \"<Product> - <summary>\", the priority and the label.",
     totalMinutes: 0,
     activeMinutes: 0,
     waitingMinutes: 0,
@@ -161,7 +161,7 @@ export function buildDetectedTask(dataUrl: (image: string) => string, now: strin
     apps: ["Gmail", "Jira"],
     people: ["Arthur Noteris", "Loris Omont", "Nils Laeremans"],
     handoffs: [],
-    variations: ["Une idée d'amélioration (NOVA-27) devient une Tâche en priorité Low, avec le demandeur renseigné."],
+    variations: ["An improvement idea (NOVA-27) becomes a Task with priority Low, with the requester filled in."],
     stages,
     bottlenecks: [],
     evidence,
@@ -177,7 +177,7 @@ export function buildDetectedTask(dataUrl: (image: string) => string, now: strin
       repeatedStageCoverage: 100,
       screenshotCount: -embeddedId,
       stageScreenshotCoverage: 100,
-      reasons: ["Trois répétitions observées le 17 octobre 2026"],
+      reasons: ["Three repetitions seen on October 17, 2026"],
     },
   };
 }
