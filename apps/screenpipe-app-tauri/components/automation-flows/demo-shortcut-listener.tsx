@@ -4,9 +4,12 @@
 "use client";
 
 // Runs the demo when the native ⌃⌥⌘D handler asks (it targets the Home window
-// only, see src-tauri/src/shortcuts.rs). Mounted in every non-overlay window.
+// only, see src-tauri/src/shortcuts.rs). Mounted in every non-overlay window,
+// so it listens on its own window: Tauri v2 delivers an `emit_to("home")` to
+// every global `listen()` (target `Any`), whatever the window, which would run
+// the demo once per open window.
 import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useToast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
 import { DEMO_SHORTCUT_EVENT, demoShortcutHandler } from "@/lib/automation-flows/demo-shortcut";
@@ -27,7 +30,7 @@ export function DemoShortcutListener() {
       openTask: openDemoTaskPage,
       tell: ({ title, description, destructive }) => tell(title, description, destructive),
     });
-    const unlisten = listen(DEMO_SHORTCUT_EVENT, () => {
+    const unlisten = getCurrentWebviewWindow().listen(DEMO_SHORTCUT_EVENT, () => {
       press().catch(error => tell("Démo non lancée", error instanceof Error ? error.message : String(error), true));
     });
     return () => { void unlisten.then(stop => stop()).catch(() => {}); };
