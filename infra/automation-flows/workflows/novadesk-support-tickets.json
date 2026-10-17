@@ -343,6 +343,21 @@
       "notesInFlow": true
     },
     {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000011",
+      "name": "Laisser Jira indexer",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "webhookId": "6d0f5c1e-0b7a-4c55-9f1e-01a0000011a1",
+      "position": [1180, 200],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 10,
+        "unit": "seconds"
+      },
+      "notes": "Avant de chercher à nouveau, n8n attend au moins dix secondes, car la recherche de Jira peut mettre quelques secondes à voir un ticket qui vient d'être créé.",
+      "notesInFlow": true
+    },
+    {
       "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000010",
       "name": "Création refusée par Jira",
       "type": "n8n-nodes-base.stopAndError",
@@ -408,9 +423,12 @@
     },
     "Création à vérifier": {
       "main": [
-        [{ "node": "Chercher le ticket de cet email", "type": "main", "index": 0 }],
+        [{ "node": "Laisser Jira indexer", "type": "main", "index": 0 }],
         [{ "node": "Création refusée par Jira", "type": "main", "index": 0 }]
       ]
+    },
+    "Laisser Jira indexer": {
+      "main": [[{ "node": "Chercher le ticket de cet email", "type": "main", "index": 0 }]]
     }
   },
   "settings": {

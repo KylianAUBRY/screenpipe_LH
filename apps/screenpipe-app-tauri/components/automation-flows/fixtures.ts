@@ -114,6 +114,13 @@ export const fixtureFlow: Flow = {
       sentence: "Si Jira répond par une erreur, n8n recherche le ticket avant de réessayer, car Jira a pu le créer malgré tout, et abandonne après trois essais.",
     },
     {
+      id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000011",
+      name: "Laisser Jira indexer",
+      type: "n8n-nodes-base.wait",
+      position: [1180, 200],
+      sentence: "Avant de chercher à nouveau, n8n attend au moins dix secondes, car la recherche de Jira peut mettre quelques secondes à voir un ticket qui vient d'être créé.",
+    },
+    {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000010",
       name: "Création refusée par Jira",
       type: "n8n-nodes-base.stopAndError",
@@ -134,7 +141,8 @@ export const fixtureFlow: Flow = {
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000d", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000e" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000e", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000007" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000007", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000f" },
-    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000f", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000d" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000f", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000011" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000011", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000d" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000f", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000010" },
   ],
   versionId: "fixture-version-1",

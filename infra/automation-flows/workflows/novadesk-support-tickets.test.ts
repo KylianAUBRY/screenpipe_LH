@@ -465,7 +465,14 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
 
     // Back to the search: a ticket Jira did create ends the run, else it is created again.
     const tryAgain = (runIndex: number) => evaluateIf(check, { $json: { error: JIRA_ERROR }, $runIndex: runIndex });
-    expect(next(check.name, 0)).toEqual([dedupeSearch().name]);
+    // Jira's JQL search is eventually consistent: an issue created a moment ago
+    // can be missing from it, so n8n waits before searching again.
+    const pause = workflow.nodes.find((n) => n.name === next(check.name, 0)[0])!;
+    expect(pause.type).toBe("n8n-nodes-base.wait");
+    expect(pause.parameters.resume ?? "timeInterval").toBe("timeInterval");
+    expect(pause.parameters.unit).toBe("seconds");
+    expect(Number(pause.parameters.amount)).toBeGreaterThanOrEqual(10);
+    expect(next(pause.name, 0)).toEqual([dedupeSearch().name]);
     expect(tryAgain(0)).toBe(true);
     expect(tryAgain(1)).toBe(true);
     // A Jira that keeps refusing the ticket fails the run after the third try, with its reason.
@@ -510,6 +517,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
       "n8n-nodes-base.set": 3.5,
       "n8n-nodes-base.httpRequest": 4.5,
       "n8n-nodes-base.stopAndError": 1,
+      "n8n-nodes-base.wait": 1.1,
       "n8n-nodes-base.stickyNote": 1,
       // Our custom node, loaded from infra/automation-flows/custom-nodes.
       "CUSTOM.screenPipeTool": 1,
