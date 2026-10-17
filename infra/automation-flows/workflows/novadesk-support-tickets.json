@@ -241,7 +241,7 @@
         "nodeCredentialType": "jiraSoftwareCloudApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ fields: { project: { key: 'NOVA' }, issuetype: { name: $json.output.type }, summary: $json.output.product + ' - ' + $json.output.summary, priority: { name: $json.output.priority }, labels: [ $json.output.label ], description: { type: 'doc', version: 1, content: [ { type: 'paragraph', content: [ { type: 'text', text: 'Email reçu par la boîte support :' } ] }, { type: 'codeBlock', content: [ { type: 'text', text: (e => ('De : ' + e.from + '\\nDate : ' + e.date + '\\nObjet : ' + e.subject + '\\n\\n' + (e.textPlain || e.textHtml || '')).slice(0, 20000))($('Nouvel email support').item.json) } ] } ] } } }) }}",
+        "jsonBody": "={{ JSON.stringify({ fields: { project: { key: 'NOVA' }, issuetype: { name: $json.output.type }, summary: $json.output.product + ' - ' + $json.output.summary, priority: { name: $json.output.priority }, labels: [ $json.output.label, (e => 'mail-' + (String(e.metadata?.['message-id'] ?? '').trim() || [e.from, e.date, e.subject].join('|')).split('').reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261).toString(16).padStart(8, '0'))($('Nouvel email support').item.json) ], description: { type: 'doc', version: 1, content: [ { type: 'paragraph', content: [ { type: 'text', text: 'Email reçu par la boîte support :' } ] }, { type: 'codeBlock', content: [ { type: 'text', text: (e => ('De : ' + e.from + '\\nDate : ' + e.date + '\\nObjet : ' + e.subject + '\\n\\n' + (e.textPlain || e.textHtml || '')).slice(0, 20000))($('Nouvel email support').item.json) } ] } ] } } }) }}",
         "options": {}
       },
       "credentials": {

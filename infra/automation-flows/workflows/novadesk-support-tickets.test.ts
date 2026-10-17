@@ -346,7 +346,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(issue.fields.issuetype).toEqual({ name: "Bug" });
     expect(issue.fields.summary).toBe("NovaCRM - Export CSV des contacts filtrés vide");
     expect(issue.fields.priority).toEqual({ name: "Highest" });
-    expect(issue.fields.labels).toEqual(["back"]);
+    expect(issue.fields.labels).toEqual(["back", expect.stringMatching(/^mail-[0-9a-f]{8}$/)]);
     const quoted = quotedEmail(issue.fields.description);
     expect(quoted).toContain(EMAIL.from);
     expect(quoted).toContain(EMAIL.subject);
@@ -392,6 +392,28 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     }
   });
 
+  test("every ticket carries the label mail-<first 8 hex of a hash of the email's Message-ID>", () => {
+    // FNV-1a 32-bit, published test vector: "foobar" hashes to bf9cf968.
+    expect(mailLabel({ ...EMAIL, metadata: { "message-id": "foobar" } })).toBe("mail-bf9cf968");
+    const label = mailLabel(EMAIL);
+    expect(label).toMatch(/^mail-[0-9a-f]{8}$/);
+    expect(jiraRequestFor(aiAnswer()).fields.labels).toEqual(["back", label]);
+    // The same email always gets the same label; it depends on the Message-ID only.
+    expect(mailLabel({ ...EMAIL, subject: "Autre objet", textPlain: "autre" })).toBe(label);
+    expect(mailLabel({ ...EMAIL, metadata: { "message-id": "<autre@mail.gmail.com>" } })).not.toBe(label);
+  });
+
+  test("an email without a Message-ID still gets its own label, from its sender, date and subject", () => {
+    const bare = { ...EMAIL, metadata: {} };
+    const label = mailLabel(bare);
+    expect(label).toMatch(/^mail-[0-9a-f]{8}$/);
+    expect(mailLabel({ ...bare, textPlain: "autre" })).toBe(label);
+    for (const other of [{ subject: "Autre objet" }, { from: "b@example.com" }, { date: "2026-10-18T04:04:00.000Z" }]) {
+      expect(mailLabel({ ...bare, ...other }), JSON.stringify(other)).not.toBe(label);
+    }
+    expect(mailLabel({ ...EMAIL, metadata: { "message-id": "  " } })).toBe(label);
+  });
+
   test("an improvement idea becomes a Tâche with the AI's priority and label", () => {
     const issue = jiraRequestFor(
       aiAnswer({ type: "Tâche", summary: "Filtre Dernière relance", priority: "Low", label: "front" }),
@@ -399,7 +421,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(issue.fields.issuetype).toEqual({ name: "Tâche" });
     expect(issue.fields.summary).toBe("NovaCRM - Filtre Dernière relance");
     expect(issue.fields.priority).toEqual({ name: "Low" });
-    expect(issue.fields.labels).toEqual(["front"]);
+    expect(issue.fields.labels).toEqual(["front", expect.stringMatching(/^mail-[0-9a-f]{8}$/)]);
   });
 
   test("calls the Jira Cloud REST API with the stored Jira credential", () => {
@@ -494,7 +516,7 @@ function walk(value: unknown, visit: (key: string, value: unknown) => void) {
  * Follows the graph from the "ticket needed" branch to the Jira request and
  * returns the JSON body n8n would send for this AI answer and EMAIL.
  */
-function jiraRequestFor(answer: ReturnType<typeof aiAnswer>, email: typeof EMAIL = EMAIL) {
+function jiraRequestFor(answer: ReturnType<typeof aiAnswer>, email: Email = EMAIL) {
   const trigger = onlyNode("n8n-nodes-base.emailReadImap");
   const gate = ticketGate();
   const nodes = { [trigger.name]: email };
@@ -511,6 +533,14 @@ function jiraRequestFor(answer: ReturnType<typeof aiAnswer>, email: typeof EMAIL
   // The gate passes the AI Agent's item on unchanged.
   const body = evaluate(request.parameters.jsonBody, { $json: { output: answer }, nodes });
   return (typeof body === "string" ? JSON.parse(body) : body) as { fields: Record<string, any> };
+}
+
+/** The `mail-` label the Jira request puts on the ticket for this email. */
+function mailLabel(email: Email): string {
+  const labels: string[] = jiraRequestFor(aiAnswer(), email).fields.labels;
+  const found = labels.filter((l) => l.startsWith("mail-"));
+  expect(found).toHaveLength(1);
+  return found[0];
 }
 
 /**
@@ -543,12 +573,23 @@ const REASON_MAX = 200;
 /** Jira Cloud refuses a description over 32 767 characters; the quoted email stays well below. */
 const DESCRIPTION_MAX = 20_000;
 
-const EMAIL = {
+type Email = {
+  from: string;
+  subject: string;
+  date: string;
+  textPlain: string;
+  textHtml: string;
+  /** Every header but cc, date, from, subject and to, lowercased (IMAP "simple" format). */
+  metadata?: Record<string, string>;
+};
+
+const EMAIL: Email = {
   from: "Arthur Test <arthur@example.com>",
   subject: "Export des contacts vide dans NovaCRM",
   date: "2026-10-17T04:04:00.000Z",
   textPlain: "Bonjour,\nL'export CSV des contacts filtrés ne contient que les en-têtes.\nMerci",
   textHtml: "<p>Bonjour</p>",
+  metadata: { "message-id": "<CAK7dQ9xYz1@mail.gmail.com>" },
 };
 
 const EMAIL_OPEN = "<email>";
@@ -664,7 +705,7 @@ function abstention(): N8nNode {
  * The request n8n would send to ScreenPipe's notify server for this AI answer
  * and email: URL, headers and the parsed JSON body.
  */
-function abstentionRequest(answer: Record<string, unknown>, email: typeof EMAIL = EMAIL, executionId = "4242") {
+function abstentionRequest(answer: Record<string, unknown>, email: Email = EMAIL, executionId = "4242") {
   const node = abstention();
   expect(node.type).toBe("n8n-nodes-base.httpRequest");
   expect(node.parameters.sendBody).toBe(true);
