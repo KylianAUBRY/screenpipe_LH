@@ -5,6 +5,25 @@ Read this first, then `AGENTS.md` (Hackathon mode), `CONTEXT.md`, `SPEC.md`,
 `automation-flows-spec.md`, the ticket files in `issues/`, `DEMO.md` (runbook)
 and `evidence/LIVE-CHECKS.md` (every live check with its observed result).
 
+## Flow front merge (branch `hackathon/flow-front`, 2026-10-17)
+
+The teammate front (archived `dev`) is being merged onto this one; plan and
+decisions in `flow-front-merge.md`. Not in `main` until approved, through a PR.
+
+- **English:** everything ScreenPipe writes is English (Flows screens, Task
+  Page creation block, chat skill, engine fact lines, demo task, notification,
+  Flow and node names, node sentences, summary). What was recorded stays as it
+  is: the French emails and Jira tickets in the captures and their quoted
+  subjects, and the tickets the AI creates (its instructions and the Jira
+  values such as « Tâche » are unchanged).
+- **Re-import the workflow** after pulling (`infra/automation-flows/import-workflow.sh`):
+  node names changed, so did the AI tool name (« screenpipe history », also
+  renamed in its instructions) and the IMAP trigger's static data key.
+- **Engine:** Dismiss / Restore (`POST /automation-flows/:id/dismiss|restore`,
+  status `dismissed`, 409 `flow_active` while on). Written without a Rust
+  toolchain: run `cargo test -p screenpipe-engine --test automation_flows_test`
+  before merging.
+
 ## Where the work is
 
 - **Branch:** `hackathon/automation-flows` on `origin` (KylianAUBRY/screenpipe_LH).
@@ -87,8 +106,9 @@ minutes).
 
 ## Known limits (not fixed, judged minor or team decisions)
 
-- The Flows UI and the Task Page creation block are French in JSX, not
-  through the app's localization (`useGT`): team decision for the demo.
+- The Flows UI and the Task Page creation block are hard-coded English in
+  JSX, not through the app's localization (`useGT`) (was French until the
+  Flow front merge).
 - The « Flow runs » mode of the ScreenPipe Trigger fires once when several
   runs happen between two polls (it watches the last execution).
 - The Flows list is the n8n workflows tagged `screenpipe-flow`: a workflow
