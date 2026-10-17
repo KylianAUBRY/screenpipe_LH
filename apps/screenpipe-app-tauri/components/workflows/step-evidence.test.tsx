@@ -137,6 +137,19 @@ describe("step evidence media", () => {
     expect(screen.queryByRole("region", { name: `Sources for ${stage.name}` })).not.toBeInTheDocument();
   });
 
+  it("shows embedded fixture images from their own pixels, without recorder lookup or replay", () => {
+    const embedded = { ...stage.screenshot!, frameId: -1, dataUrl: "data:image/webp;base64,AAAA" };
+    const withoutPixels = { ...embedded, frameId: -2, dataUrl: "" };
+    const load = vi.fn();
+    const open = vi.fn();
+    render(<WorkflowStepEvidence workflow={workflow} stage={{ ...stage, screenshot: null, screenshots: [embedded, withoutPixels] }} platform={{ loadWorkflowScreenshot: load, openCapturedMoment: open, loadWorkflowRecording: vi.fn() } as unknown as WorkflowsPlatform} />);
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    expect(screen.getByRole("img", { name: `Captured reference for ${stage.name}` })).toHaveAttribute("src", embedded.dataUrl);
+    expect(screen.queryByRole("button", { name: /recording/ })).not.toBeInTheDocument();
+    expect(load).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("opens verified captures in native Timeline without loading an inline video", async () => {
     const open = vi.fn().mockResolvedValue(undefined);
     const load = vi.fn();

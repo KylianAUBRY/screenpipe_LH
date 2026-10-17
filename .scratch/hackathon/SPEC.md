@@ -214,6 +214,21 @@ chaque ticket créé ».
   description → Jira JSON body), stopping before the HTTP call. One-off CLI runs need
   `docker exec -e N8N_RUNNERS_BROKER_PORT=5690 … n8n execute --id=…` (port 5679 is taken by the
   server).
+- ScreenPipe nodes (ticket 07): `packages/n8n-nodes-screenpipe`; `bun run install-n8n` builds,
+  copies into the custom-nodes folder the running container mounts (it may belong to another
+  checkout: the script reads `docker inspect`), and restarts n8n. Loaded types: `CUSTOM.screenPipe`
+  (palette, "Custom Nodes") and `CUSTOM.screenPipeTool` (AI → Tools); credential type
+  `screenpipeApi`. Credential shell `spScreenpipeApi1` ("ScreenPipe API (local)") was created by
+  `n8n import:credentials` with an empty API key; a human pastes the key in n8n. ScreenPipe's API
+  answers 403 without it. The demo workflow's AI Agent has the tool node "Historique ScreenPipe"
+  (`$fromAI` keywords, 5 results, 600 chars each, On Error: Continue).
+- Tool round trip through the AI proxy FAILS today: the proxy's tool calls have no `id`, so n8n
+  sends back the tool result with `tool_call_id: ""` and the proxy answers 400 ("malformed tool
+  call"). Verified with two raw requests through the stored OpenAI credential: same conversation
+  with `tool_call_id: ""` → 400, with `"call_1"` → 200. Fix (engine, `routes/cloud_proxy.rs`):
+  in non-streaming JSON responses, give every `choices[].message.tool_calls[]` a unique `id`
+  (e.g. `call_<uuid>`) and `type: "function"`, and set `finish_reason: "tool_calls"` when absent.
+  Until then the demo workflow fails at the AI step for any email where the agent calls the tool.
 
 ## Risks to check first (golden path)
 
