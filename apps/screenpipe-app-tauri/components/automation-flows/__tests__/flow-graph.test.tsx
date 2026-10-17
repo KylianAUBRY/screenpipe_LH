@@ -43,14 +43,14 @@ describe("Review Screen graph", () => {
     }
   });
 
-  it("shows the title in large type and at most two lines of the sentence; all of it on hover", async () => {
+  it("shows the title in large type and at most three lines of the sentence; all of it on hover", async () => {
     const graph = await renderGraph();
 
     for (const node of fixtureFlow.nodes) {
       const card = within(graph).getByTestId(`flow-node-${node.id}`);
-      expect(within(card).getByText(node.name).className).toContain("text-base");
+      expect(within(card).getByText(node.name).className).toContain("text-lg");
       const sentence = within(card).getByText(node.sentence!);
-      expect(sentence.className).toContain("line-clamp-2");
+      expect(sentence.className).toContain("line-clamp-3");
       expect(sentence.className).not.toContain("sr-only");
       expect(card.getAttribute("title")).toBe(node.sentence);
     }
