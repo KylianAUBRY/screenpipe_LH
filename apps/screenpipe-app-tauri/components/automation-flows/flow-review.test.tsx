@@ -70,11 +70,11 @@ describe("flow review screen", () => {
     expect(useAutomationFlowStore.getState().flows[flow.id]?.status).toBe("waiting");
   });
 
-  it("Not now moves the Flow to Dismissed and goes back to the list", () => {
+  it("Dismiss moves the Flow to Dismissed and goes back to the list", () => {
     const onBack = vi.fn();
     render(<FlowReview flow={flow} onBack={onBack} />);
 
-    fireEvent.click(screen.getByTestId("flow-not-now"));
+    fireEvent.click(screen.getByTestId("flow-dismiss"));
     expect(useAutomationFlowStore.getState().flows[flow.id]?.status).toBe("dismissed");
     expect(onBack).toHaveBeenCalled();
   });
@@ -85,7 +85,7 @@ describe("flow review screen", () => {
 
     expect(screen.getByTestId("flow-status").textContent).toContain("Dismissed");
     expect(screen.queryByTestId("flow-turn-on")).toBeNull();
-    expect(screen.queryByTestId("flow-not-now")).toBeNull();
+    expect(screen.queryByTestId("flow-dismiss")).toBeNull();
     fireEvent.click(screen.getByTestId("flow-restore"));
     expect(useAutomationFlowStore.getState().flows[flow.id]?.status).toBe("waiting");
     expect(screen.getByTestId("flow-turn-on")).toBeTruthy();
@@ -113,16 +113,5 @@ describe("flow review screen", () => {
     // Turning it on again stays an explicit action.
     expect((screen.getByTestId("flow-turn-on") as HTMLButtonElement).disabled).toBe(false);
     expect(useAutomationFlowStore.getState().flows[flow.id]?.status).not.toBe("running");
-  });
-
-  it("always shows the rules in the Flow's blocks, with the ones learned from the answers", () => {
-    useAutomationFlowStore.getState().setAnswer(flow.id, "pick-option", { choiceId: "option-b" });
-    render(<FlowReview flow={flow} onBack={() => {}} />);
-
-    const main = screen.getByTestId("flow-rules-main");
-    expect(main.textContent).toContain("Main rules");
-    expect(main.textContent).toContain("Case B");
-    expect(screen.getByTestId("flow-rules-other").textContent).toContain("Edge action");
-    expect(screen.queryByRole("button", { name: /Rules/ })).toBeNull();
   });
 });

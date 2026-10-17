@@ -1,24 +1,12 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-/** One "if → then" line of a Flow's rules, shown on the review screen. */
-export type FlowRule = {
-  /** Id of the `ruleGroups` entry this rule belongs to. */
-  group: string;
-  when: string;
-  then: string;
-  /** True when the rule comes from the user's own handling or answers. */
-  fromYou?: boolean;
-};
-
 export type FlowQuestionChoice = {
   id: string;
   /** Pill label. */
   label: string;
   /** Sentence shown once the question is answered with this choice. */
   answer: string;
-  /** Rule this answer adds, if any. */
-  rule?: FlowRule;
   /** Past cases that now match what the user did, once this choice is applied. */
   fixesReplay?: number;
 };
@@ -26,15 +14,11 @@ export type FlowQuestionChoice = {
 /** A point the AI could not settle alone. TURN ON stays disabled until each one is answered. */
 export type FlowQuestion = {
   id: string;
-  /** Short name used for the rule a free-text answer adds. */
-  topic: string;
   question: string;
   /** Where the question comes from, e.g. what the user said or did once. */
   context?: string;
   choices: FlowQuestionChoice[];
   placeholder?: string;
-  /** Rule group a free-text answer goes to. Defaults to the first group. */
-  ruleGroup?: string;
 };
 
 /** One time the user did the task by hand, shown as proof on the review screen. */
@@ -68,9 +52,6 @@ export type AutomationFlow = {
   /** The repetitions the Flow was learned from, oldest first. */
   evidence?: FlowEvidence[];
   questions: FlowQuestion[];
-  /** Titles of the rule blocks, in display order. */
-  ruleGroups: { id: string; title: string }[];
-  rules: FlowRule[];
   /** What the Flow handles, plural, used in the screen's text (e.g. "emails"). Defaults to "cases". */
   unit?: string;
   /** Replay of the Flow on the cases it was learned from, before any answer. */
@@ -82,5 +63,5 @@ export type AutomationFlow = {
 
 export type FlowAnswer = { choiceId: string } | { custom: string };
 
-/** "dismissed": the user said "Not now"; it stays listed and can be restored. */
+/** "dismissed": the user dismissed it; it stays listed and can be restored. */
 export type FlowStatus = "waiting" | "running" | "paused" | "dismissed";

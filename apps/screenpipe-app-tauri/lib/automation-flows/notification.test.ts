@@ -70,13 +70,13 @@ describe("automation flow notification", () => {
     delete (window as Window & { __SCREENPIPE_BROWSER_RUNTIME_INSTALLED__?: boolean }).__SCREENPIPE_BROWSER_RUNTIME_INSTALLED__;
   });
 
-  it("routes the link to the Recommendations tab with the Flow open", async () => {
+  it("routes the link to the Flow tab with the Flow open", async () => {
     const url = automationFlowDeeplink(flow.id);
     const showWindowActivated = vi.fn().mockResolvedValue(undefined);
     const emitEvent = vi.fn().mockResolvedValue(undefined);
 
     expect(windowForDeeplink(url)).toEqual({
-      Home: { page: "pipes&tab=recommendations&flow=example-flow" },
+      Home: { page: "pipes&tab=flows&flow=example-flow" },
     });
 
     await routeNotificationDeeplink(url, {
@@ -86,10 +86,10 @@ describe("automation flow notification", () => {
     });
 
     expect(showWindowActivated).toHaveBeenCalledWith({
-      Home: { page: "pipes&tab=recommendations&flow=example-flow" },
+      Home: { page: "pipes&tab=flows&flow=example-flow" },
     });
     expect(emitEvent).toHaveBeenCalledWith("navigate", {
-      url: "/home?section=pipes&tab=recommendations&flow=example-flow",
+      url: "/home?section=pipes&tab=flows&flow=example-flow",
     });
     expect(emitEvent).toHaveBeenCalledWith(OPEN_AUTOMATION_FLOW_EVENT, { flowId: flow.id });
     expect(emitEvent).not.toHaveBeenCalledWith("deep-link-received", url);

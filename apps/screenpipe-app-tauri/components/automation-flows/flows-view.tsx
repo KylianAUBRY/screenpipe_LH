@@ -25,11 +25,11 @@ const SHOW_TEST_TOOLS =
   process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_AUTOMATION_FLOW_TEST_TOOLS === "1";
 
 /**
- * Recommendations tab: proposed Automation Flows grouped by state, and the
+ * Flow tab: proposed Automation Flows grouped by state, and the
  * review screen of the open one. The open Flow is owned by the Automations
  * page so a notification click can open it; unknown ids show the list.
  */
-export function RecommendationsView({
+export function FlowsView({
   openFlowId,
   onOpenFlow,
 }: {
@@ -61,7 +61,7 @@ export function RecommendationsView({
     const { status, answers } = stateOf(flow);
     if (status === "running") return ui("on");
     if (status === "paused") return ui("paused");
-    if (status === "dismissed") return ui("not now");
+    if (status === "dismissed") return ui("dismissed");
     const count = pendingQuestions(flow, answers).length;
     if (count === 1) return ui("1 question to answer");
     return count ? ui("{count} questions to answer", { count }) : ui("ready to turn on");
@@ -96,7 +96,7 @@ export function RecommendationsView({
     <div className="space-y-6">
       {!loaded ? null : catalog.length === 0 ? (
         <div className="rounded-lg border border-border px-4 py-12 text-center" data-testid="flows-empty">
-          <p className="text-base font-medium">{ui("No recommendations yet")}</p>
+          <p className="text-base font-medium">{ui("No Flows yet")}</p>
           <p className="mt-1 text-sm text-muted-foreground">
             {ui("When screenpipe notices work you repeat, it proposes an automation here.")}
           </p>

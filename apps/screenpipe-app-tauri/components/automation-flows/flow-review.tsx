@@ -16,7 +16,6 @@ import {
   Workflow,
 } from "lucide-react";
 import { useGT } from "gt-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -35,7 +34,6 @@ import {
   hasCustomAnswer,
   pendingQuestions,
   replayScore,
-  ruleGroups,
 } from "@/lib/automation-flows/review";
 import { useAutomationFlowStore, useFlowReviewState } from "@/lib/automation-flows/store";
 import type { AutomationFlow, FlowStatus } from "@/lib/automation-flows/types";
@@ -75,7 +73,6 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
   const ready = canTurnOn(flow, answers);
   const running = status === "running";
   const dismissed = status === "dismissed";
-  const groups = ruleGroups(flow, answers);
   const score = replayScore(flow, answers);
   const unit = flow.unit || ui("cases");
 
@@ -122,7 +119,7 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
     }
   };
 
-  // "Not now" keeps the proposal, moved to the Dismissed group of the list.
+  // Dismiss keeps the proposal, moved to the Dismissed group of the list.
   const dismiss = () => {
     setStatus(flow.id, "dismissed");
     toast({ title: ui("Moved to Dismissed"), description: ui("You can restore it from the list.") });
@@ -136,7 +133,7 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
         className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
       >
         <ArrowLeft className="h-4 w-4" />
-        {ui("Back to recommendations")}
+        {ui("Back to Flow")}
       </button>
 
       {/* Header, pinned while scrolling so TURN ON / PAUSE stay in reach */}
@@ -176,9 +173,9 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
               variant="ghost"
               className={cn(HERO_BUTTON, "text-muted-foreground")}
               onClick={dismiss}
-              data-testid="flow-not-now"
+              data-testid="flow-dismiss"
             >
-              NOT NOW
+              DISMISS
             </Button>
           )}
           <Button size="sm" variant="outline" className={HERO_BUTTON} onClick={() => setGraphOpen(true)}>
@@ -294,7 +291,7 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
                     : ui("Your answers")}
               </h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                {ui("screenpipe could not settle these on its own. Your answers become rules.")}
+                {ui("screenpipe could not settle these on its own.")}
                 {hasCustomAnswer(flow, answers) ? ` ${ui("Your own answers apply to new {unit}.", { unit })}` : ""}
               </p>
             </div>
@@ -314,45 +311,6 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
           </section>
         </>
       )}
-
-      {/* Rules, always visible, grouped by what they decide */}
-      <section className="space-y-3" data-testid="flow-rules">
-        <div>
-          <h4 className={SECTION_LABEL}>{ui("Rules")}</h4>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {ui("What it follows each time it runs.")}
-          </p>
-        </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          {groups.map(({ id, title, rules }, index) => (
-            <div
-              key={id}
-              className={cn("rounded-lg border border-border", index === 0 && "md:col-span-2")}
-              data-testid={`flow-rules-${id}`}
-            >
-              <h5 className="border-b border-border px-4 py-2.5 text-sm font-medium">{title}</h5>
-              <ul className="divide-y divide-border">
-                {rules.map((rule) => (
-                  <li
-                    key={`${rule.when}-${rule.then}`}
-                    className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-6 gap-y-1 px-4 py-3 text-sm"
-                  >
-                    <span className="min-w-0 break-words">
-                      {rule.when}
-                      {rule.fromYou && (
-                        <Badge variant="outline" className="ml-2 align-middle text-[10px] px-1.5 py-0 font-normal rounded-sm">
-                          {ui("from you")}
-                        </Badge>
-                      )}
-                    </span>
-                    <span className="text-right font-medium">{rule.then}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      </section>
 
       <Dialog open={graphOpen} onOpenChange={setGraphOpen}>
         <DialogContent className="max-w-md">

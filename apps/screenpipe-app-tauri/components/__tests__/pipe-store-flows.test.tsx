@@ -22,7 +22,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
 vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
 
-describe("Automations > Recommendations", () => {
+describe("Automations > Flow", () => {
   beforeEach(() => {
     useAutomationFlowStore.getState().reset();
     useAutomationFlowStore.setState({ catalog: [EXAMPLE_FLOW], catalogLoaded: true });
@@ -32,8 +32,8 @@ describe("Automations > Recommendations", () => {
     window.history.replaceState({}, "", "/");
   });
 
-  it("opens the review screen from ?tab=recommendations&flow= and strips the query", () => {
-    window.history.replaceState({}, "", "/home?section=pipes&tab=recommendations&flow=example-flow");
+  it("opens the review screen from ?tab=flows&flow= and strips the query", () => {
+    window.history.replaceState({}, "", "/home?section=pipes&tab=flows&flow=example-flow");
     render(<PipeStoreView />);
 
     expect(screen.getByTestId("flow-questions")).toBeTruthy();
@@ -41,7 +41,7 @@ describe("Automations > Recommendations", () => {
   });
 
   it("keeps a requested tab even for users with no installed task", async () => {
-    window.history.replaceState({}, "", "/home?section=pipes&tab=recommendations");
+    window.history.replaceState({}, "", "/home?section=pipes&tab=flows");
     render(<PipeStoreView />);
 
     // The installed count (0) arrives after mount; it must not switch to Discover.

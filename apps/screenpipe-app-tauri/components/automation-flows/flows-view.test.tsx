@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EXAMPLE_FLOW } from "@/lib/automation-flows/__fixtures__/example-flow";
 import { localFileFlowSource, setFlowSource } from "@/lib/automation-flows/source";
 import { useAutomationFlowStore } from "@/lib/automation-flows/store";
-import { RecommendationsView } from "./recommendations-view";
+import { FlowsView } from "./flows-view";
 
 const mocks = vi.hoisted(() => ({ toast: vi.fn(), send: vi.fn() }));
 vi.mock("@/components/ui/use-toast", () => ({ useToast: () => ({ toast: mocks.toast }) }));
@@ -22,10 +22,10 @@ const ROW = `flow-row-${EXAMPLE_FLOW.id}`;
 
 function Harness({ initial = null }: { initial?: string | null }) {
   const [openFlowId, setOpenFlowId] = useState<string | null>(initial);
-  return <RecommendationsView openFlowId={openFlowId} onOpenFlow={setOpenFlowId} />;
+  return <FlowsView openFlowId={openFlowId} onOpenFlow={setOpenFlowId} />;
 }
 
-describe("recommendations tab", () => {
+describe("Flow tab", () => {
   beforeEach(() => {
     useAutomationFlowStore.getState().reset();
     useAutomationFlowStore.setState({ catalog: [EXAMPLE_FLOW], catalogLoaded: true });
@@ -85,7 +85,7 @@ describe("recommendations tab", () => {
     fireEvent.click(screen.getByTestId(ROW));
     expect(screen.getByText(EXAMPLE_FLOW.summary)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Back to recommendations" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to Flow" }));
     expect(screen.getByTestId(ROW)).toBeTruthy();
   });
 
@@ -104,7 +104,7 @@ describe("recommendations tab", () => {
 
     expect(screen.getByText("Dismissed")).toBeTruthy();
     expect(screen.queryByText("Waiting for you")).toBeNull();
-    expect(screen.getByTestId(ROW).textContent).toContain("not now");
+    expect(screen.getByTestId(ROW).textContent).toContain("dismissed");
 
     fireEvent.click(screen.getByTestId(`flow-restore-${EXAMPLE_FLOW.id}`));
     expect(screen.getByText("Waiting for you")).toBeTruthy();

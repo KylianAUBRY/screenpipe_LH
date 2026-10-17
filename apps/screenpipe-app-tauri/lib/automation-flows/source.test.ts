@@ -9,10 +9,10 @@ describe("automation flow source", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("keeps well-formed Flows, fills optional parts and drops the rest", () => {
-    const minimal = { id: "min", title: "Minimal", summary: "Does it.", questions: [], rules: [{ group: "g", when: "w", then: "t" }] };
+    const minimal = { id: "min", title: "Minimal", summary: "Does it.", questions: [] };
     const flows = parseAutomationFlows([EXAMPLE_FLOW, minimal, { id: "broken" }, "nope"]);
     expect(flows.map((flow) => flow.id)).toEqual(["example-flow", "min"]);
-    expect(flows[1]).toMatchObject({ checks: [], steps: [], ruleGroups: [{ id: "g", title: "g" }], n8n: { workflowId: null } });
+    expect(flows[1]).toMatchObject({ checks: [], steps: [], evidence: [], n8n: { workflowId: null } });
     expect(parseAutomationFlows({ not: "an array" })).toEqual([]);
   });
 

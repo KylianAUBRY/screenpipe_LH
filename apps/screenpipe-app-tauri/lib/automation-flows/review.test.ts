@@ -3,15 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { EXAMPLE_FLOW as flow } from "./__fixtures__/example-flow";
-import {
-  answerText,
-  canTurnOn,
-  effectiveRules,
-  hasCustomAnswer,
-  pendingQuestions,
-  replayScore,
-  ruleGroups,
-} from "./review";
+import { answerText, canTurnOn, hasCustomAnswer, pendingQuestions, replayScore } from "./review";
 
 const [pick, explain] = flow.questions;
 
@@ -37,18 +29,6 @@ describe("automation flow review", () => {
 
   it("ignores answers that point at an unknown choice", () => {
     expect(canTurnOn(flow, { [pick.id]: { choiceId: "nope" }, [explain.id]: { choiceId: "reason-y" } })).toBe(false);
-  });
-
-  it("adds the rules that come from the answers at the end of their group", () => {
-    const answers = { [pick.id]: { choiceId: "option-a" }, [explain.id]: { custom: "Because of Z" } };
-    const groups = ruleGroups(flow, answers);
-    expect(groups.map((group) => [group.id, group.title])).toEqual([
-      ["main", "Main rules"],
-      ["other", "Other rules"],
-    ]);
-    expect(groups[0].rules.map((rule) => rule.when)).toEqual(["Base case", "Case A", "Reasons: “Because of Z”"]);
-    expect(effectiveRules(flow, answers).filter((rule) => rule.fromYou)).toHaveLength(2);
-    expect(effectiveRules(flow, {})).toHaveLength(flow.rules.length);
   });
 
   it("raises the replay score only for answers that fix past cases", () => {

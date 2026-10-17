@@ -2,7 +2,7 @@
 // https://screenpipe.com
 import type { AutomationFlow, FlowEvidence } from "./types";
 
-/** Where the Recommendations tab gets its proposed Flows from. */
+/** Where the Flow tab gets its proposed Flows from. */
 export interface FlowSource {
   load(): Promise<AutomationFlow[]>;
 }
@@ -35,13 +35,9 @@ export function parseAutomationFlows(value: unknown): AutomationFlow[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item): AutomationFlow[] => {
     if (!isRecord(item)) return [];
-    const { id, title, summary, questions, rules } = item;
+    const { id, title, summary, questions } = item;
     if (typeof id !== "string" || typeof title !== "string" || typeof summary !== "string") return [];
-    if (!Array.isArray(questions) || !Array.isArray(rules)) return [];
-    const flowRules = rules as AutomationFlow["rules"];
-    const groups = Array.isArray(item.ruleGroups)
-      ? (item.ruleGroups as AutomationFlow["ruleGroups"])
-      : [...new Set(flowRules.map((rule) => rule.group))].map((group) => ({ id: group, title: group }));
+    if (!Array.isArray(questions)) return [];
     return [
       {
         id,
@@ -51,8 +47,6 @@ export function parseAutomationFlows(value: unknown): AutomationFlow[] {
         checks: Array.isArray(item.checks) ? (item.checks as string[]) : [],
         evidence: Array.isArray(item.evidence) ? item.evidence.filter(isEvidence) : [],
         questions: questions as AutomationFlow["questions"],
-        ruleGroups: groups,
-        rules: flowRules,
         unit: typeof item.unit === "string" ? item.unit : undefined,
         replay: isRecord(item.replay) ? (item.replay as AutomationFlow["replay"]) : undefined,
         steps: Array.isArray(item.steps) ? (item.steps as AutomationFlow["steps"]) : [],

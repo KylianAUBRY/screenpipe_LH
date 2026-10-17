@@ -76,19 +76,19 @@ import { useGT } from "gt-react";
 import { msg, useMessages } from "gt-react";
 import { localizeDefinitions } from "@/lib/i18n/definitions";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
-import { RecommendationsView } from "@/components/automation-flows/recommendations-view";
+import { FlowsView } from "@/components/automation-flows/flows-view";
 import { OPEN_AUTOMATION_FLOW_EVENT } from "@/lib/automation-flows/notification";
 
-type PipesTab = "discover" | "my-pipes" | "recommendations";
-const PIPES_TABS: readonly PipesTab[] = ["discover", "my-pipes", "recommendations"];
+type PipesTab = "discover" | "my-pipes" | "flows";
+const PIPES_TABS: readonly PipesTab[] = ["discover", "my-pipes", "flows"];
 
-/** `?tab=` (and `?flow=` for Recommendations) requested when the view mounts. */
+/** `?tab=` (and `?flow=` for the Flow tab) requested when the view mounts. */
 function pipesTabRequestFromUrl(): { tab: PipesTab | null; flowId: string | null } {
   if (typeof window === "undefined") return { tab: null, flowId: null };
   const params = new URLSearchParams(window.location.search);
   const tab = params.get("tab");
   const valid = tab && (PIPES_TABS as readonly string[]).includes(tab) ? (tab as PipesTab) : null;
-  return { tab: valid, flowId: valid === "recommendations" ? params.get("flow") : null };
+  return { tab: valid, flowId: valid === "flows" ? params.get("flow") : null };
 }
 
 
@@ -367,7 +367,7 @@ export function PipeStoreView() {
 
   const [urlRequest] = useState(pipesTabRequestFromUrl);
   const [activeTab, setActiveTabState] = useState<PipesTab>(urlRequest.tab ?? "my-pipes");
-  // Automation Flow open in the Recommendations tab (review screen), or null for the list.
+  // Automation Flow open in the Flow tab (review screen), or null for the list.
   const [openFlowId, setOpenFlowId] = useState<string | null>(urlRequest.flowId);
   // Set once a tab is chosen explicitly, so the new-user default never overrides it.
   const tabChosen = useRef(urlRequest.tab !== null);
@@ -383,7 +383,7 @@ export function PipeStoreView() {
 
   // A notification click opens a Flow review, even when this view is already mounted.
   useTauriEvent<{ flowId: string }>(OPEN_AUTOMATION_FLOW_EVENT, (event) => {
-    setActiveTab("recommendations");
+    setActiveTab("flows");
     setOpenFlowId(event.payload.flowId);
   });
 
@@ -407,7 +407,7 @@ export function PipeStoreView() {
   const tabs = [
     { key: "my-pipes" as const, label: ui("My tasks") },
     { key: "discover" as const, label: ui("Discover") },
-    { key: "recommendations" as const, label: ui("Recommendations") },
+    { key: "flows" as const, label: ui("Flow") },
   ];
 
   return (
@@ -415,7 +415,7 @@ export function PipeStoreView() {
       <p className="text-sm text-muted-foreground">
         {activeTab === "discover"
           ? ui("Browse, install, and review community automations")
-          : activeTab === "recommendations"
+          : activeTab === "flows"
             ? ui("Automations screenpipe built from work you repeat. Nothing runs until you turn it on.")
             : ui("Run tasks on a schedule, after meetings, or when events happen.")}
       </p>
@@ -447,8 +447,8 @@ export function PipeStoreView() {
       {/* Tab content */}
       {activeTab === "discover" ? (
         <DiscoverView onInstalled={() => setActiveTab("my-pipes")} />
-      ) : activeTab === "recommendations" ? (
-        <RecommendationsView openFlowId={openFlowId} onOpenFlow={setOpenFlowId} />
+      ) : activeTab === "flows" ? (
+        <FlowsView openFlowId={openFlowId} onOpenFlow={setOpenFlowId} />
       ) : (
         <PipesSection />
       )}

@@ -13,46 +13,23 @@ export const EXAMPLE_FLOW: AutomationFlow = {
   questions: [
     {
       id: "pick-option",
-      topic: "Options",
       question: "Which option should apply?",
       context: "Seen once",
-      ruleGroup: "main",
       choices: [
-        {
-          id: "option-a",
-          label: "Option A",
-          answer: "Option A applies",
-          rule: { group: "main", when: "Case A", then: "Do A", fromYou: true },
-          fixesReplay: 1,
-        },
-        {
-          id: "option-b",
-          label: "Option B",
-          answer: "Option B applies",
-          rule: { group: "main", when: "Case B", then: "Do B", fromYou: true },
-        },
+        { id: "option-a", label: "Option A", answer: "Option A applies", fixesReplay: 1 },
+        { id: "option-b", label: "Option B", answer: "Option B applies" },
         { id: "neither", label: "Neither", answer: "Nothing changes" },
       ],
-      placeholder: "Describe the rule",
+      placeholder: "Describe what it should do",
     },
     {
       id: "explain",
-      topic: "Reasons",
       question: "Why did you do it differently?",
-      ruleGroup: "main",
       choices: [
         { id: "reason-x", label: "Reason X", answer: "Reason X applies", fixesReplay: 1 },
         { id: "reason-y", label: "Reason Y", answer: "Reason Y applies" },
       ],
     },
-  ],
-  ruleGroups: [
-    { id: "main", title: "Main rules" },
-    { id: "other", title: "Other rules" },
-  ],
-  rules: [
-    { group: "main", when: "Base case", then: "Base action" },
-    { group: "other", when: "Edge case", then: "Edge action" },
   ],
   replay: { total: 4, matched: 2 },
   steps: [{ title: "Step one", detail: "first" }],

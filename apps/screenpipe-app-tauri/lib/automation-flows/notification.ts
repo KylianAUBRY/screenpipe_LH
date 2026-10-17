@@ -24,9 +24,9 @@ export function automationFlowLink(value: string): { flowId: string } | null {
   }
 }
 
-/** Home page query that shows the Recommendations tab with this Flow open. */
+/** Home page query that shows the Flow tab with this Flow open. */
 export function automationFlowHomeQuery(flowId: string): string {
-  return new URLSearchParams({ section: "pipes", tab: "recommendations", flow: flowId }).toString();
+  return new URLSearchParams({ section: "pipes", tab: "flows", flow: flowId }).toString();
 }
 
 /**

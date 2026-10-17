@@ -1,6 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
-import type { AutomationFlow, FlowAnswer, FlowQuestion, FlowRule } from "./types";
+import type { AutomationFlow, FlowAnswer, FlowQuestion } from "./types";
 
 export type FlowAnswers = Record<string, FlowAnswer | undefined>;
 
@@ -29,51 +29,6 @@ export function answerText(question: FlowQuestion, answer: FlowAnswer | undefine
   if (!validAnswer(question, answer) || !answer) return null;
   if (isCustom(answer)) return `Your answer: “${answer.custom.trim()}”`;
   return question.choices.find((choice) => choice.id === answer.choiceId)?.answer ?? null;
-}
-
-/** Group ids in display order: the declared ones, then any only rules use. */
-function groupOrder(flow: AutomationFlow, rules: FlowRule[]): string[] {
-  return [...new Set([...flow.ruleGroups.map((group) => group.id), ...rules.map((rule) => rule.group)])];
-}
-
-/** Base rules plus the ones added by the user's answers, in reading order. */
-export function effectiveRules(flow: AutomationFlow, answers: FlowAnswers): FlowRule[] {
-  const added: FlowRule[] = [];
-  for (const question of flow.questions) {
-    const answer = answers[question.id];
-    if (!validAnswer(question, answer) || !answer) continue;
-    if (isCustom(answer)) {
-      added.push({
-        group: question.ruleGroup ?? flow.ruleGroups[0]?.id ?? "rules",
-        when: `${question.topic}: “${answer.custom.trim()}”`,
-        then: "As you wrote it",
-        fromYou: true,
-      });
-    } else {
-      const rule = question.choices.find((choice) => choice.id === answer.choiceId)?.rule;
-      if (rule) added.push(rule);
-    }
-  }
-  // Each learned rule sits at the end of the group it adjusts.
-  return groupOrder(flow, [...flow.rules, ...added]).flatMap((group) => [
-    ...flow.rules.filter((rule) => rule.group === group),
-    ...added.filter((rule) => rule.group === group),
-  ]);
-}
-
-/** Rules split into the Flow's blocks, empty blocks left out. */
-export function ruleGroups(
-  flow: AutomationFlow,
-  answers: FlowAnswers,
-): { id: string; title: string; rules: FlowRule[] }[] {
-  const rules = effectiveRules(flow, answers);
-  return groupOrder(flow, rules)
-    .map((id) => ({
-      id,
-      title: flow.ruleGroups.find((group) => group.id === id)?.title ?? id,
-      rules: rules.filter((rule) => rule.group === id),
-    }))
-    .filter((entry) => entry.rules.length > 0);
 }
 
 /**
