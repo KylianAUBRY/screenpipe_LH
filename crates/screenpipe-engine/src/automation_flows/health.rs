@@ -39,9 +39,11 @@ const RUNS_PER_CHECK: &str = "100";
 pub struct HealthSchedule {
     /// Between two checks.
     pub every: Duration,
-    /// Between two checks while n8n does not answer, or a failed run could
-    /// not be handed to the notification server: the banner goes away, and
-    /// the notification comes, soon after they are back.
+    /// Between two checks while n8n does not answer: the banner goes away
+    /// soon after it is back. Also the first wait after a failed run could
+    /// not be handed to the notification server; that wait then doubles at
+    /// each miss, up to `every` (a headless engine has no notification
+    /// server: re-listing every run each 30 s forever would be wasted).
     pub retry: Duration,
 }
 
@@ -54,14 +56,34 @@ impl Default for HealthSchedule {
     }
 }
 
-impl HealthSchedule {
-    /// The wait before the check after `report`.
-    pub(super) fn next_delay(&self, report: &HealthReport) -> Duration {
-        if report.n8n == "unreachable" || !report.pending.is_empty() {
-            self.retry
-        } else {
-            self.every
+/// The waits between periodic checks, following [`HealthSchedule`].
+pub(super) struct Pacing {
+    schedule: HealthSchedule,
+    /// The last wait, while failed runs stay undelivered.
+    undelivered: Option<Duration>,
+}
+
+impl Pacing {
+    pub(super) fn new(schedule: HealthSchedule) -> Self {
+        Self {
+            schedule,
+            undelivered: None,
         }
+    }
+
+    /// The wait before the check after `report`.
+    pub(super) fn next_delay(&mut self, report: &HealthReport) -> Duration {
+        let HealthSchedule { every, retry } = self.schedule;
+        if report.n8n == "unreachable" || report.pending.is_empty() {
+            self.undelivered = None;
+            return if report.n8n == "unreachable" { retry } else { every };
+        }
+        let delay = self
+            .undelivered
+            .map_or(retry, |last| last.saturating_mul(2))
+            .min(every);
+        self.undelivered = Some(delay);
+        delay
     }
 }
 
@@ -232,11 +254,12 @@ pub(super) async fn check_now(State(state): State<FlowsState>) -> Json<HealthRep
     Json(check(&state).await)
 }
 
-/// Checks, then again after each [`HealthSchedule::next_delay`], forever.
+/// Checks, then again after each [`Pacing::next_delay`], forever.
 pub(super) async fn check_periodically(state: FlowsState, schedule: HealthSchedule) {
+    let mut pacing = Pacing::new(schedule);
     loop {
         let report = check(&state).await;
-        tokio::time::sleep(schedule.next_delay(&report)).await;
+        tokio::time::sleep(pacing.next_delay(&report)).await;
     }
 }
 
@@ -425,14 +448,30 @@ mod tests {
 
     #[test]
     fn the_app_checks_every_15_minutes_and_every_30_seconds_while_n8n_is_down() {
-        let schedule = HealthSchedule::default();
+        let mut pacing = Pacing::new(HealthSchedule::default());
         let fine = HealthReport::n8n(None, "reachable");
         let down = HealthReport::n8n(None, "unreachable");
+
+        assert_eq!(pacing.next_delay(&fine), Duration::from_secs(900));
+        for _ in 0..5 {
+            assert_eq!(pacing.next_delay(&down), Duration::from_secs(30));
+        }
+        assert_eq!(pacing.next_delay(&fine), Duration::from_secs(900));
+    }
+
+    #[test]
+    fn a_failure_that_cannot_be_delivered_is_retried_ever_less_often_up_to_15_minutes() {
+        // The notification server is absent (a headless engine): re-listing
+        // every Flow's runs every 30 s forever would be wasted work.
+        let mut pacing = Pacing::new(HealthSchedule::default());
+        let fine = HealthReport::n8n(None, "reachable");
         let mut missed = HealthReport::n8n(None, "reachable");
         missed.pending.push("exec-1".into());
 
-        assert_eq!(schedule.next_delay(&fine), Duration::from_secs(900));
-        assert_eq!(schedule.next_delay(&down), Duration::from_secs(30));
-        assert_eq!(schedule.next_delay(&missed), Duration::from_secs(30));
+        let delays: Vec<u64> = (0..7).map(|_| pacing.next_delay(&missed).as_secs()).collect();
+        assert_eq!(delays, [30, 60, 120, 240, 480, 900, 900]);
+        // Delivered: back to the schedule, and a new miss starts over.
+        assert_eq!(pacing.next_delay(&fine), Duration::from_secs(900));
+        assert_eq!(pacing.next_delay(&missed), Duration::from_secs(30));
     }
 }
