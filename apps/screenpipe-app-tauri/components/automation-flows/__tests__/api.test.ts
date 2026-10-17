@@ -96,6 +96,19 @@ describe("flowsApi", () => {
     expect(sentHeaders(init).get(ACTIVATION_HEADER)).toBe("ui-key");
   });
 
+  it("deletes a Flow with a JSON request", async () => {
+    respond(200, { id: "wf/1", deleted: true });
+    await flowsApi.delete("wf/1");
+    const [path, init] = localFetch.mock.lastCall!;
+    expect(path).toBe("/automation-flows/wf%2F1");
+    expect(init.method).toBe("DELETE");
+    // The engine takes state-changing requests only as JSON.
+    expect(sentHeaders(init).get("content-type")).toBe("application/json");
+
+    respond(409, { error: "flow_running", detail: "n8n is still running this Flow" });
+    await expect(flowsApi.delete("wf1")).rejects.toMatchObject({ code: "flow_running" });
+  });
+
   it("outside the desktop app, activates without a credential and reports the refusal", async () => {
     getFlowActivationKey.mockRejectedValue(new Error("not in Tauri"));
     respond(403, {
@@ -218,6 +231,16 @@ describe("browser mock", () => {
     await expect(flowsApi.activate(fixtureFlow.id, "stale-version")).rejects.toMatchObject({
       code: "version_changed",
     });
+  });
+
+  it("deletes the fixture Flow until the page reloads", async () => {
+    useBrowserMock();
+    await flowsApi.delete(fixtureFlow.id);
+    expect(await flowsApi.list()).toEqual([]);
+    await expect(flowsApi.get(fixtureFlow.id)).rejects.toMatchObject({ code: "not_found" });
+
+    resetAutomationFlowsMock();
+    expect(await flowsApi.list()).toEqual([summaryOf(fixtureFlow)]);
   });
 
   it("refuses, like the engine, an activation without the UI credential or the version", async () => {
