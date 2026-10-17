@@ -28,7 +28,11 @@
 //! Flow). n8n runs it when a Run stops on an error; it calls
 //! `POST /failed-runs`, which notifies the user once through the desktop
 //! app's `/notify`. A Flow shows its Failed Run (`failedRun`) until a later
-//! Run succeeds. Nothing is switched off on failure.
+//! Run succeeds. Nothing is switched off on failure. The [`health`] check
+//! (SPEC D19) catches the Failed Runs nothing could report.
+
+mod health;
+pub use health::FlowHealthCheck;
 
 use crate::atomic_file;
 use crate::routes::workflows::{read_catalog, workflow_id as task_id_of, WorkflowCatalogSource};
@@ -223,8 +227,12 @@ struct FlowsState {
     /// Serializes store writes and imports so a double click on "create"
     /// cannot import the same task twice.
     write_lock: Arc<Mutex<()>>,
+    /// The Flow health check's own state (ticket 29).
+    health: health::HealthHandle,
 }
 
+/// `health_check`: when the background Flow health check runs (SPEC D19);
+/// `None` runs it only on `POST /health/check`.
 pub fn router<S>(
     screenpipe_dir: PathBuf,
     secret_store: Option<Arc<SecretStore>>,
@@ -232,6 +240,7 @@ pub fn router<S>(
     workflow_catalog_dir: Option<PathBuf>,
     running_wait: RunningWait,
     notify_url: Option<String>,
+    health_check: Option<FlowHealthCheck>,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -250,11 +259,17 @@ where
         notify_url,
         http,
         write_lock: Arc::new(Mutex::new(())),
+        health: health::HealthHandle::default(),
     };
+    if let Some(schedule) = health_check {
+        health::spawn(&state, schedule);
+    }
     Router::new()
         .route("/", get(list_flows).post(create_flow))
         .route("/from-task", post(create_from_task))
         .route("/failed-runs", post(failed_run))
+        .route("/health", get(health::n8n_health))
+        .route("/health/check", post(health::check_now))
         .route("/:id", get(get_flow).put(update_flow))
         .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
@@ -1031,6 +1046,10 @@ struct FlowStore {
     /// (at most [`NOTIFIED_RUNS_KEPT`]): each Failed Run is notified once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     notified_failed_runs: Vec<String>,
+    /// When the health check last saw every Failed Run through (RFC 3339):
+    /// the next check looks at the Runs that stopped since (ticket 29).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    health_checked_at: Option<String>,
 }
 
 const NOTIFIED_RUNS_KEPT: usize = 500;
@@ -1767,6 +1786,30 @@ async fn failed_run(
         return Err(FlowError::RunNotFound);
     }
     let api = N8nApi::from_connection(&state).await?;
+    match notify_failed_run(&state, &api, &execution_id).await? {
+        RunNotice::Notified => Ok(Json(json!({"notified": true}))),
+        RunNotice::Skipped(reason) => not_notified(reason),
+    }
+}
+
+/// What [`notify_failed_run`] did with a Run.
+enum RunNotice {
+    Notified,
+    /// Not notified, and why: not failed, not a Flow, already notified…
+    Skipped(&'static str),
+}
+
+/// Notifies the user of Failed Run `execution_id` unless it already was.
+/// Shared by the error workflow's report (`POST /failed-runs`) and the
+/// health check, so each Failed Run is notified once whoever finds it first:
+/// the dedupe is checked and recorded under the write lock.
+async fn notify_failed_run(
+    state: &FlowsState,
+    api: &N8nApi,
+    execution_id: &str,
+) -> Result<RunNotice, FlowError> {
+    let not_notified = |reason| Ok(RunNotice::Skipped(reason));
+    let execution_id = execution_id.to_string();
     let (status, execution) = api
         .send(
             Method::GET,
@@ -1827,7 +1870,7 @@ async fn failed_run(
         .saturating_sub(NOTIFIED_RUNS_KEPT);
     store.notified_failed_runs.drain(..excess);
     store.save(&state.screenpipe_dir)?;
-    Ok(Json(json!({"notified": true})))
+    Ok(RunNotice::Notified)
 }
 
 /// The `/notify` payload of a Failed Run: the Flow, the failing step, the
