@@ -194,6 +194,8 @@ chaque ticket créé ».
 - Instance-level MCP endpoint: `http://localhost:5678/mcp-server/http`
   (Bearer token); registered in Claude Code for this project (local scope).
 
+- AI proxy from the n8n container (`http://host.docker.internal:3030/v1`, model `auto`): chat completions 200, tool calls returned. `GET /models` is 404, so n8n's OpenAI credential test shows a red error on Save; that is expected. Tool calls come back non-OpenAI-shaped (`type: "tool_use"`, no `id`, no `finish_reason`): the n8n AI Agent may not parse them; if it fails, normalize the response in the engine's cloud proxy before falling back to a plain ScreenPipe step.
+
 ## Risks to check first (golden path)
 
 - n8n 2.x semantics: confirm that `POST /workflows/:id/activate|deactivate`
