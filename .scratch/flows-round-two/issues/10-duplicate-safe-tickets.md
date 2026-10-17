@@ -88,4 +88,19 @@ error, a string error, and no error.
 
 ## Tests run
 
-PENDING
+After `git merge main` (ticket 06/07 included) into `ticket-10`:
+
+- `bun test --env-file=/dev/null infra/automation-flows/workflows` → 30 pass, 0 fail (5 new: label from the Message-ID, label without a Message-ID, search before creating, existing ticket ends the run, failed creation re-checked then stopped; Jira body, summary and node-version tests updated)
+- `bun test --env-file=/dev/null infra/automation-flows` → 68 pass, 1 fail. The failure is `n8n-catalog.test.ts` « ScreenPipe n8n nodes … »: `Cannot find package 'n8n-workflow'` because the worktree has no `packages/n8n-nodes-screenpipe/node_modules`. Environmental, and that package is untouched here.
+- `cd apps/screenpipe-app-tauri && NODE_OPTIONS=--no-experimental-webstorage bunx --env-file=/dev/null vitest run components/automation-flows` → 3 files, 85 passed (fixture-vs-bundled-workflow drift test included). Run 3 times; a first cold run once failed `flow-graph.test.tsx` « lets the reviewer zoom… » and passed on every rerun.
+- `cargo test -p screenpipe-engine --lib flow_checks` → 9 passed (incl. `the_demo_workflow_passes_untouched`)
+- `cargo test -p screenpipe-engine --test automation_flows_test` → 83 passed
+- `cargo test -p screenpipe-core --lib automation_flows` → 6 passed
+- Scratch check, not committed: the label, JQL, gate, `$runIndex` and Stop and Error expressions evaluated with `n8n-workflow` 2.42.2's `vm` engine (results above).
+
+Environment note: in the main checkout, some files of
+`apps/screenpipe-app-tauri/node_modules` are evicted by iCloud Drive
+(`ls -lO` shows `compressed,dataless`, e.g. `chai/lib/chai/core/assertions.js`
+reads empty), so vitest there fails on every file with `fn is not a
+function`. The runs above use a fresh `bun install --frozen-lockfile
+--ignore-scripts` in this worktree.
