@@ -66,6 +66,9 @@ n8n workflow — distinct from ScreenPipe's existing automations and pipes.
   is deterministic.
 - **An Automation Flow can be created from the ScreenPipe chat.** Chat-created
   Automation Flows still go through the review screen and explicit activation.
+  The chat builds them step by step as a hidden n8n draft, only from the nodes
+  this n8n really has (ScreenPipe's node search and cards); ScreenPipe refuses
+  invented, switched-off or incomplete nodes.
 - **Task page direction**: reuse ScreenPipe's existing detected-workflow page
   (`packages/workflows-ui`, opened by the existing `screenpipe://workflows`
   notification deeplink); it shows the detected task, the evidence timeline
@@ -87,7 +90,9 @@ n8n workflow — distinct from ScreenPipe's existing automations and pipes.
 - **Automation Flows view**: lives in the existing Automations tab; lists the
   Automation Flows created from the app (tagged in n8n), with an Add button
   that opens a creation chat; selecting a Flow opens a detail view with more
-  information, basic stats (status, last run), and activation history.
+  information, basic stats (status, last run), and activation history. A Flow
+  can be deleted from the list, its review screen, or the chat (removed from
+  n8n for good).
 - **Real integrations**: Gmail (dedicated account, IMAP + app password) and
   Jira (Cloud, email + API token) are real integrations, configured in n8n —
   not through ScreenPipe's Connections.

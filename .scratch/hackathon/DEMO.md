@@ -14,7 +14,7 @@ proofs are in `evidence/LIVE-CHECKS.md`.
    quitting » off). From macOS **Terminal**, run the dev build on the real
    profile (screen permissions come from Terminal):
    ```bash
-   cd apps/screenpipe-app-tauri && SCREENPIPE_DEV_USE_PROD_DATA=1 ./src-tauri/target/debug-dev/screenpipe-app
+   cd ~/dev/screenpipe_LH/apps/screenpipe-app-tauri && SCREENPIPE_DEV_USE_PROD_DATA=1 ./src-tauri/target/debug-dev/screenpipe-app
    ```
    Build it first with `bun run build:tauri:dev` (with
    `NEXT_PUBLIC_SCREENPIPE_WORKFLOWS_ROLLOUT=1` in
@@ -42,7 +42,7 @@ alert twice within 90 s: wait 90 s after a previous run before `demo.ts`.
 
 | Time | Do | Observed in rehearsals |
 |---|---|---|
-| 0:00 | Problem (one sentence), then Automations → « Trouver une automatisation » (next to the bell), or run `bun infra/automation-flows/demo/demo.ts` (or have it fired just before). Both install the task and fire the same notification. | button not rehearsed in the native app yet (ticket 24) |
+| 0:00 | Problem (one sentence), then press **⌃⌥⌘D** (hidden global shortcut, works with ScreenPipe in the background), or run `bun infra/automation-flows/demo/demo.ts`. Both reinstall the task (answers cleared) and fire the same notification; when it is not shown (repeat within 90 s, pause, quiet hours) a toast says why and the Task Page opens. | not rehearsed live yet (round two 16) |
 | 0:10 | Click « Voir la tâche » on the notification. Task Page: 3 repetitions with the real captures (4:05–4:15), « Voir dans la timeline » on a capture. | Task Page in 4–7 s |
 | 0:30 | Type the 2 answers; « Créer l'automatisation » unlocks only at 2/2. Click it. | Review Screen in ~10 s |
 | 0:50 | Review Screen: summary, graph with one sentence per step; « Voir le graphe » (n8n in Safari) for 5 s. | |
@@ -80,6 +80,7 @@ Flow keeps working without the change.
 
 - The Workflows view needs the PostHog `workflows` flag or the local build
   override above.
-- A chat-created Flow that uses ScreenPipe nodes needs the « ScreenPipe API »
-  credential picked in n8n before it can run.
+- A failed run notifies « Échec du Flow … » with « Relancer »; an unsure AI
+  sends « À trier à la main »; with n8n down the Flows tab shows « n8n
+  injoignable ». None of these is rehearsed live yet (round two 16).
 - Do not run the installed app and the dev build together (one DB writer).

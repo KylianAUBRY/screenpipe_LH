@@ -1,15 +1,23 @@
 # Handoff — Automation Flows (hackathon)
 
-Last updated: 2026-10-17 ~16:10, integration tip after tickets 14–23 (pushed).
+Last updated: 2026-10-18, `main` after round two (tickets 25–27 and
+`.scratch/flows-round-two/`), pushed.
 Read this first, then `AGENTS.md` (Hackathon mode), `CONTEXT.md`, `SPEC.md`,
-`automation-flows-spec.md`, the ticket files in `issues/`, `DEMO.md` (runbook)
-and `evidence/LIVE-CHECKS.md` (every live check with its observed result).
+`automation-flows-spec.md`, the ticket files in `issues/`, round two's spec
+(`issues/27-flows-round-two.md`), its tickets and feature → test table
+(`.scratch/flows-round-two/issues/`, `.scratch/flows-round-two/coverage.md`),
+`DEMO.md` (runbook) and `evidence/LIVE-CHECKS.md` (every live check with its
+observed result).
 
 ## Where the work is
 
-- **Branch:** `hackathon/automation-flows` on `origin` (KylianAUBRY/screenpipe_LH).
-  All tickets are merged there. Since 2026-10-17 `main` holds exactly this
-  branch (user decision, see "Teammate divergence").
+- **Branch:** `main` on `origin` (KylianAUBRY/screenpipe_LH) is the
+  integration branch since 2026-10-17 (it took `hackathon/automation-flows`
+  unchanged, see "Teammate divergence"); round two was built on `main`.
+  `hackathon/automation-flows` stops at round one plus tickets 25–26.
+- **Checkout:** `~/dev/screenpipe_LH`. The old checkout on the Desktop sits in
+  iCloud Drive, which evicted its 534 MB git pack: git hangs there. Do not
+  work in it; the user's app may still run from it until rebuilt here.
 - **Process:** `/mattpocock-skills:implement-spec`: one implementer per ticket
   in its own worktree (`tdd` skill), merged `--no-ff` into the integration
   branch, pushed after every merge; then an independent code review (standards,
@@ -30,7 +38,10 @@ and `evidence/LIVE-CHECKS.md` (every live check with its observed result).
 | 21 | Switching a Flow off waits for the running execution | done, live-verified |
 | 22 | Review fixes, engine (who deactivated, outside activation, credentials, facts, sourceMoment, n8n_failed, no MCP) | done, live-verified |
 | 23 | Review fixes, UI/workflow/nodes (DESIGN.md, reviewed version, timeline link, Jira markup, AI trigger) | done, live-verified |
-| 24 | « Trouver une automatisation » button (scripted detection, next to the bell) | done, browser mock only; native app not run |
+| 24 | « Trouver une automatisation » button (scripted detection, next to the bell) | superseded by round two 03 (⌃⌥⌘D) |
+| 25 | The user's ChatGPT subscription answers every AI (`chatgpt/gpt-5.6-luna:max`) | done, live-verified |
+| 26 | No Flow on an invented or half-built n8n node | done, live-verified |
+| 27 | Round two spec → `.scratch/flows-round-two/issues/01`–`16` | 01–15 done (tests); 16, the full live check, pending |
 | 12 | Demo assembly + rehearsal | 5 rehearsals; journey 105–110 s; acceptance list checked in `SPEC.md`; see `DEMO.md` |
 
 Also fixed from rehearsals: IMAP catch-up seed (an email arriving around
@@ -63,7 +74,13 @@ minutes).
   (`activate`/`deactivate` are deprecated). CLI runs inside the container need
   `-e N8N_RUNNERS_BROKER_PORT=5690`. Polling triggers only run from the
   editor's "Fetch Test Event", not `n8n execute`.
-- **Vitest on Node 26:** prefix with `NODE_OPTIONS=--no-experimental-webstorage`.
+- **Vitest on Node 26:** `vitest.config.ts` turns off Node's webstorage in
+  test workers (it hid jsdom's `localStorage`); no prefix needed any more.
+- **iCloud Drive:** never put a checkout or an agent worktree under Desktop or
+  Documents: iCloud evicts `node_modules`, `target` and git packs, and git or
+  builds then hang. Agent worktrees take 6–10 GB each; remove merged ones.
+- **Keys for scripts:** the gitignored root `.env` holds `N8N_API_KEY` and
+  `SCREENPIPE_LOCAL_API_KEY`; Bun loads it from the repo root.
 - **Custom nodes:** `cd packages/n8n-nodes-screenpipe && bun run install-n8n`
   builds, copies into `infra/automation-flows/custom-nodes/` (gitignored) and
   restarts n8n. Install from a branch that has all three nodes.
@@ -101,15 +118,26 @@ minutes).
   cannot clear them).
 - The Flow service holds its write lock while it waits for a running
   execution (up to ~90 s): other activations/creations queue meanwhile.
+- The node catalog (`infra/automation-flows/n8n-catalog.json`, `n8n-nodes.json.gz`)
+  describes the pinned n8n image; regenerate it with
+  `bun infra/automation-flows/n8n-catalog.ts` after changing the image or the
+  ScreenPipe nodes (its test fails until then). Community nodes are unknown to
+  it and refused; required fields nested in collections are shown in node
+  cards but not checked at « Terminer ».
 - HTML-only emails: numeric entities above U+FFFF (emoji) are garbled in the
   Jira description.
-- A chat-created Flow that uses ScreenPipe nodes needs the « ScreenPipe API »
-  credential picked in n8n before it runs (the chat cannot add credentials).
+- A credential a chat-built node needs is wired only when n8n holds exactly
+  one of its type; none or several is a refusal the user must resolve in n8n.
 - Jira NOVA holds the rehearsal tickets NOVA-31…42.
 
 ## Open decisions
 
-- **Failure handling decided, not yet ticketed:** SPEC.md D16–D20 (failure notification, Retry of a Failed Run, AI Abstention + Activity list, health check at app start and every 15 min, idempotent Retry via a `mail-<hash>` Jira label). Turn them into tickets with `/to-tickets` before building.
+- **Failure handling (D16–D20) is built** (round two 09–14): failure
+  notification through ScreenPipe's n8n error workflow, « Relancer » (user
+  only), abstention « À trier à la main » with the Activity list, health check
+  at engine start and every 15 min (banner, missed failures, 24 h draft
+  cleanup), duplicate-safe tickets via a `mail-<hash>` label and a JQL search.
+  Checked by tests only until round two 16 runs live.
 - **Teammate divergence (settled 2026-10-17):** `main` had another Review
   Screen ("Recommendations" tab, questions on the Review Screen, notification
   opens the Review Screen, demo backend) by a teammate, plus the « Find an

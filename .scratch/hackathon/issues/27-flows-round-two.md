@@ -1,6 +1,6 @@
 # 27: Flows, round two — informed AI building, demo polish, failure handling, full test coverage
 
-**Status:** ready-for-agent
+**Status:** implemented on `main` (tickets 01–15 of `.scratch/flows-round-two/issues/`, code review fixed); the full live check (16) is pending.
 
 Decided with the user in a grilling session on 2026-10-17. Supersedes, where
 they conflict: the Task Page « Trouver une automatisation » button (ticket 24),
