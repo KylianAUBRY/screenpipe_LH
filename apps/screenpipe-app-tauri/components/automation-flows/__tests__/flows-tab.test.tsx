@@ -5,7 +5,7 @@
 import React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FlowsApiError, type Flow, type FlowRun, type FlowsApi } from "../api";
+import { FlowsApiError, type Flow, type FlowRun, type FlowsApi, type FlowsHealth } from "../api";
 import { REFRESH_INTERVAL_MS } from "../common";
 import { FlowsTab } from "../flows-tab";
 import { fixtureFlow, summaryOf } from "../fixtures";
@@ -46,9 +46,22 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     requestChange: vi.fn(async () => {}),
     requestCreation: vi.fn(async () => {}),
     activity: vi.fn(async () => []),
+    health: vi.fn(async () => health("reachable")),
     ...overrides,
   };
 }
+
+function health(n8n: FlowsHealth["n8n"]): FlowsHealth {
+  return {
+    checkedAt: "2026-10-17T09:00:00.000Z",
+    n8n,
+    notified: [],
+    pendingNotifications: [],
+    deletedDrafts: [],
+  };
+}
+
+const BANNER = "n8n injoignable, tes Flows ne tournent pas";
 
 afterEach(() => {
   cleanup();
@@ -630,6 +643,55 @@ describe("Deleting a Flow", () => {
     const alert = await within(row).findByRole("alert");
     expect(within(alert).getByText(/database is locked/)).toBeTruthy();
     expect(screen.getByTestId(`flow-row-${fixtureFlow.id}`)).toBeTruthy();
+  });
+});
+
+describe("Health banner (D19)", () => {
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  afterEach(() => vi.useRealTimers());
+
+  const tick = (ms: number) => act(async () => void vi.advanceTimersByTime(ms));
+
+  it("says n8n is down on the list until the health check sees n8n answer", async () => {
+    const check = vi.fn().mockResolvedValueOnce(health("unreachable")).mockResolvedValue(health("reachable"));
+    render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ health: check })} />);
+
+    expect((await screen.findByRole("alert")).textContent).toContain(BANNER);
+    await screen.findByTestId(`flow-row-${fixtureFlow.id}`);
+
+    await tick(REFRESH_INTERVAL_MS);
+
+    await waitFor(() => expect(screen.queryByText(BANNER)).toBeNull());
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+
+  it("says it on the Review Screen too", async () => {
+    render(
+      <FlowsTab
+        flowId={fixtureFlow.id}
+        onSelectFlow={vi.fn()}
+        api={fakeApi({ health: vi.fn(async () => health("unreachable")) })}
+      />,
+    );
+    await screen.findByRole("heading", { name: fixtureFlow.name });
+    expect(screen.getByRole("alert").textContent).toContain(BANNER);
+  });
+
+  it("stays away while n8n answers, is not set up, or the check is unknown", async () => {
+    for (const answer of [
+      async () => health("reachable"),
+      async () => health("not_configured"),
+      async () => health("unknown"),
+      async () => {
+        throw new FlowsApiError("unknown", "engine down");
+      },
+    ]) {
+      const view = render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ health: vi.fn(answer) })} />);
+      await screen.findByTestId(`flow-row-${fixtureFlow.id}`);
+      await act(async () => {});
+      expect(screen.queryByText(BANNER)).toBeNull();
+      view.unmount();
+    }
   });
 });
 
