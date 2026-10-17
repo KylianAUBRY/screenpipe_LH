@@ -31,6 +31,11 @@ export type FlowNode = {
   type: string;
   position: [number, number];
   sentence: string | null;
+  /**
+   * What the AI did not write (ticket 22): the n8n credentials the node
+   * uses, and for an HTTP Request node its method and URL host.
+   */
+  facts: string[];
 };
 
 export type ActivationEvent = {
