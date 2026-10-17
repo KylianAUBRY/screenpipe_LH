@@ -16,12 +16,27 @@ answers, streaming, errors) passes through unchanged.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** engine fix done; live checks pending human
 
-- [ ] Engine tests through the proxy route with a fake upstream: tool calls without ids get unique ids and type "function"; existing ids are kept; finish_reason is set only when missing; a plain answer and an error answer are byte-for-byte unchanged; streaming is untouched.
+- [x] Engine tests through the proxy route with a fake upstream: tool calls without ids get unique ids and type "function"; existing ids are kept; finish_reason is set only when missing; a plain answer and an error answer are byte-for-byte unchanged; streaming is untouched. (`cargo test -p screenpipe-engine --lib routes::cloud_proxy`: 6 passed. Seam: `chat_completions_with_base` in `routes/cloud_proxy.rs` with a wiremock upstream; `server.rs` untouched.)
 - [ ] The two-turn probe from ticket 07 (tool call, then tool result) returns 200 through the proxy when the app runs the dev build containing the fix.
 - [ ] The demo n8n workflow with the ScreenPipe tool runs end to end on a synthetic email (manual-trigger probe), ending with `{type, product, summary, priority, label}`.
 
 Note: the running ScreenPipe is the installed app, which does not contain
 engine changes. Live checks need the dev build (`bun run dev:tauri` from the
 app folder, installed app quit first); that switch is a human step.
+
+Pending human (live checks):
+
+1. Quit the installed ScreenPipe app.
+2. From `apps/screenpipe-app-tauri` on a checkout that contains this fix, run
+   `bun run dev:tauri` and stay signed in (the proxy needs the cloud token).
+3. Run `docker exec -e N8N_RUNNERS_BROKER_PORT=5690 automation-flows-n8n-1 n8n execute --id=spProbeTool00001 --rawOutput`
+   (agent + tool, real two turns). Expected: no 400 "malformed tool call";
+   the run reaches the agent's final answer.
+4. Optional: `docker exec -e N8N_RUNNERS_BROKER_PORT=5690 automation-flows-n8n-1 n8n execute --id=spProbeProxy0001 --rawOutput`.
+   This probe hardcodes both requests, so the fix does not change it:
+   expected `sansIdStatus` 400 and `avecIdStatus` 200, as before. It only
+   confirms the dev build serves the proxy.
+5. Third checkbox: run the demo workflow on a synthetic email with a manual
+   trigger and check the final item has `{type, product, summary, priority, label}`.
