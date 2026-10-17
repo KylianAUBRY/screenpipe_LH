@@ -259,6 +259,7 @@ where
         .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
         .route("/:id/deactivate", post(deactivate_flow))
+        .route("/:id/retry", post(retry_run))
         .layer(middleware::from_fn(require_json))
         .with_state(state)
 }
@@ -386,6 +387,29 @@ struct CreateRequest {
     summary: String,
 }
 
+/// « Relancer »: the Failed Run of this Flow to replay.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RetryRequest {
+    #[serde(default)]
+    execution_id: Value,
+}
+
+/// The Run a retry started, as n8n reports it once it answers.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetriedRun {
+    execution_id: String,
+    status: &'static str,
+    started_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RetryResponse {
+    run: RetriedRun,
+    flow: Flow,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FromTaskRequest {
@@ -428,6 +452,9 @@ enum FlowError {
     JsonRequired,
     /// A Failed Run report naming an execution n8n does not have.
     RunNotFound,
+    /// « Relancer » on a Run that did not fail (succeeded, still running or
+    /// already replayed with success); the detail says which.
+    RunNotFailed(String),
     /// The desktop app's notification route did not take the notification.
     NotifyFailed(String),
 }
@@ -453,6 +480,10 @@ impl IntoResponse for FlowError {
             ),
             FlowError::TaskNotFound => (StatusCode::NOT_FOUND, json!({"error": "task_not_found"})),
             FlowError::RunNotFound => (StatusCode::NOT_FOUND, json!({"error": "run_not_found"})),
+            FlowError::RunNotFailed(detail) => (
+                StatusCode::CONFLICT,
+                json!({"error": "run_not_failed", "detail": detail}),
+            ),
             FlowError::NotifyFailed(detail) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"error": "notify_failed", "detail": detail}),
@@ -541,6 +572,18 @@ impl N8nApi {
         query: &[(&str, &str)],
         body: Option<&Value>,
     ) -> Result<(u16, Value), FlowError> {
+        self.send_timed(method, path, query, body, None).await
+    }
+
+    /// [`Self::send`], waiting at most `timeout` instead of the client's 20 s.
+    async fn send_timed(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, &str)],
+        body: Option<&Value>,
+        timeout: Option<Duration>,
+    ) -> Result<(u16, Value), FlowError> {
         let mut request = self
             .http
             .request(method, format!("{}/api/v1{path}", self.base))
@@ -548,6 +591,9 @@ impl N8nApi {
             .query(query);
         if let Some(body) = body {
             request = request.json(body);
+        }
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
         }
         let response = request.send().await.map_err(|e| {
             FlowError::Unreachable(format!("cannot reach n8n at {}: {e}", self.base))
@@ -774,6 +820,20 @@ impl N8nApi {
         self.switch(workflow_id, "unpublish", None).await
     }
 
+    /// Replays a Run with its input (`POST /executions/:id/retry`). n8n
+    /// answers once the new Run has finished, so this waits longer than any
+    /// other call: the demo's AI step alone takes up to 30 s.
+    async fn retry(&self, execution_id: &str, load_workflow: bool) -> Result<(u16, Value), FlowError> {
+        self.send_timed(
+            Method::POST,
+            &format!("/executions/{execution_id}/retry"),
+            &[],
+            Some(&json!({"loadWorkflow": load_workflow})),
+            Some(RETRY_TIMEOUT),
+        )
+        .await
+    }
+
     fn editor_url(&self, workflow_id: &str) -> String {
         format!("{}/workflow/{workflow_id}", self.base)
     }
@@ -856,6 +916,8 @@ fn with_error_workflow(body: &mut Value, errors: Option<&str>) {
 
 /// How many recent executions are read to find the Failed Run.
 const RECENT_RUNS: &str = "20";
+/// How long a retry may take in n8n before ScreenPipe stops waiting.
+const RETRY_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Default)]
 struct Runs {
@@ -1748,6 +1810,81 @@ struct FailedRunReport {
     execution_id: Value,
 }
 
+/// « Relancer » (SPEC D17): replays a Failed Run of this Flow with the same
+/// input (the email the trigger already marked read) through n8n's retry,
+/// and answers with the new Run and the Flow as it now stands.
+async fn retry_run(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+    Json(request): Json<RetryRequest>,
+) -> Result<Json<RetryResponse>, FlowError> {
+    let (api, store, workflow) = load_flow(&state, &id).await?;
+    let run_id = execution_id(&json!({"id": request.execution_id}))
+        .filter(|run_id| valid_workflow_id(run_id))
+        .ok_or(FlowError::RunNotFound)?;
+    let (status, original) = api
+        .send(Method::GET, &format!("/executions/{run_id}"), &[], None)
+        .await?;
+    match status {
+        200..=299 => {}
+        404 => return Err(FlowError::RunNotFound),
+        _ => return Err(upstream_error(status, &original)),
+    }
+    // Only this Flow's Runs, whatever the caller names.
+    let owner = match &original["workflowId"] {
+        Value::String(owner) => owner.clone(),
+        Value::Number(owner) => owner.to_string(),
+        _ => String::new(),
+    };
+    if owner != id {
+        return Err(FlowError::RunNotFound);
+    }
+    if let Some(refusal) = not_retryable(&original) {
+        return Err(FlowError::RunNotFailed(refusal.into()));
+    }
+
+    // The saved workflow is the one the user reviewed: run it, with any fix
+    // reviewed since the Run. Otherwise replay the Run's own version, never
+    // a version nobody reviewed.
+    let reviewed = store
+        .flows
+        .get(&id)
+        .and_then(|record| record.reviewed_version_id.as_deref());
+    let load_workflow = reviewed.is_some() && workflow["versionId"].as_str() == reviewed;
+    let (status, retried) = api.retry(&run_id, load_workflow).await?;
+    match status {
+        200..=299 => {}
+        404 => return Err(FlowError::RunNotFound),
+        // n8n saw it change in between (e.g. a retry from its editor).
+        409 => return Err(FlowError::RunNotFailed(n8n_answer(status, &retried))),
+        _ => return Err(upstream_error(status, &retried)),
+    }
+    let run = RetriedRun {
+        execution_id: execution_id(&retried).unwrap_or_default(),
+        status: run_status(&retried),
+        started_at: retried["startedAt"].as_str().map(str::to_string),
+    };
+    let workflow = api.workflow(&id).await?.unwrap_or(workflow);
+    let flow = build_flow(&state, &api, &workflow, store.flows.get(&id)).await;
+    Ok(Json(RetryResponse { run, flow }))
+}
+
+/// Why a Run cannot be replayed, or `None` for a Failed Run never replayed
+/// with success: retrying a Run that worked would redo what it did.
+fn not_retryable(execution: &Value) -> Option<&'static str> {
+    match execution["status"].as_str() {
+        Some("error" | "crashed") if execution["retrySuccessId"].is_null() => None,
+        Some("error" | "crashed") => {
+            Some("this Run was already retried with success; nothing to retry")
+        }
+        Some("success") => Some("this Run succeeded; nothing to retry"),
+        Some("running" | "new" | "waiting") => {
+            Some("this Run is still in progress; wait for its outcome")
+        }
+        _ => Some("only a Run that stopped on an error can be retried"),
+    }
+}
+
 /// A Run of a Flow stopped on an error (called by the n8n error workflow):
 /// reads that Run in n8n and notifies the user once, naming the Flow, the
 /// failing step and, when the Run handled an email, its sender and subject.
@@ -1858,7 +1995,19 @@ fn failed_run_notification(workflow: &Value, execution: &Value, execution_id: &s
         "priority": "high",
         "transient": false,
         "source_url": review,
-        "actions": [{"type": "deeplink", "label": "Voir le Flow", "url": review, "primary": true}],
+        "actions": [
+            {"type": "deeplink", "label": "Voir le Flow", "url": review, "primary": true},
+            // « Relancer » (SPEC D17): replays this Run, then opens the Review
+            // Screen on its new outcome.
+            {
+                "type": "api",
+                "label": "Relancer",
+                "method": "POST",
+                "url": format!("/automation-flows/{flow_id}/retry"),
+                "body": {"executionId": execution_id},
+                "deeplink_url": review,
+            },
+        ],
     })
 }
 

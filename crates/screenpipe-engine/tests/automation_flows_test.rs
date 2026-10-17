@@ -62,6 +62,8 @@ struct N8nState {
     /// Executions that were still running when their workflow was
     /// unpublished: n8n leaves them `running` forever (rehearsal 3).
     orphaned: Vec<String>,
+    /// How a retried Run ends (`POST /executions/:id/retry`); `None` = success.
+    retry_outcome: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -377,6 +379,36 @@ impl Respond for FakeN8n {
                     }
                     None => json_response(404, json!({"message": "Not Found"})),
                 }
+            }
+            // Replays the Run with its input, as a new execution (newest
+            // first), and answers once it is finished.
+            ("POST", ["executions", id, "retry"]) => {
+                let Some(original) = state.executions.iter().find(|e| e["id"] == *id).cloned()
+                else {
+                    return json_response(404, json!({"message": "Not Found"}));
+                };
+                if !matches!(original["status"].as_str(), Some("error" | "crashed")) {
+                    return json_response(
+                        409,
+                        json!({"message": "The execution succeeded, so it cannot be retried."}),
+                    );
+                }
+                let outcome = state.retry_outcome.clone().unwrap_or("success".into());
+                let new_id = format!("{}", 9000 + state.executions.len());
+                let retried = json!({
+                    "id": new_id, "workflowId": original["workflowId"], "mode": "retry",
+                    "retryOf": id, "status": outcome, "finished": outcome == "success",
+                    "startedAt": "2026-10-17T10:00:00.000Z",
+                    "stoppedAt": "2026-10-17T10:00:15.000Z",
+                    "data": original["data"].clone(),
+                });
+                if outcome == "success" {
+                    if let Some(e) = state.executions.iter_mut().find(|e| e["id"] == *id) {
+                        e["retrySuccessId"] = json!(new_id);
+                    }
+                }
+                state.executions.insert(0, retried.clone());
+                json_response(200, retried)
             }
             _ => json_response(404, json!({"message": "unknown route in fake n8n"})),
         }
@@ -3077,4 +3109,184 @@ async fn a_flow_stays_failed_until_a_later_run_succeeds() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Retrying a Failed Run (ticket 26, SPEC D17)
+// ---------------------------------------------------------------------------
+
+async fn retry(app: &App, flow_id: &str, execution_id: &str) -> (StatusCode, Value) {
+    app.call(
+        "POST",
+        &format!("/automation-flows/{flow_id}/retry"),
+        Some(json!({"executionId": execution_id})),
+    )
+    .await
+}
+
+/// The bodies n8n received on `POST /executions/:id/retry`, with that id.
+async fn retries(server: &MockServer) -> Vec<(String, Value)> {
+    posts_ending_with(server, "/retry")
+        .await
+        .into_iter()
+        .map(|(path, body)| {
+            let id = path
+                .trim_start_matches("/api/v1/executions/")
+                .trim_end_matches("/retry")
+                .to_string();
+            (id, body)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn retrying_a_failed_run_replays_it_in_n8n_and_shows_the_new_outcome() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("231", &id, "Export des contacts vide"));
+    let (_, before) = app.call("GET", &format!("/automation-flows/{id}"), None).await;
+    assert_eq!(before["failedRun"]["executionId"], "231");
+
+    let (status, answer) = retry(&app, &id, "231").await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    // n8n replayed exactly that Run, once.
+    let sent = retries(&server).await;
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0, "231");
+    // The new Run, and the Flow as it now stands: no longer failed.
+    let run = &answer["run"];
+    assert_ne!(run["executionId"], "231");
+    assert_eq!(run["status"], "success");
+    assert!(run["startedAt"].is_string());
+    assert_eq!(answer["flow"]["id"], id.as_str());
+    assert_eq!(answer["flow"]["failedRun"], Value::Null);
+    assert_eq!(answer["flow"]["lastExecution"]["status"], "success");
+    // Retrying never switches the Flow off.
+    assert_eq!(answer["flow"]["status"], "active");
+}
+
+#[tokio::test]
+async fn the_failed_run_notification_offers_relancer_which_retries_that_run() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("231", &id, "Sujet"));
+    report_failed_run(&app, json!({"executionId": "231", "workflowId": id})).await;
+    let notification = app.notifications().await.remove(0);
+
+    // « Voir le Flow » stays the primary action; « Relancer » calls the
+    // local API, then opens the Review Screen on the new outcome.
+    let actions = notification["actions"].as_array().unwrap();
+    assert_eq!(actions[0]["label"], "Voir le Flow");
+    let relancer = actions
+        .iter()
+        .find(|a| a["label"] == "Relancer")
+        .expect("a Relancer action");
+    assert_eq!(relancer["type"], "api");
+    assert_eq!(relancer["method"], "POST");
+    assert_eq!(relancer["deeplink_url"], format!("screenpipe://flows/{id}"));
+    assert_ne!(relancer["primary"], true);
+
+    // What the notification panel sends when it is clicked.
+    let (status, answer) = app
+        .call(
+            "POST",
+            relancer["url"].as_str().unwrap(),
+            Some(relancer["body"].clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(retries(&server).await[0].0, "231");
+}
+
+#[tokio::test]
+async fn a_retry_that_fails_again_is_the_flows_new_failed_run() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("231", &id, "Sujet"));
+    n8n.0.lock().unwrap().retry_outcome = Some("error".into());
+
+    let (status, answer) = retry(&app, &id, "231").await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["run"]["status"], "error");
+    assert_eq!(
+        answer["flow"]["failedRun"]["executionId"],
+        answer["run"]["executionId"]
+    );
+    assert_eq!(answer["flow"]["status"], "active");
+}
+
+#[tokio::test]
+async fn a_retry_never_runs_a_version_the_user_did_not_review() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("231", &id, "Sujet"));
+    n8n.add_execution(failed_run("232", &id, "Sujet"));
+
+    // The saved workflow is the reviewed one: the retry runs it (with any
+    // fix the user reviewed since the Run).
+    retry(&app, &id, "231").await;
+    // Changed in n8n since the review: the retry replays the Run's own
+    // version, never the unreviewed one.
+    n8n.edit_workflow(&id, |w| w["versionId"] = json!("edited-in-n8n"));
+    let (status, answer) = retry(&app, &id, "232").await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let sent = retries(&server).await;
+    assert_eq!(sent[0], ("231".to_string(), json!({"loadWorkflow": true})));
+    assert_eq!(sent[1], ("232".to_string(), json!({"loadWorkflow": false})));
+}
+
+#[tokio::test]
+async fn only_a_failed_run_of_this_flow_can_be_retried() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    let mut succeeded = failed_run("300", &id, "Sujet");
+    succeeded["status"] = json!("success");
+    n8n.add_execution(succeeded);
+    n8n.start_execution(&id, None);
+    let running = n8n.0.lock().unwrap().executions[0]["id"].as_str().unwrap().to_string();
+    // Already replayed with success: replaying it again would redo its work.
+    let mut retried = failed_run("302", &id, "Sujet");
+    retried["retrySuccessId"] = json!("303");
+    n8n.add_execution(retried);
+    n8n.add_workflow(json!({
+        "id": "other", "name": "Perso", "active": true, "versionId": "v",
+        "tags": [], "nodes": [], "connections": {}
+    }));
+    n8n.add_execution(failed_run("301", "other", "Sujet"));
+
+    for (run, expected, error) in [
+        ("300", StatusCode::CONFLICT, "run_not_failed"),
+        (running.as_str(), StatusCode::CONFLICT, "run_not_failed"),
+        ("302", StatusCode::CONFLICT, "run_not_failed"),
+        // Another workflow's Run, through this Flow.
+        ("301", StatusCode::NOT_FOUND, "run_not_found"),
+        ("999", StatusCode::NOT_FOUND, "run_not_found"),
+        ("../x", StatusCode::NOT_FOUND, "run_not_found"),
+    ] {
+        let (status, answer) = retry(&app, &id, run).await;
+        assert_eq!(status, expected, "{run} → {answer}");
+        assert_eq!(answer["error"], error, "{run}");
+        if status == StatusCode::CONFLICT {
+            // A clear message for the Review Screen.
+            assert!(!answer["detail"].as_str().unwrap_or_default().is_empty(), "{answer}");
+        }
+    }
+    // An unknown Flow.
+    let (status, _) = retry(&app, "nope", "300").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // n8n was never asked to replay anything.
+    assert!(retries(&server).await.is_empty());
 }
