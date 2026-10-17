@@ -107,49 +107,57 @@ describe("Review Screen graph", () => {
   it.each([
     ["the demo workflow", fixtureFlow],
     ["nodes n8n draws close together", crampedFlow],
-  ])("lines the steps up with equal links, context nodes under their step (%s)", async (_, flow) => {
+  ])("places the nodes as n8n does, without cards overlapping on a row (%s)", async (_, flow) => {
     const graph = await renderGraph(flow);
     const box = (id: string) => {
       const wrapper = within(graph).getByTestId(`flow-node-${id}`).closest<HTMLElement>(".react-flow__node")!;
       const [, x, y] = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(wrapper.style.transform)!;
       return { x: Number(x), y: Number(y), width: parseFloat(wrapper.style.width) };
     };
-    const position = (id: string) => flow.nodes.find((node) => node.id === id)!.position;
-    // A context node (AI model, parser, tool) plugs into the step above it.
-    const contextEdges = flow.edges.filter((edge) => position(edge.from)[1] > position(edge.to)[1]);
-    const contextIds = new Set(contextEdges.map((edge) => edge.from));
 
-    // The steps keep n8n's left-to-right order, on one row, equally spaced:
-    // context nodes below a step never stretch the link after it.
-    const steps = flow.nodes
-      .filter((node) => !contextIds.has(node.id))
-      .sort((a, b) => a.position[0] - b.position[0])
-      .map((node) => box(node.id));
-    const gaps = steps.slice(1).map((step, index) => step.x - steps[index].x);
-    for (const step of steps) expect(step.y).toBe(steps[0].y);
-    for (const gap of gaps) {
-      expect(gap).toBe(gaps[0]);
-      expect(gap).toBeGreaterThan(steps[0].width);
-    }
-
-    // Context nodes sit below their step, side by side, without overlapping.
-    for (const edge of contextEdges) expect(box(edge.from).y).toBeGreaterThan(box(edge.to).y);
-    const context = flow.nodes
-      .filter((node) => contextIds.has(node.id))
-      .sort((a, b) => a.position[0] - b.position[0])
-      .map((node) => box(node.id));
-    for (const [index, card] of context.slice(1).entries()) {
-      expect(card.x - context[index].x).toBeGreaterThan(card.width);
+    for (const a of flow.nodes) {
+      for (const b of flow.nodes) {
+        if (a === b) continue;
+        const [boxA, boxB] = [box(a.id), box(b.id)];
+        expect(Math.sign(boxA.y - boxB.y)).toBe(Math.sign(a.position[1] - b.position[1]));
+        // Left-to-right order holds within a row; rows of sub-steps are
+        // re-centred under the step they plug into.
+        if (a.position[1] === b.position[1]) {
+          expect(Math.sign(boxA.x - boxB.x)).toBe(Math.sign(a.position[0] - b.position[0]));
+          expect(Math.abs(boxA.x - boxB.x)).toBeGreaterThan(boxA.width);
+        }
+      }
     }
   });
 
-  it("draws straight links, never curves", async () => {
+  it("centres the sub-steps under the step they plug into, so their links are symmetrical", async () => {
     const graph = await renderGraph();
-    await within(graph).findAllByRole("img", { name: / → / });
+    const centreX = (id: string) => {
+      const wrapper = within(graph).getByTestId(`flow-node-${id}`).closest<HTMLElement>(".react-flow__node")!;
+      const [, x] = /translate\(([-\d.]+)px/.exec(wrapper.style.transform)!;
+      return Number(x) + parseFloat(wrapper.style.width) / 2;
+    };
+    const byId = new Map(fixtureFlow.nodes.map((node) => [node.id, node]));
+    const subs = fixtureFlow.edges.filter(
+      ({ from, to }) => byId.get(from)!.position[1] > byId.get(to)!.position[1],
+    );
+    const parent = subs[0].to;
+    const mean = subs.reduce((sum, { from }) => sum + centreX(from), 0) / subs.length;
+    expect(Math.abs(mean - centreX(parent))).toBeLessThan(1);
+  });
 
-    const edges = graph.querySelectorAll(".react-flow__edge");
-    expect(edges.length).toBe(fixtureFlow.edges.length);
-    for (const edge of edges) expect(edge.classList.contains("react-flow__edge-straight")).toBe(true);
+  it("draws the main path with straight links, sub-steps with curves", async () => {
+    const graph = await renderGraph();
+    const links = await within(graph).findAllByRole("img", { name: / → / });
+    const byId = new Map(fixtureFlow.nodes.map((node) => [node.id, node]));
+    const nameToId = new Map(fixtureFlow.nodes.map((node) => [node.name, node.id]));
+    for (const link of links) {
+      const [from, to] = link.getAttribute("aria-label")!.split(" → ").map((name) => nameToId.get(name)!);
+      const fromBelow = byId.get(from)!.position[1] > byId.get(to)!.position[1];
+      const path = link.querySelector("path.react-flow__edge-path")!.getAttribute("d")!;
+      // A straight link is a single segment: no Bézier control points.
+      expect(path.includes("C")).toBe(fromBelow);
+    }
   });
 
   it("offers no editing: nothing to drag, select, connect or delete", async () => {
