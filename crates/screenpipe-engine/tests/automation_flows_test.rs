@@ -66,6 +66,10 @@ struct N8nState {
     orphaned: Vec<String>,
     /// How a retried Run ends (`POST /executions/:id/retry`); `None` = success.
     retry_outcome: Option<String>,
+    /// When set, listing workflows answers 500 (n8n having a bad moment).
+    fail_workflow_list: bool,
+    /// How long n8n takes to answer a retry (the replayed Run's duration).
+    retry_delay: Option<Duration>,
 }
 
 #[derive(Clone, Default)]
@@ -181,7 +185,11 @@ impl Respond for FakeN8n {
 
         match (request.method.as_str(), segments.as_slice()) {
             ("GET", ["workflows"]) => {
+                if state.fail_workflow_list {
+                    return json_response(500, json!({"message": "Internal error"}));
+                }
                 let tag = query("tags");
+                let name = query("name");
                 let data: Vec<Value> = state
                     .workflows
                     .iter()
@@ -193,6 +201,7 @@ impl Respond for FakeN8n {
                             .any(|t| t["name"] == tag.as_str()),
                         None => true,
                     })
+                    .filter(|w| name.as_ref().is_none_or(|name| w["name"] == name.as_str()))
                     .cloned()
                     .collect();
                 let start: usize = query("cursor")
@@ -412,7 +421,10 @@ impl Respond for FakeN8n {
                     }
                 }
                 state.executions.insert(0, retried.clone());
-                json_response(200, retried)
+                match state.retry_delay {
+                    Some(delay) => json_response(200, retried).set_delay(delay),
+                    None => json_response(200, retried),
+                }
             }
             _ => json_response(404, json!({"message": "unknown route in fake n8n"})),
         }
@@ -523,6 +535,7 @@ impl App {
         server.flow_running_wait = RunningWait {
             interval: Duration::from_millis(10),
             deadline: Duration::from_millis(300),
+            retry: Duration::from_millis(400),
         };
         // Tests run the health check by hand unless they ask for the schedule.
         server.flow_health_check = health_check;
@@ -537,6 +550,19 @@ impl App {
             ui_key,
             notify,
         }
+    }
+
+    /// The desktop app takes `delay` to accept each notification.
+    async fn slow_notifications(&self, delay: Duration) {
+        self.notify.reset().await;
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"message": "Notification sent successfully"}))
+                    .set_delay(delay),
+            )
+            .mount(&self.notify)
+            .await;
     }
 
     /// The notifications the app was asked to show, in order.
@@ -3311,6 +3337,78 @@ async fn a_chat_update_keeps_the_error_workflow_whatever_the_chat_sends() {
     assert_eq!(n8n.error_workflows().len(), 1);
 }
 
+#[tokio::test]
+async fn a_chat_update_keeps_the_error_workflow_when_n8n_cannot_list_it() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let errors = the_error_workflow(&n8n);
+
+    // The chat sends the workflow back without its settings, and n8n cannot
+    // say which error workflow is ScreenPipe's right now.
+    let workflow = edited_workflow(&n8n, &id, |w| {
+        add_auto_label(w);
+        w["settings"] = json!({});
+    });
+    n8n.0.lock().unwrap().fail_workflow_list = true;
+    let (status, flow) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    // The Flow still names the error workflow it had: its failures are
+    // still notified.
+    assert_eq!(
+        n8n.workflows()[0]["settings"]["errorWorkflow"],
+        errors["id"]
+    );
+}
+
+#[tokio::test]
+async fn an_untagged_copy_of_the_error_workflow_is_tagged_instead_of_installing_another() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    // A previous install whose tag call failed: the bundled workflow is in
+    // n8n, untagged.
+    let mut copy: Value = serde_json::from_str(include_str!(
+        "../../../infra/automation-flows/workflows/screenpipe-flow-errors.json"
+    ))
+    .unwrap();
+    copy["id"] = json!("errCopy1");
+    copy["active"] = json!(false);
+    copy["isArchived"] = json!(false);
+    copy["tags"] = json!([]);
+    n8n.add_workflow(copy);
+
+    let (status, created) = chat_create(
+        &app,
+        json!({"workflow": chat_workflow(), "summary": "Chaque soir."}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let (status, from_task) = app.create_from_task().await;
+    assert_eq!(status, StatusCode::CREATED, "{from_task}");
+
+    // Never installed twice: the copy is the one, now tagged.
+    let errors = the_error_workflow(&n8n);
+    assert_eq!(errors["id"], "errCopy1");
+    assert_eq!(errors["tags"][0]["name"], ERRORS_TAG);
+    for flow in n8n.workflows() {
+        assert_eq!(
+            flow["settings"]["errorWorkflow"], "errCopy1",
+            "{}",
+            flow["name"]
+        );
+    }
+}
+
 const EMAIL_BODY: &str = "Le corps confidentiel de l'email";
 const ERROR_MESSAGE: &str = "Bad request: token sk-live-123 refusé";
 
@@ -3479,6 +3577,159 @@ async fn a_failed_run_without_an_email_names_the_flow_and_the_step() {
     assert!(text.contains("Résumé des réunions"), "{text}");
     assert!(text.contains("Préparer le résumé"), "{text}");
     assert!(!text.contains("E-mail"), "{text}");
+}
+
+#[tokio::test]
+async fn the_failed_run_notification_says_whether_the_flow_is_still_on() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    // A Draft (never switched on): its Run failed, e.g. a test from n8n.
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    n8n.add_execution(failed_run("231", &id, "Sujet"));
+
+    report_failed_run(&app, json!({"executionId": "231", "workflowId": id})).await;
+
+    let off = app.notifications().await[0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!off.contains("reste actif"), "{off}");
+    assert!(off.contains("n'est pas actif"), "{off}");
+
+    // Switched on: the failure does not switch it off.
+    app.ui_call(
+        "POST",
+        &format!("/automation-flows/{id}/activate"),
+        Some(json!({"versionId": created["versionId"]})),
+    )
+    .await;
+    n8n.add_execution(failed_run("232", &id, "Sujet"));
+    report_failed_run(&app, json!({"executionId": "232", "workflowId": id})).await;
+
+    let on = app.notifications().await[1]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(on.contains("Le Flow reste actif"), "{on}");
+}
+
+#[tokio::test]
+async fn a_slow_notification_never_holds_up_creating_or_changing_flows() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    n8n.add_execution(failed_run("231", &id, "Sujet"));
+    app.slow_notifications(Duration::from_millis(1_500)).await;
+
+    // While the app takes its time to show the Failed Run and an
+    // abstention, the chat creates a Flow.
+    let report = json!({"executionId": "231", "workflowId": id});
+    let (failed, abstained, (create_status, create_took)) = tokio::join!(
+        report_failed_run(&app, report.clone()),
+        report_abstention(&app, abstention(&id, "500", "Question")),
+        async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let started = std::time::Instant::now();
+            let (status, _) = chat_create(
+                &app,
+                json!({"workflow": chat_workflow(), "summary": "Résumé."}),
+            )
+            .await;
+            (status, started.elapsed())
+        },
+    );
+
+    assert_eq!(create_status, StatusCode::CREATED);
+    assert!(
+        create_took < Duration::from_millis(800),
+        "the creation waited for the notifications: {create_took:?}"
+    );
+    assert_eq!(failed.1["notified"], true, "{}", failed.1);
+    assert_eq!(abstained.1["notified"], true, "{}", abstained.1);
+}
+
+#[tokio::test]
+async fn a_run_reported_twice_at_once_is_notified_once() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    n8n.add_execution(failed_run("231", &id, "Sujet"));
+    app.slow_notifications(Duration::from_millis(400)).await;
+
+    // n8n's error workflow call and the health check find the same Run, and
+    // n8n retries an abstention call, while the first notification is shown.
+    let report = json!({"executionId": "231", "workflowId": id});
+    let unsure = abstention(&id, "500", "Question");
+    let (a, b, c, d) = tokio::join!(
+        report_failed_run(&app, report.clone()),
+        report_failed_run(&app, report),
+        report_abstention(&app, unsure.clone()),
+        report_abstention(&app, unsure),
+    );
+
+    let notified = [&a.1, &b.1, &c.1, &d.1]
+        .iter()
+        .filter(|answer| answer["notified"] == true)
+        .count();
+    assert_eq!(notified, 2, "{a:?} {b:?} {c:?} {d:?}");
+    assert_eq!(app.notifications().await.len(), 2);
+    // Recorded: a later report of the same Run is not notified again.
+    let (_, again) = report_failed_run(&app, json!({"executionId": "231"})).await;
+    assert_eq!(again["notified"], false);
+    assert_eq!(app.notifications().await.len(), 2);
+}
+
+/// The `limit` of every execution list the fake n8n was asked for.
+async fn execution_list_limits(server: &MockServer) -> Vec<usize> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "GET" && r.url.path() == "/api/v1/executions")
+        .map(|r| {
+            r.url
+                .query_pairs()
+                .find(|(key, _)| key == "limit")
+                .and_then(|(_, value)| value.parse().ok())
+                .unwrap_or(100)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn the_list_reads_one_run_per_flow_when_its_last_run_is_finished() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    for run in 1..=30 {
+        let status = if run == 30 { "error" } else { "success" };
+        n8n.0.lock().unwrap().executions.insert(
+            0,
+            json!({"id": run.to_string(), "workflowId": id, "status": status,
+                   "startedAt": format!("2026-10-17T09:{run:02}:00.000Z")}),
+        );
+    }
+    server.reset().await;
+    Mock::given(any())
+        .respond_with(n8n.clone())
+        .mount(&server)
+        .await;
+
+    let (status, list) = app.call("GET", "/automation-flows", None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list[0]["failedRun"]["executionId"], "30");
+    assert_eq!(list[0]["lastExecution"]["status"], "error");
+    assert_eq!(execution_list_limits(&server).await, [1]);
 }
 
 #[tokio::test]
@@ -4074,4 +4325,73 @@ async fn only_a_failed_run_of_this_flow_can_be_retried() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     // n8n was never asked to replay anything.
     assert!(retries(&server).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_second_relancer_while_the_first_retry_runs_replays_nothing() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("231", &id, "Sujet"));
+    {
+        let mut state = n8n.0.lock().unwrap();
+        // Fails again, so n8n would accept a second replay of 231.
+        state.retry_outcome = Some("error".into());
+        state.retry_delay = Some(Duration::from_millis(300));
+    }
+
+    // A double click: the second arrives while n8n replays the first.
+    let (first, second) = tokio::join!(retry(&app, &id, "231"), async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        retry(&app, &id, "231").await
+    });
+
+    assert_eq!(first.0, StatusCode::OK, "{}", first.1);
+    assert_eq!(second.0, StatusCode::CONFLICT, "{}", second.1);
+    assert_eq!(second.1["error"], "run_not_failed");
+    let detail = second.1["detail"].as_str().unwrap_or_default();
+    assert!(detail.contains("already running"), "{detail}");
+    assert_eq!(retries(&server).await.len(), 1, "n8n replayed the Run once");
+
+    // Once the first retry ended, the Run can be retried again.
+    n8n.0.lock().unwrap().retry_delay = None;
+    let (status, answer) = retry(&app, &id, "231").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+}
+
+#[tokio::test]
+async fn a_retry_n8n_takes_too_long_to_finish_is_still_running_not_unreachable() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("231", &id, "Sujet"));
+    {
+        let mut state = n8n.0.lock().unwrap();
+        // n8n is still replaying the Run when ScreenPipe stops waiting.
+        state.retry_outcome = Some("running".into());
+        state.retry_delay = Some(Duration::from_secs(2));
+    }
+
+    let (status, answer) = retry(&app, &id, "231").await;
+
+    // Accepted, outcome not known yet: never « cannot reach n8n ».
+    assert_eq!(status, StatusCode::ACCEPTED, "{answer}");
+    assert_eq!(answer["run"]["status"], "running");
+    assert_eq!(answer["flow"]["id"], id.as_str());
+    assert_eq!(answer["flow"]["status"], "active");
+
+    // n8n still replays it: another « Relancer » does not start a second one.
+    let (status, answer) = retry(&app, &id, "231").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert_eq!(answer["error"], "run_not_failed");
+    assert!(
+        answer["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("already running"),
+        "{answer}"
+    );
+    assert_eq!(retries(&server).await.len(), 1);
 }

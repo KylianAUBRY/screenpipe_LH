@@ -889,6 +889,50 @@ describe("Failed Runs (ticket 24)", () => {
       await waitFor(() => expect(screen.queryByTestId("flow-failed-run")).toBeNull());
     });
 
+    it("says the replay is still running when n8n has not finished it yet", async () => {
+      // The engine stopped waiting for n8n (202): no new Run id yet.
+      const retry = vi.fn(async () => ({
+        run: { executionId: null, status: "running" as const, startedAt: null },
+        flow: failed,
+      }));
+      render(
+        <FlowsTab
+          flowId={fixtureFlow.id}
+          onSelectFlow={vi.fn()}
+          api={fakeApi({ get: vi.fn(async () => failed), retry })}
+        />,
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: "Relancer" }));
+
+      const outcome = await screen.findByRole("status", { name: "Résultat de la relance" });
+      expect(outcome.textContent).toMatch(/n8n la termine encore/);
+      expect(outcome.textContent).not.toMatch(/injoignable/);
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("says a replay of this Run is already running instead of « plus en échec »", async () => {
+      const retry = vi.fn(async () => {
+        throw new FlowsApiError(
+          "run_not_failed",
+          "a retry of this Run is already running; its outcome will show on the Flow once n8n finishes it",
+        );
+      });
+      render(
+        <FlowsTab
+          flowId={fixtureFlow.id}
+          onSelectFlow={vi.fn()}
+          api={fakeApi({ get: vi.fn(async () => failed), retry })}
+        />,
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: "Relancer" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toMatch(/Une relance de ce passage est déjà en cours/);
+      expect(alert.textContent).not.toMatch(/n'est plus en échec/);
+    });
+
     it("cannot replay the same Run twice while n8n works on it", async () => {
       let finish: (value: { run: never; flow: Flow }) => void = () => {};
       const retry = vi.fn(

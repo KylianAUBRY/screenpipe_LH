@@ -102,12 +102,22 @@ export type ActivityItem = {
   failedStep: string | null;
 };
 
-/** The Run « Relancer » started (ticket 26), as n8n reports it once it answers. */
+/**
+ * The Run « Relancer » started (ticket 26), as n8n reports it once it answers.
+ * `executionId: null` with `running`: the engine stopped waiting for n8n
+ * (HTTP 202); n8n still replays the Run and its outcome shows on the Flow.
+ */
 export type RetriedRun = {
-  executionId: string;
+  executionId: string | null;
   status: LastExecution["status"];
   startedAt: string | null;
 };
+
+/**
+ * How the engine's `run_not_failed` detail starts when a replay of that Run
+ * is still running (a double click, a retry it stopped waiting for).
+ */
+export const RETRY_ALREADY_RUNNING = "a retry of this Run is already running";
 
 /**
  * Whether n8n answers right now (ticket 29, `GET /automation-flows/health`):
@@ -257,7 +267,10 @@ export const flowsApi = {
   /**
    * « Relancer » (ticket 26): replays a Failed Run of the Flow with the same
    * input through n8n's retry. Answers once n8n has the new Run's outcome,
-   * with the Flow as it now stands.
+   * with the Flow as it now stands; or, when n8n takes longer than the
+   * engine waits, a `running` Run without id (HTTP 202). A second retry of
+   * a Run whose replay still runs is refused (`run_not_failed`,
+   * [`RETRY_ALREADY_RUNNING`]).
    */
   retry: (id: string, executionId: string) =>
     request<{ run: RetriedRun; flow: Flow }>(

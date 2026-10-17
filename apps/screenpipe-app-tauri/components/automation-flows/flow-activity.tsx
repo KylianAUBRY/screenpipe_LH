@@ -12,7 +12,7 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { ActivityItem, FlowsApi } from "./api";
+import type { ActivityItem, FlowsApi, LastExecution } from "./api";
 import { SectionLabel, useFlowsLoad } from "./common";
 import { formatDate } from "./labels";
 
@@ -79,13 +79,24 @@ function ActivityLine({ item }: { item: ActivityItem }) {
 
 export function FlowActivity({
   flowId,
+  lastExecution,
   api,
 }: {
   flowId: string;
+  /** The Flow's last Run: the Activity is read again only when it changes. */
+  lastExecution: LastExecution | null;
   api: Pick<FlowsApi, "activity">;
 }) {
+  // Reading it means up to 10 Runs with their data from n8n: not on every
+  // refresh of the Review Screen, only when a Run started or ended (the
+  // Flow's last Run changed) or on « Réessayer ».
+  const lastRun = lastExecution ? `${lastExecution.startedAt}:${lastExecution.status}` : "none";
   // `async`: a client without the route shows the error state, not a crash.
-  const [activity, reload] = useFlowsLoad(async () => api.activity(flowId), `activity:${flowId}`);
+  const [activity, reload] = useFlowsLoad(
+    async () => api.activity(flowId),
+    `activity:${flowId}:${lastRun}`,
+    { refresh: false },
+  );
 
   return (
     <section className="space-y-2" aria-label="Activité">

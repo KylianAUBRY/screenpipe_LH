@@ -11,17 +11,36 @@
 
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { FlowsApiError, type Flow, type FlowsApi, type RetriedRun } from "./api";
+import {
+  FlowsApiError,
+  RETRY_ALREADY_RUNNING,
+  type Flow,
+  type FlowsApi,
+  type RetriedRun,
+} from "./api";
 import { formatDate } from "./labels";
 
 const OUTCOME: Record<RetriedRun["status"], string> = {
   success: "Relancé : le passage a réussi.",
   error: "Relancé : le passage a de nouveau échoué.",
-  running: "Relancé : le passage est encore en cours.",
+  // Also the engine's 202: n8n took the replay but had not finished it.
+  running:
+    "Relance lancée : n8n la termine encore. Son résultat apparaîtra sur ce Flow et dans l'Activité.",
 };
 
 const NOT_FAILED_MESSAGE =
   "Ce passage n'est plus en échec : il a réussi, est en cours ou a déjà été relancé. Le Flow est affiché tel qu'il est maintenant.";
+
+const ALREADY_RUNNING_MESSAGE =
+  "Une relance de ce passage est déjà en cours. Son résultat apparaîtra sur ce Flow quand n8n l'aura terminée.";
+
+/** The words for a `run_not_failed` refusal, or `null` for any other error. */
+function refusal(problem: FlowsApiError): string | null {
+  if (problem.code !== "run_not_failed") return null;
+  return problem.detail?.startsWith(RETRY_ALREADY_RUNNING)
+    ? ALREADY_RUNNING_MESSAGE
+    : NOT_FAILED_MESSAGE;
+}
 
 export function FailedRun({
   flow,
@@ -103,8 +122,8 @@ export function FailedRun({
       {problem && (
         <div role="alert" className="space-y-1 border border-border p-3">
           <p className="text-sm font-medium">Relance impossible</p>
-          {problem.code === "run_not_failed" ? (
-            <p className="text-sm text-muted-foreground">{NOT_FAILED_MESSAGE}</p>
+          {refusal(problem) ? (
+            <p className="text-sm text-muted-foreground">{refusal(problem)}</p>
           ) : (
             problem.detail && (
               <p className="break-all font-mono text-xs text-muted-foreground">
