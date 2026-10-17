@@ -1,5 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
+import { withDetectedFlows } from "./detected";
 import type { AutomationFlow } from "./types";
 
 /** Where the Recommendations tab gets its proposed Flows from. */
@@ -62,7 +63,8 @@ export const localFileFlowSource: FlowSource = {
   },
 };
 
-let source: FlowSource = localFileFlowSource;
+// Flows found by "Find an automation" come first, then the local file's.
+let source: FlowSource = withDetectedFlows(localFileFlowSource);
 
 export function flowSource(): FlowSource {
   return source;

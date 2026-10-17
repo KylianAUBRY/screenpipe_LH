@@ -171,7 +171,36 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         "accounting-follow-through",
         include_str!("../../assets/pipes/accounting-follow-through/pipe.md"),
     ),
+    (
+        "repeated-workflow-detector",
+        include_str!("../../assets/pipes/repeated-workflow-detector/pipe.md"),
+    ),
 ];
+
+/// Files a bundled Pipe needs beside its `pipe.md` (scripts, docs). They are
+/// written only when missing, so local edits survive like the prompt itself.
+const BUNDLED_PIPE_FILES: &[(&str, &str, &str)] = &[
+    (
+        "repeated-workflow-detector",
+        "detect.ts",
+        include_str!("../../assets/pipes/repeated-workflow-detector/detect.ts"),
+    ),
+    (
+        "repeated-workflow-detector",
+        "README.md",
+        include_str!("../../assets/pipes/repeated-workflow-detector/README.md"),
+    ),
+];
+
+fn install_bundled_pipe_files(pipe_dir: &Path, name: &str) -> Result<()> {
+    for &(_, file, content) in BUNDLED_PIPE_FILES.iter().filter(|(pipe, ..)| *pipe == name) {
+        let path = pipe_dir.join(file);
+        if !path.exists() {
+            atomic_write(&path, content)?;
+        }
+    }
+    Ok(())
+}
 
 /// Explicitly install one trusted Pipe bundled with the app.
 ///
@@ -188,6 +217,7 @@ pub fn install_bundled_pipe(pipes_dir: &Path, name: &str) -> Result<bool> {
 
     std::fs::create_dir_all(&pipe_dir)?;
     remove_tombstone(pipes_dir, name)?;
+    install_bundled_pipe_files(&pipe_dir, name)?;
     if pipe_md.exists() {
         if let Ok(local) = std::fs::read_to_string(&pipe_md) {
             if let Some(migrated) = migrate_builtin_pipe_text(name, &local) {
@@ -7811,9 +7841,11 @@ impl PipeManager {
                     continue;
                 }
                 std::fs::create_dir_all(&dir)?;
+                install_bundled_pipe_files(&dir, name)?;
                 atomic_write(&pipe_md, content)?;
                 info!("installed built-in pipe: {}", name);
             } else if let Ok(local) = std::fs::read_to_string(&pipe_md) {
+                install_bundled_pipe_files(&dir, name)?;
                 // already installed — don't overwrite the user's copy, but do
                 // repair known-broken instructions left over from older bundles
                 // (e.g. PATCH /meetings/:id, which the server never supported).
@@ -10555,6 +10587,34 @@ mod tests {
         assert!(dir.path().join("time-breakdown/pipe.md").exists());
         assert!(!install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
         assert!(install_bundled_pipe(dir.path(), "not-a-builtin").is_err());
+    }
+
+    #[tokio::test]
+    async fn bundled_pipe_files_are_installed_beside_the_prompt_and_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manager = PipeManager::new(dir.path().to_path_buf(), HashMap::new(), None, 0);
+        manager.install_builtin_pipes().unwrap();
+        let pipe_dir = dir.path().join("repeated-workflow-detector");
+        let script = pipe_dir.join("detect.ts");
+        assert!(pipe_dir.join("pipe.md").exists());
+        assert!(pipe_dir.join("README.md").exists());
+        assert!(std::fs::read_to_string(&script)
+            .unwrap()
+            .contains("Repeated workflow detector"));
+
+        // A local edit survives restarts and explicit installs.
+        std::fs::write(&script, "// local edit").unwrap();
+        manager.install_builtin_pipes().unwrap();
+        install_bundled_pipe(dir.path(), "repeated-workflow-detector").unwrap();
+        assert_eq!(std::fs::read_to_string(&script).unwrap(), "// local edit");
+
+        // An unmodified prompt counts as bundled, not against the user-pipe limit.
+        manager.set_max_non_template_pipes(Some(0));
+        manager.load_pipes().await.unwrap();
+        assert!(manager
+            .get_pipe("repeated-workflow-detector")
+            .await
+            .is_some());
     }
 
     #[test]

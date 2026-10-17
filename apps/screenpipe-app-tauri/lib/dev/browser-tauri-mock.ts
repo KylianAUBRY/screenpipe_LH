@@ -17,6 +17,7 @@ import type {
 } from "@/lib/utils/tauri";
 import type { BrowserDevScenario } from "./browser-engine-mock";
 import { buildProviderErrorPresentation } from "../chat/provider-errors";
+import { EXAMPLE_HANDOFF } from "../automation-flows/__fixtures__/example-handoff";
 
 export type BrowserDevMode = "mock" | "live";
 
@@ -833,7 +834,9 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
         return null;
       case "plugin:fs|read_file":
       case "plugin:fs|read_text_file": {
-        const contents = chatFixtures.get(String(input.path)) ?? "";
+        const contents = String(input.path).endsWith("/pipes/repeated-workflow-detector/output/handoff.json")
+          ? JSON.stringify({ ...EXAMPLE_HANDOFF, generatedAt: new Date().toISOString() })
+          : chatFixtures.get(String(input.path)) ?? "";
         return new TextEncoder().encode(contents);
       }
       case "plugin:fs|read_dir":

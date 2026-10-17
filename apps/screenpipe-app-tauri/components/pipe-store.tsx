@@ -77,6 +77,7 @@ import { msg, useMessages } from "gt-react";
 import { localizeDefinitions } from "@/lib/i18n/definitions";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { RecommendationsView } from "@/components/automation-flows/recommendations-view";
+import { FindAutomationButton } from "@/components/automation-flows/find-automation-button";
 import { OPEN_AUTOMATION_FLOW_EVENT } from "@/lib/automation-flows/notification";
 
 type PipesTab = "discover" | "my-pipes" | "recommendations";
@@ -440,6 +441,12 @@ export function PipeStoreView() {
         {/* Notifications are pipe output, so the bell lives here rather
             than in the global window chrome. */}
         <div className="ml-auto flex items-center">
+          <FindAutomationButton
+            onOpenFlow={(flowId) => {
+              setOpenFlowId(flowId);
+              setActiveTab("recommendations");
+            }}
+          />
           <NotificationBell />
         </div>
       </div>

@@ -242,6 +242,17 @@ export function mockLocalApiResponse(
     }
     return Response.json({ data: { name: onboardingMatch[1], config: { ...task, agent: "pi" } } });
   }
+  // "Find an automation": the detector Pipe finishes at once; the Tauri fs
+  // mock serves the handoff it would write.
+  if (url.pathname === "/pipes/bundled/repeated-workflow-detector/install" && method === "POST") {
+    return Response.json({ success: true });
+  }
+  if (url.pathname === "/pipes/repeated-workflow-detector/run" && method === "POST") {
+    return Response.json({ success: true, execution_id: 1 });
+  }
+  if (url.pathname === "/pipes/repeated-workflow-detector/executions/1") {
+    return Response.json({ data: { id: 1, pipe_name: "repeated-workflow-detector", status: "completed" } });
+  }
   const emptyPage = {
     data: [],
     pagination: { limit: 100, offset: 0, total: 0 },
