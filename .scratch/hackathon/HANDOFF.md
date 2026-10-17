@@ -14,8 +14,9 @@ decisions in `flow-front-merge.md`. Not in `main` until approved, through a PR.
   Page creation block, chat skill, engine fact lines, demo task, notification,
   Flow and node names, node sentences, summary). What was recorded stays as it
   is: the French emails and Jira tickets in the captures and their quoted
-  subjects, and the tickets the AI creates (its instructions and the Jira
-  values such as « Tâche » are unchanged).
+  subjects, and the AI's instructions and vocabulary (it answers « Tâche »
+  for an idea). The NOVA project's issue types are English, so « Prepare the
+  ticket » sends « Task » instead of « Tâche », which Jira refuses.
 - **Re-import the workflow** after pulling (`infra/automation-flows/import-workflow.sh`):
   node names changed, so did the AI tool name (« screenpipe history », also
   renamed in its instructions) and the IMAP trigger's static data key.

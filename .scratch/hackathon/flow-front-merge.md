@@ -29,8 +29,10 @@ merged into `main` only once the front has been tested and approved.
 - Everything the user sees is in English: the Flows screens, the Task Page
   creation copy, the chat prompts, the engine's fact lines, the demo task,
   notification, Flow name, node names and sentences, and the summary.
-- The AI instructions and the Jira values of the n8n workflow (e.g. the issue
-  type « Tâche ») stay as they are: they must match the Jira project.
+- The AI instructions of the n8n workflow stay as they are, French vocabulary
+  included (the AI answers « Tâche » for an idea). The ticket must match the
+  Jira project, whose issue types are English: « Prepare the ticket » turns
+  « Tâche » into « Task » (Jira refuses « Tâche »).
   Re-import the workflow (`infra/automation-flows/import-workflow.sh`) after
   pulling this branch.
 - `docs/DESIGN.md` applies: sentence-case buttons (mono), square bordered
