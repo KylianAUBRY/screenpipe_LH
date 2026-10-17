@@ -155,14 +155,28 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
  * Opens the Screenpipe chat ("Ajouter", "Demander une modification"). The
  * work happens there; the button only says when the chat could not open.
  */
-export function ChatButton({
+export function ChatButton(props: {
+  open: () => Promise<void>;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return <OpenButton {...props} failure="Impossible d'ouvrir le chat. Réessayez." />;
+}
+
+/**
+ * Hands the user over to another part of the app (the chat, the timeline);
+ * says `failure` when that part could not open.
+ */
+export function OpenButton({
   open,
   icon,
   children,
+  failure,
 }: {
   open: () => Promise<void>;
   icon: React.ReactNode;
   children: React.ReactNode;
+  failure: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -192,7 +206,7 @@ export function ChatButton({
       </Button>
       {failed && (
         <p role="alert" className="w-full border border-border p-3 text-sm">
-          Impossible d&apos;ouvrir le chat. Réessayez.
+          {failure}
         </p>
       )}
     </>

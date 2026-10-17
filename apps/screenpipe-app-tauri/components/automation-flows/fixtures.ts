@@ -18,6 +18,8 @@ export const fixtureFlow: Flow = {
   lastExecution: null,
   n8nUrl: "http://localhost:5678/workflow/spNovaFlow000001",
   sourceTaskId: "wf-novadesk-support-tickets",
+  // The scripted task's first evidence (an embedded image, so no recorder frame).
+  sourceMoment: { frameId: null, timestamp: "2026-10-17T02:05:41Z" },
   summary: "Ce flux transforme chaque email de bug ou d'idée reçu sur la boîte support NovaDesk (servicedesk.novadesk@gmail.com) en ticket dans le projet Jira NOVA. Dès qu'un email non lu arrive, n8n le lit puis le marque comme lu, pour qu'il ne soit jamais traité deux fois. Une IA, fournie par votre abonnement Screenpipe, ne décide que ce qui demande du jugement : Bug, Tâche (idée d'amélioration) ou aucun ticket (par exemple une alerte de sécurité), le produit concerné, un résumé court, la priorité (Highest si c'est bloquant, Medium si un contournement existe, Low pour une idée) et l'étiquette back ou front. Pour reprendre vos habitudes, elle regarde d'abord dans Screenpipe le seul texte d'écran des fenêtres Jira, où figurent les tickets que vous avez créés à la main pour des emails similaires. L'email est traité comme une donnée, jamais comme une instruction : si aucun ticket n'est nécessaire, ou si la réponse de l'IA sort des valeurs autorisées, rien n'est créé. Sinon, le ticket est construit sans IA : titre « Produit - résumé », email d'origine cité en texte brut dans la description, aucune personne assignée. Rien ne tourne tant que vous n'avez pas cliqué sur Activer.",
   nodes: [
     {

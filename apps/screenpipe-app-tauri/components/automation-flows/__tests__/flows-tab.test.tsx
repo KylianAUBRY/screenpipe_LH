@@ -41,6 +41,7 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     openInN8n: vi.fn(async () => {}),
     openTaskPage: vi.fn(async () => {}),
     openN8nConnection: vi.fn(async () => {}),
+    openTimeline: vi.fn(async () => {}),
     requestChange: vi.fn(async () => {}),
     requestCreation: vi.fn(async () => {}),
     ...overrides,
@@ -214,6 +215,39 @@ describe("Review Screen", () => {
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => chatFlow) })} />);
     await screen.findByRole("button", { name: "Voir le graphe" });
     expect(screen.queryByRole("button", { name: "Voir la tâche" })).toBeNull();
+  });
+
+  it("opens the moment the task was seen in the timeline", async () => {
+    const moment = { frameId: 4242, timestamp: "2026-10-17T02:07:12.733Z" };
+    const api = fakeApi({ get: vi.fn(async () => ({ ...fixtureFlow, sourceMoment: moment })) });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Voir dans la timeline" }));
+
+    expect(api.openTimeline).toHaveBeenCalledWith(moment);
+    expect(api.activate).not.toHaveBeenCalled();
+  });
+
+  it("offers the timeline only when the engine knows where the task was seen", async () => {
+    const api = fakeApi({ get: vi.fn(async () => ({ ...fixtureFlow, sourceTaskId: null, sourceMoment: null })) });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+    await screen.findByRole("button", { name: "Voir le graphe" });
+    expect(screen.queryByRole("button", { name: "Voir dans la timeline" })).toBeNull();
+  });
+
+  it("says when the timeline cannot be opened", async () => {
+    const api = fakeApi({
+      get: vi.fn(async () => ({ ...fixtureFlow, sourceMoment: { frameId: null, timestamp: "2026-10-17T02:05:41Z" } })),
+      openTimeline: vi.fn(async () => {
+        throw new Error("Timeline unavailable");
+      }),
+    });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Voir dans la timeline" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(/Impossible d'ouvrir ce moment dans la timeline/)).toBeTruthy();
   });
 
   it("flags a Flow that needs review and lists its activation history", async () => {

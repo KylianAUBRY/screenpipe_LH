@@ -4,18 +4,20 @@
 
 "use client";
 
-// Review Screen: what the Flow does, the n8n graph with one sentence per
-// node, links to the graph in n8n and back to the Task Page, status, last
-// run, activation history, Activate / Deactivate, and "Demander une
-// modification" (the ScreenPipe chat, ticket 08).
+// Review Screen: what the Flow does, the n8n graph with one sentence (and the
+// fixed facts) per node, links to the graph in n8n, back to the Task Page and
+// to the moment in the timeline where the task was seen, status, last run,
+// activation history, Activate / Deactivate, and "Demander une modification"
+// (the Screenpipe chat, ticket 08).
 
 import React from "react";
-import { ArrowLeft, ExternalLink, MessageSquare } from "lucide-react";
+import { ArrowLeft, Clock, ExternalLink, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Flow, FlowsApi } from "./api";
 import {
   ChatButton,
   FlowsErrorMessage,
+  OpenButton,
   SectionLabel,
   StatusBadge,
   useFlowsLoad,
@@ -114,6 +116,15 @@ function ReviewContent({
             >
               Voir la tâche
             </Button>
+          )}
+          {flow.sourceMoment && (
+            <OpenButton
+              open={() => api.openTimeline(flow.sourceMoment!)}
+              icon={<Clock className="mr-1 h-4 w-4" aria-hidden />}
+              failure="Impossible d'ouvrir ce moment dans la timeline. Réessayez."
+            >
+              Voir dans la timeline
+            </OpenButton>
           )}
           <RequestChange flow={flow} api={api} />
         </div>

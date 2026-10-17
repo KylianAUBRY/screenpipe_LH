@@ -45,9 +45,17 @@ export type ActivationEvent = {
   by: "user" | "chat";
 };
 
+/** A recorded moment: a recorder frame, or a time alone (`frameId: null`). */
+export type SourceMoment = { frameId: number | null; timestamp: string };
+
 export type Flow = FlowSummary & {
   n8nUrl: string;
   sourceTaskId: string | null;
+  /**
+   * Where the Detected Task was seen (ticket 22): its first evidence moment,
+   * for « Voir dans la timeline ». `null` for a Flow created from the chat.
+   */
+  sourceMoment: SourceMoment | null;
   summary: string;
   nodes: FlowNode[];
   edges: { from: string; to: string }[];
@@ -181,6 +189,15 @@ export const flowsApi = {
     await routeNotificationDeeplink(
       `screenpipe://workflows?workflow=${encodeURIComponent(taskId)}`,
     );
+  },
+
+  /**
+   * "Voir dans la timeline": the moment the Flow's task was seen, through
+   * the same Timeline handoff as the Task Page evidence.
+   */
+  async openTimeline(moment: SourceMoment) {
+    const { openTimelineMoment } = await import("@/lib/workflows/timeline");
+    await openTimelineMoment(moment.frameId, moment.timestamp);
   },
 
   /** Where the n8n API URL and key are entered. */
