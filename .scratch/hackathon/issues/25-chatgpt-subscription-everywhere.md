@@ -90,6 +90,47 @@ Every call stayed far under the AI step's 20 s timeout. n8n 2.x registers a
 webhook a moment after activation: the first try got a 404 and the delete a
 409; the check script now waits for both.
 
+## Luna at max effort everywhere (user decision, 2026-10-17)
+
+`gpt-5.6-luna` at reasoning effort `max` replaces `gpt-5.6-terra`. In Pi's
+Codex catalog Luna is the lightest of the 5.6 family (input/output $0.2/$1.2
+per M tokens, against $2/$12 for Terra and $5/$30 for Sol); all three accept
+`max`.
+
+- **Proxy:** `chatgpt/<model>:<effort>` sets the reasoning effort; a
+  `reasoning_effort` in the request wins. Needed because n8n's OpenAI Chat
+  Model only forwards `low`, `medium` or `high` (`LmChatOpenAi.node.js`,
+  `['low','medium','high'].includes(...)`). The backend validates the value
+  (`bogus` → 400 listing `none` … `max`).
+- **n8n AI step, AI Trigger default, automation-flows skill:**
+  `chatgpt/gpt-5.6-luna:max`.
+- **Chat:** the Effort slider gains « Max » (`thinking-level-selector.tsx`,
+  `pi_set_thinking_level` / `pi_get_thinking_level` in `src-tauri/src/pi.rs`);
+  Pi clamps it on models without `max`. On this Mac the default ChatGPT
+  preset is `gpt-5.6-luna` and Pi's `defaultThinkingLevel` is `max`
+  (`~/.screenpipe/pi-config/settings.json`), set while the app was stopped.
+  The preset's model list shows only the account catalog's
+  `visibility: list` entries and Luna is not among them; the field takes a
+  typed model name.
+- **Demo Flow** `DucCIr8YH6FdrZOZ` (created with `auto`): changed through
+  `PUT /automation-flows/<id>` (model and « abonnement ChatGPT » wording), so
+  ScreenPipe paused it (`paused_for_edit`) and it is `needs_review`: the user
+  re-activates it from the Review Screen.
+
+| Live check, luna:max (app rebuilt from `1326c501d`) | Result |
+|-------|--------|
+| Proxy plain / tool call / tool result / stream | 200 in 2.8 / 0.9 / 1.7 / 1.2 s |
+| Proxy `auto` | 200 from screenpipe cloud, unchanged |
+| AI Trigger, coding condition | fired in 1.8 s |
+| AI Trigger, football condition | not met in 1.7 s |
+| n8n AI step, NovaCRM bug email | 200 in 6.1 s: Bug, NovaCRM, Highest, back |
+| n8n AI step, security alert | 200 in 1.4 s: `type: none` |
+
+Tests: `cargo test -p screenpipe-engine --lib routes::chatgpt_proxy` → 15
+passed; `cargo test -p screenpipe-core --lib automation_flows_skill` → 2
+passed; node tests 47, workflow tests 20; effort slider and composer vitest
+files → 51 passed.
+
 ## Known limits
 
 - ChatGPT plans have usage windows; a polling AI Trigger spends them. A usage
