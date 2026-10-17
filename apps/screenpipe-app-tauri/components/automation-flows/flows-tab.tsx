@@ -15,6 +15,7 @@ import { ChatButton, FlowsErrorMessage, StatusBadge, useFlowsLoad } from "./comm
 import { FlowDelete } from "./flow-delete";
 import { FlowReview } from "./flow-review";
 import { lastRunLabel } from "./labels";
+import { cn } from "@/lib/utils";
 
 export function FlowsTab({
   flowId,
@@ -83,6 +84,8 @@ function FlowRow({
   api: FlowsApi;
   onDeleted: () => void;
 }) {
+  // A failed last run shows red; the Flow is never paused for it (D16).
+  const failed = flow.lastExecution?.status === "error";
   return (
     <li className="flex flex-wrap items-center gap-2 pr-4">
       <button
@@ -93,11 +96,15 @@ function FlowRow({
       >
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{flow.name}</div>
-          <div className="text-xs text-muted-foreground">
+          <div className={cn("text-xs", failed ? "text-red-600 dark:text-red-400" : "text-muted-foreground")}>
             Dernière exécution : {lastRunLabel(flow.lastExecution)}
           </div>
         </div>
-        <StatusBadge status={flow.status} running={flow.lastExecution?.status === "running"} />
+        <StatusBadge
+          status={flow.status}
+          running={flow.lastExecution?.status === "running"}
+          failed={failed}
+        />
         <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden />
       </button>
       <FlowDelete flow={flow} api={api} onDeleted={onDeleted} label={`Supprimer ${flow.name}`} />

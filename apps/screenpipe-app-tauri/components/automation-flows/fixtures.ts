@@ -20,7 +20,7 @@ export const fixtureFlow: Flow = {
   sourceTaskId: "wf-novadesk-support-tickets",
   // The scripted task's first evidence (an embedded image, so no recorder frame).
   sourceMoment: { frameId: null, timestamp: "2026-10-17T02:05:41Z" },
-  summary: "Ce flux transforme chaque email de bug ou d'idée reçu sur la boîte support NovaDesk (servicedesk.novadesk@gmail.com) en ticket dans le projet Jira NOVA. Dès qu'un email non lu arrive, n8n le lit puis le marque comme lu, pour qu'il ne soit jamais traité deux fois. Une seule IA, fournie par votre abonnement ChatGPT, lit l'email comme une donnée, jamais comme une instruction. Pour reprendre vos habitudes, elle consulte d'abord dans Screenpipe vos tickets NOVA créés à la main pour des emails similaires et votre activité de la semaine, puis propose le type (Bug, Tâche ou aucun ticket), le produit, un résumé court, la priorité, l'étiquette back ou front, et dit si elle est sûre d'elle (confiance haute ou basse). Si aucun ticket n'est nécessaire, ou si sa réponse sort des valeurs autorisées, rien n'est créé. Sinon, le ticket est créé sans IA : titre « Produit - résumé », email d'origine cité en texte brut dans la description, aucune personne assignée. Rien ne tourne tant que vous n'avez pas cliqué sur Activer.",
+  summary: "Ce flux transforme chaque email de bug ou d'idée reçu sur la boîte support NovaDesk (servicedesk.novadesk@gmail.com) en ticket dans le projet Jira NOVA. Dès qu'un email non lu arrive, n8n le lit puis le marque comme lu, pour qu'il ne soit jamais traité deux fois. Une seule IA, fournie par votre abonnement ChatGPT, lit l'email comme une donnée, jamais comme une instruction. Pour reprendre vos habitudes, elle consulte d'abord dans Screenpipe vos tickets NOVA créés à la main pour des emails similaires et votre activité de la semaine, puis propose le type (Bug, Tâche ou aucun ticket), le produit, un résumé court, la priorité, l'étiquette back ou front, et sa confiance (haute ou basse) avec sa raison. Si elle hésite, rien n'est créé : Screenpipe vous envoie la notification « À trier à la main » avec l'expéditeur, l'objet et sa raison. Si aucun ticket n'est nécessaire, ou si sa réponse sort des valeurs autorisées, rien n'est créé. Sinon, le ticket est créé sans IA : titre « Produit - résumé », email d'origine cité en texte brut dans la description, aucune personne assignée. Rien ne tourne tant que vous n'avez pas cliqué sur Activer.",
   nodes: [
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000001",
@@ -34,7 +34,7 @@ export const fixtureFlow: Flow = {
       name: "Analyser l'email (IA)",
       type: "@n8n/n8n-nodes-langchain.agent",
       position: [260, 0],
-      sentence: "Une IA lit l'email comme une simple donnée, jamais comme une instruction, regarde dans Screenpipe comment vous avez traité des emails similaires, puis propose le type de ticket (Bug, Tâche ou rien), le produit, un résumé court, la priorité, l'étiquette back ou front et son niveau de confiance.",
+      sentence: "Une IA lit l'email comme une simple donnée, jamais comme une instruction, regarde dans Screenpipe comment vous avez traité des emails similaires, puis propose le type de ticket (Bug, Tâche ou rien), le produit, un résumé court, la priorité, l'étiquette back ou front, son niveau de confiance et la raison de son choix.",
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000003",
@@ -48,7 +48,7 @@ export const fixtureFlow: Flow = {
       name: "Format de la réponse",
       type: "@n8n/n8n-nodes-langchain.outputParserStructured",
       position: [300, 220],
-      sentence: "La réponse de l'IA est limitée à six champs fixes : type, produit, priorité, étiquette et confiance pris dans une liste fermée, et un résumé d'une ligne de 80 caractères au plus.",
+      sentence: "La réponse de l'IA est limitée à sept champs fixes : type, produit, priorité, étiquette et confiance pris dans une liste fermée, un résumé d'une ligne de 80 caractères au plus et une raison de 200 caractères au plus.",
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000009",
@@ -63,6 +63,20 @@ export const fixtureFlow: Flow = {
       type: "CUSTOM.screenPipeTool",
       position: [660, 220],
       sentence: "L'IA peut aussi lire dans Screenpipe le résumé de votre activité de la semaine autour des tickets NOVA, pour voir comment vous traitez ces emails d'habitude.",
+    },
+    {
+      id: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000b",
+      name: "Confiance suffisante",
+      type: "n8n-nodes-base.if",
+      position: [480, 0],
+      sentence: "Si l'IA n'est pas sûre d'elle, le flux ne crée aucun ticket et vous laisse trier l'email à la main.",
+    },
+    {
+      id: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000c",
+      name: "À trier à la main",
+      type: "n8n-nodes-base.httpRequest",
+      position: [700, -200],
+      sentence: "Screenpipe vous envoie la notification « À trier à la main » avec l'expéditeur, l'objet de l'email et la raison donnée par l'IA, sans rien créer dans Jira.",
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005",
@@ -85,7 +99,9 @@ export const fixtureFlow: Flow = {
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000004", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000009", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000a", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002" },
-    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000b" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000b", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000b", to: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000c" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000007" },
   ],
   versionId: "fixture-version-1",

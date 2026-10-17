@@ -50,6 +50,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
+mod failures;
+pub use failures::{FailureReports, ERROR_WORKFLOW_TAG};
+
 /// n8n tag that marks a workflow as a ScreenPipe Automation Flow.
 pub const FLOW_TAG: &str = "screenpipe-flow";
 /// n8n tag that marks a Flow still under construction by the chat: hidden
@@ -208,6 +211,8 @@ struct FlowsState {
     /// a task was first seen.
     workflow_catalog: WorkflowCatalogSource,
     running_wait: RunningWait,
+    /// Where a failed run is reported (D16).
+    failure_reports: FailureReports,
     http: reqwest::Client,
     /// Serializes store writes and imports so a double click on "create"
     /// cannot import the same task twice.
@@ -220,6 +225,7 @@ pub fn router<S>(
     activation_key: Option<FlowActivationKey>,
     workflow_catalog_dir: Option<PathBuf>,
     running_wait: RunningWait,
+    failure_reports: FailureReports,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -235,6 +241,7 @@ where
         activation_key,
         workflow_catalog: WorkflowCatalogSource(workflow_catalog_dir),
         running_wait,
+        failure_reports,
         http,
         write_lock: Arc::new(Mutex::new(())),
     };
@@ -250,6 +257,7 @@ where
         .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
         .route("/:id/deactivate", post(deactivate_flow))
+        .route("/:id/failures", post(failures::report_failure))
         .layer(middleware::from_fn(require_json))
         .with_state(state)
 }
@@ -644,6 +652,11 @@ impl N8nApi {
     /// Adds [`FLOW_TAG`] to the workflow's tags and returns it re-read.
     async fn ensure_tagged(&self, workflow: Value) -> Result<Value, FlowError> {
         self.retag(workflow, &[FLOW_TAG], &[]).await
+    }
+
+    /// Adds the tag `name` to the workflow's tags and returns it re-read.
+    async fn add_tag(&self, workflow: Value, name: &str) -> Result<Value, FlowError> {
+        self.retag(workflow, &[name], &[]).await
     }
 
     /// Adds the tags named `add` and removes those named `remove`, then
@@ -1533,6 +1546,7 @@ async fn update_flow(
     }
     keep_user_credentials(&mut body, Some(&current));
     check_nodes(&api, &mut body).await?;
+    failures::name_error_workflow(&state, &api, &mut body).await;
 
     if current["active"] == true {
         let running = running_version(&current);
@@ -1849,8 +1863,12 @@ async fn finish_draft(
     if !check.problems.is_empty() {
         return Err(FlowError::InvalidWorkflow(check.problems.join("; ")));
     }
-    // A credential n8n gained since the last step was wired just now.
-    let workflow = if body["nodes"] != importable(&current)["nodes"] {
+    // Its failed runs are reported, like any Flow's (D16).
+    failures::name_error_workflow(&state, &api, &mut body).await;
+    // Saved when that setting, or a credential n8n gained since the last
+    // step and wired just now, changed the draft.
+    let saved = importable(&current);
+    let workflow = if body["nodes"] != saved["nodes"] || body["settings"] != saved["settings"] {
         save_draft(&api, &id, &body).await?
     } else {
         current
@@ -1887,6 +1905,7 @@ async fn create_flow(
     let mut body = importable(&request.workflow);
     keep_user_credentials(&mut body, None);
     check_nodes(&api, &mut body).await?;
+    failures::name_error_workflow(&state, &api, &mut body).await;
     let (status, created) = api
         .send(Method::POST, "/workflows", &[], Some(&body))
         .await?;
@@ -1997,13 +2016,10 @@ async fn create_from_task(
         }
         Some(workflow) => workflow,
         None => {
-            api.expect_ok(
-                Method::POST,
-                "/workflows",
-                &[],
-                Some(&importable(&workflow)),
-            )
-            .await?
+            let mut body = importable(&workflow);
+            failures::name_error_workflow(&state, &api, &mut body).await;
+            api.expect_ok(Method::POST, "/workflows", &[], Some(&body))
+                .await?
         }
     };
     let id = workflow_id(&created)?;

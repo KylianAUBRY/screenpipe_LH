@@ -14,7 +14,13 @@ vi.mock("@/lib/utils/tauri", () => ({ commands: { showWindowActivated: mocks.sho
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { canCreateAutomationFlow, createAutomationFlow, flowReviewLink, openFlowReviewLink } from "./automation-flows";
+import {
+  canCreateAutomationFlow,
+  createAutomationFlow,
+  flowReviewLink,
+  followFlowsNavigation,
+  openFlowReviewLink,
+} from "./automation-flows";
 import { DEMO_TASK_ID, fixtureFlow } from "@/components/automation-flows/fixtures";
 import { mockAutomationFlowsResponse } from "@/components/automation-flows/mock";
 
@@ -125,4 +131,31 @@ describe("Review Screen link from the chat", () => {
       expect(mocks.showWindowActivated).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("Home brought up on a Review Screen from another window", () => {
+  // A failure notification or the Chat overlay asks the native side to show
+  // Home on `pipes&tab=flows&flow=<id>`; Home then receives `navigate`.
+  it("switches the Automations view to the Flow named in the navigation", () => {
+    window.history.replaceState({}, "", "/home?section=timeline");
+    const switched = vi.fn();
+    const listen = (event: Event) => switched((event as CustomEvent).detail);
+    window.addEventListener("switch-pipes-tab", listen);
+    try {
+      expect(followFlowsNavigation(new URL(`http://localhost${reviewUrl}`))).toBe(true);
+    } finally {
+      window.removeEventListener("switch-pipes-tab", listen);
+    }
+    // A view that mounts now reads the address; one already mounted follows the event.
+    expect(`${window.location.pathname}${window.location.search}`).toBe(reviewUrl);
+    expect(switched).toHaveBeenCalledWith({ tab: "flows", flow: fixtureFlow.id });
+    expect(mocks.emit).not.toHaveBeenCalled();
+  });
+
+  it("leaves every other navigation alone", () => {
+    window.history.replaceState({}, "", "/home?section=timeline");
+    expect(followFlowsNavigation(new URL("http://localhost/home?section=pipes"))).toBe(false);
+    expect(followFlowsNavigation(new URL("http://localhost/home?section=meetings&tab=flows"))).toBe(false);
+    expect(window.location.search).toBe("?section=timeline");
+  });
 });
