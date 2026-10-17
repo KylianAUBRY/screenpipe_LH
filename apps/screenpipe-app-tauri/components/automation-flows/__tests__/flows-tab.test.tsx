@@ -5,7 +5,7 @@
 import React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FlowsApiError, type Flow, type FlowsApi } from "../api";
+import { FlowsApiError, type Flow, type FlowRun, type FlowsApi } from "../api";
 import { REFRESH_INTERVAL_MS } from "../common";
 import { FlowsTab } from "../flows-tab";
 import { fixtureFlow, summaryOf } from "../fixtures";
@@ -45,6 +45,7 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     openTimeline: vi.fn(async () => {}),
     requestChange: vi.fn(async () => {}),
     requestCreation: vi.fn(async () => {}),
+    activity: vi.fn(async () => []),
     ...overrides,
   };
 }
@@ -288,6 +289,44 @@ describe("Review Screen", () => {
     expect(screen.getByTestId("flow-status").textContent).toBe("À revoir");
     expect(screen.getByText(/^Activé par vous/)).toBeTruthy();
     expect(screen.getByText(/^Mis en pause pour modification par le chat/)).toBeTruthy();
+  });
+
+  it("lists the Flow's Activity newest first, each email with its outcome and reason (D18)", async () => {
+    const email = (subject: string) => ({ sender: "Arthur Noteris <arthur@novadesk.fr>", subject });
+    const runs: FlowRun[] = [
+      { executionId: "e4", startedAt: "2026-10-17T12:00:00.000Z", outcome: "failed", reason: "Échec à l'étape « Créer le ticket Jira » : 503 Service Unavailable", email: email("Export PDF vide"), ticket: null },
+      { executionId: "e3", startedAt: "2026-10-17T11:00:00.000Z", outcome: "abstained", reason: "Question d'usage ou défaut : je ne sais pas.", email: email("Les relances, c'est normal ?"), ticket: null },
+      { executionId: "e2", startedAt: "2026-10-17T10:00:00.000Z", outcome: "ignored", reason: "Alerte de sécurité, pas une demande client.", email: email("Alerte de sécurité"), ticket: null },
+      { executionId: "e1", startedAt: "2026-10-17T09:00:00.000Z", outcome: "ticket", reason: "L'export renvoie un fichier vide.", email: email("Export des contacts vide"), ticket: "NOVA-28" },
+    ];
+    const api = fakeApi({ activity: vi.fn(async () => runs) });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    const list = await screen.findByRole("list", { name: "Activité du Flow" });
+    expect(api.activity).toHaveBeenCalledWith(fixtureFlow.id);
+    const items = within(list).getAllByRole("listitem");
+    expect(items.map((item) => item.getAttribute("data-testid"))).toEqual([
+      "flow-run-e4",
+      "flow-run-e3",
+      "flow-run-e2",
+      "flow-run-e1",
+    ]);
+    const [failed, abstained, ignored, ticket] = items;
+    expect(within(failed).getByText("Échec")).toBeTruthy();
+    expect(within(failed).getByText(/503 Service Unavailable/)).toBeTruthy();
+    expect(within(failed).getByText("Échec").className).toMatch(/\btext-red-600\b/);
+    expect(within(abstained).getByText("À trier à la main")).toBeTruthy();
+    expect(within(abstained).getByText("Question d'usage ou défaut : je ne sais pas.")).toBeTruthy();
+    expect(within(ignored).getByText("Ignoré")).toBeTruthy();
+    expect(within(ignored).getByText("Alerte de sécurité, pas une demande client.")).toBeTruthy();
+    expect(within(ticket).getByText("Ticket NOVA-28 créé")).toBeTruthy();
+    expect(within(ticket).getByText(/Arthur Noteris <arthur@novadesk.fr> · « Export des contacts vide »/)).toBeTruthy();
+    expect(within(ticket).getByText(/^17\/10\/2026 \d{2}:\d{2}$/)).toBeTruthy();
+  });
+
+  it("says when the Flow has handled no email yet", async () => {
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi()} />);
+    expect(await screen.findByText("Aucun e-mail traité pour l'instant.")).toBeTruthy();
   });
 
   it("goes back to the list", async () => {

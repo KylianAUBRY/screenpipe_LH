@@ -7,7 +7,7 @@
 // infra/automation-flows/workflows/novadesk-support-tickets*.json). A test in
 // __tests__/api.test.ts fails when the two drift apart.
 
-import type { Flow, FlowSummary } from "./api";
+import type { Flow, FlowRun, FlowSummary } from "./api";
 
 export const DEMO_TASK_ID = "wf-novadesk-support-tickets";
 
@@ -109,6 +109,45 @@ export const fixtureFlow: Flow = {
   reviewOutdated: false,
   activationLog: [],
 };
+
+/**
+ * The demo Flow's Activity in the browser mock (D18): one email per outcome,
+ * newest first, as `GET /automation-flows/:id/activity` returns it.
+ */
+export const fixtureActivity: FlowRun[] = [
+  {
+    executionId: "fixture-run-4",
+    startedAt: "2026-10-17T12:10:00.000Z",
+    outcome: "failed",
+    reason: "Échec à l'étape « Créer le ticket Jira » : 503 Service Unavailable",
+    email: { sender: "Claire Martin <claire.martin@client.fr>", subject: "Export PDF vide depuis la mise à jour" },
+    ticket: null,
+  },
+  {
+    executionId: "fixture-run-3",
+    startedAt: "2026-10-17T11:20:00.000Z",
+    outcome: "abstained",
+    reason: "Je ne sais pas si c'est une question d'usage ou un défaut des relances.",
+    email: { sender: "Loris Omont <loris.omont@novadesk.fr>", subject: "Les relances, c'est normal ?" },
+    ticket: null,
+  },
+  {
+    executionId: "fixture-run-2",
+    startedAt: "2026-10-17T10:05:00.000Z",
+    outcome: "ignored",
+    reason: "Alerte de sécurité Google, pas une demande d'un client.",
+    email: { sender: "Google <no-reply@accounts.google.com>", subject: "Alerte de sécurité" },
+    ticket: null,
+  },
+  {
+    executionId: "fixture-run-1",
+    startedAt: "2026-10-17T09:04:00.000Z",
+    outcome: "ticket",
+    reason: "L'export des contacts filtrés renvoie un fichier vide : c'est un défaut de NovaCRM.",
+    email: { sender: "Arthur Noteris <arthur.noteris@novadesk.fr>", subject: "Export des contacts vide dans NovaCRM" },
+    ticket: "NOVA-28",
+  },
+];
 
 export function summaryOf(flow: Flow): FlowSummary {
   return {

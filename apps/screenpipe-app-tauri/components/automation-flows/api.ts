@@ -61,6 +61,21 @@ export type Flow = FlowSummary & {
   activationLog: ActivationEvent[];
 };
 
+/**
+ * One handled email of the Flow's Activity (D18), read by the engine from
+ * an n8n execution. `done`: a Flow without an AI decision went through.
+ */
+export type FlowRun = {
+  executionId: string;
+  startedAt: string;
+  outcome: "ticket" | "ignored" | "abstained" | "failed" | "done";
+  /** The AI's reason, or the failing step and its error. */
+  reason: string | null;
+  email: { sender: string; subject: string } | null;
+  /** The Jira ticket's key, created by the run or found by its D20 search. */
+  ticket: string | null;
+};
+
 export type FlowsErrorCode =
   | "n8n_not_configured"
   /** n8n answered but refused the API key of Connections → n8n. */
@@ -151,6 +166,10 @@ export const flowsApi = {
 
   get: (id: string) =>
     request<Flow>(`/automation-flows/${encodeURIComponent(id)}`),
+
+  /** The Flow's latest handled emails, newest first (D18). */
+  activity: (id: string) =>
+    request<FlowRun[]>(`/automation-flows/${encodeURIComponent(id)}/activity`),
 
   createFromTask: (taskId: string, answers: unknown) =>
     request<Flow>("/automation-flows/from-task", {

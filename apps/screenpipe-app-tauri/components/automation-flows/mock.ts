@@ -10,7 +10,7 @@
 // reviewed version. Never contacts n8n.
 
 import type { Flow } from "./api";
-import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "./fixtures";
+import { DEMO_TASK_ID, fixtureActivity, fixtureFlow, summaryOf } from "./fixtures";
 
 /**
  * The UI credential the browser mock's Tauri side hands to the client
@@ -142,6 +142,7 @@ export function mockAutomationFlowsResponse(
   const id = decodeURIComponent(rawId);
   const flow = flows.find((candidate) => candidate.id === id);
   if (method === "GET" && flow && !action) return Response.json(flow);
+  if (method === "GET" && flow && action === "activity") return Response.json(fixtureActivity);
   if (method === "DELETE" && flow && !action) {
     mockDeleted = true;
     return Response.json({ id, deleted: true });

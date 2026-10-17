@@ -16,6 +16,7 @@ function fakeApi(flow: Flow = fixtureFlow): FlowsApi {
   return {
     list: vi.fn(async () => [summaryOf(flow)]),
     get: vi.fn(async () => flow),
+    activity: vi.fn(async () => []),
     createFromTask: vi.fn(async () => flow),
     openInN8n: vi.fn(async () => {}),
     openTaskPage: vi.fn(async () => {}),

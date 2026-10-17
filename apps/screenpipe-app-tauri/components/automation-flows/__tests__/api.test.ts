@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
 import { CREATION_PROMPT, flowsApi, FlowsApiError, withCreationPrompt } from "../api";
-import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "../fixtures";
+import { DEMO_TASK_ID, fixtureActivity, fixtureFlow, summaryOf } from "../fixtures";
 import { mockAutomationFlowsResponse, resetAutomationFlowsMock } from "../mock";
 import { createBrowserIpcMock } from "@/lib/dev/browser-tauri-mock";
 
@@ -64,6 +64,10 @@ describe("flowsApi", () => {
     respond(200, fixtureFlow);
     expect(await flowsApi.get("wf/1")).toEqual(fixtureFlow);
     expect(localFetch).toHaveBeenLastCalledWith("/automation-flows/wf%2F1", undefined);
+
+    respond(200, fixtureActivity);
+    expect(await flowsApi.activity("wf/1")).toEqual(fixtureActivity);
+    expect(localFetch).toHaveBeenLastCalledWith("/automation-flows/wf%2F1/activity", undefined);
   });
 
   it("creates a Flow from a task with its answers", async () => {
@@ -201,6 +205,18 @@ describe("browser mock", () => {
     expect(first.id).toBe(second.id);
     await expect(flowsApi.createFromTask("wf-unknown", {})).rejects.toMatchObject({ code: "not_found" });
     await expect(flowsApi.get("missing")).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("shows the fixture Flow's Activity, one email per outcome, newest first", async () => {
+    useBrowserMock();
+    const runs = await flowsApi.activity(fixtureFlow.id);
+    expect(runs).toEqual(fixtureActivity);
+    expect(new Set(runs.map((run) => run.outcome))).toEqual(
+      new Set(["ticket", "ignored", "abstained", "failed"]),
+    );
+    const times = runs.map((run) => Date.parse(run.startedAt));
+    expect(times).toEqual([...times].sort((a, b) => b - a));
+    await expect(flowsApi.activity("missing")).rejects.toMatchObject({ code: "not_found" });
   });
 
   it("activates and deactivates the fixture Flow in memory", async () => {
