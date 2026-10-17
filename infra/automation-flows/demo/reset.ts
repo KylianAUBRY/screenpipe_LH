@@ -1,23 +1,275 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-// Demo reset: remove the answers saved on the demo Task Page so the
-// Clarification Questions start empty again. The task itself stays installed.
-//   bun infra/automation-flows/demo/reset.ts
+// Demo reset: bring the demo machine back to the state before the first click,
+// so rehearsals repeat. It
+// - switches off and deletes in n8n every Flow created from the demo task
+//   (its records in `<data dir>/automation-flows.json`) and the copy
+//   `import-workflow.sh` installs (the bundled workflow's fixed id), then
+//   removes their records: the Flows list is empty and "Créer
+//   l'automatisation" creates the Flow again. Other workflows are never touched;
+// - marks the unread emails of the demo inbox read, inside the n8n container
+//   with the IMAP credential stored there (`mark-read.sh`), so the next
+//   activation only processes the email sent live;
+// - clears the Task Page answers.
+// It prints what it did and exits 1, with every reason, on anything it could
+// not restore.
+//
+//   N8N_API_KEY=… bun infra/automation-flows/demo/reset.ts
+//
+// N8N_API_KEY: the n8n API key; without it, the key of ScreenPipe's n8n
+// connection when it is saved in `<data dir>/connections.json` (the app keeps
+// it in its encrypted secret store otherwise). Never printed. N8N_API_URL
+// (default: the connection's, else http://localhost:5678), N8N_CONTAINER
+// (default automation-flows-n8n-1), SCREENPIPE_DATA_DIR (default ~/.screenpipe),
+// SCREENPIPE_WORKFLOWS_DIR (see catalog.ts).
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { catalogDir, clearAnswers, readCatalog, writeCatalog } from "./catalog";
 import { DEMO_TASK_ID } from "./detected-task";
 
-try {
-  const dir = catalogDir();
+const STORE_FILE = "automation-flows.json";
+const FLOW_TAG = "screenpipe-flow"; // engine `FLOW_TAG`
+// The bundled demo workflow (the engine's from-task fixture).
+const WORKFLOW = JSON.parse(readFileSync(join(import.meta.dir, "..", "workflows", "novadesk-support-tickets.json"), "utf8"));
+/** The copy `import-workflow.sh` installs keeps the bundled workflow's fixed id. */
+export const DEMO_WORKFLOW_ID: string = WORKFLOW.id;
+// The demo inbox is the one the Flow's email trigger reads.
+const TRIGGER = WORKFLOW.nodes.find((node: { type: string }) => node.type === "n8n-nodes-base.emailReadImap");
+const IMAP_CREDENTIAL_ID: string = TRIGGER.credentials.imap.id;
+const MAILBOX: string = TRIGGER.parameters.mailbox ?? "INBOX";
+const MARK_READ_SCRIPT = readFileSync(join(import.meta.dir, "mark-read.sh"), "utf8");
+
+export type N8nConfig = { url: string; apiKey: string };
+export type CommandRunner = (argv: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
+export type ResetOptions = {
+  n8n: N8nConfig | null;
+  /** ScreenPipe data dir, holding the engine's `automation-flows.json`. */
+  dataDir: string;
+  /** Workflow catalog dir (`catalog.ts`), holding the Task Page answers. */
+  catalogDir: string;
+  /** The n8n container (`docker-compose.yml`). */
+  container: string;
+  run: CommandRunner;
+  log: (line: string) => void;
+};
+export type ResetReport = { failures: string[] };
+
+type FlowStore = { flows?: Record<string, { sourceTaskId?: string | null }> };
+type N8nWorkflow = { id: string; name?: string; active?: boolean; isArchived?: boolean };
+type N8nCall = (method: string, path: string) => Promise<{ status: number; body: any }>;
+
+function n8nClient({ url, apiKey }: N8nConfig): N8nCall {
+  return async (method, path) => {
+    const response = await fetch(`${url}/api/v1${path}`, {
+      method, headers: { "X-N8N-API-KEY": apiKey }, signal: AbortSignal.timeout(15_000),
+    }).catch(error => { throw new Error(`cannot reach n8n at ${url} (${error instanceof Error ? error.message : error})`); });
+    const body = await response.json().catch(() => null);
+    return { status: response.status, body };
+  };
+}
+
+const ok = (status: number) => status >= 200 && status < 300;
+const answer = ({ status, body }: { status: number; body: any }) =>
+  `n8n answered ${status}${body?.message ? `: ${body.message}` : ""}`;
+
+/** Switches a workflow off, then deletes it (archiving first when n8n asks for
+ * it). Returns what it did; throws with n8n's reason when it is still there. */
+async function removeWorkflow(n8n: N8nCall, id: string): Promise<string> {
+  // Same rule as the engine's `valid_workflow_id`: never splice a path into the URL.
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error(`${JSON.stringify(id)} is not an n8n workflow id; left untouched`);
+  const found = await n8n("GET", `/workflows/${id}`);
+  if (found.status === 404) return `${id} is not in n8n (already removed)`;
+  if (!ok(found.status)) throw new Error(`cannot read ${id}: ${answer(found)}`);
+  const workflow = found.body as N8nWorkflow;
+  const done: string[] = [];
+  if (workflow.active) {
+    const off = await n8n("POST", `/workflows/${id}/unpublish`);
+    if (!ok(off.status)) throw new Error(`cannot switch off ${id}: ${answer(off)}`);
+    done.push("switched off");
+  }
+  let deleted = await n8n("DELETE", `/workflows/${id}`);
+  if (!ok(deleted.status) && deleted.status !== 404 && !workflow.isArchived) {
+    // n8n 2.x deletes only archived workflows.
+    const archived = await n8n("POST", `/workflows/${id}/archive`);
+    if (!ok(archived.status)) throw new Error(`cannot archive ${id}: ${answer(archived)} (delete: ${answer(deleted)})`);
+    done.push("archived");
+    deleted = await n8n("DELETE", `/workflows/${id}`);
+  }
+  if (!ok(deleted.status) && deleted.status !== 404) throw new Error(`cannot delete ${id}: ${answer(deleted)}`);
+  const after = await n8n("GET", `/workflows/${id}`);
+  if (after.status !== 404) throw new Error(`${id} is still in n8n after delete (${answer(after)})`);
+  done.push("deleted");
+  return `${id} (${workflow.name ?? "unnamed"}): ${done.join(", ")}`;
+}
+
+/** `mark-read.sh` inside the n8n container: the IMAP secret never leaves it. */
+async function markInboxRead({ container, run }: ResetOptions): Promise<string> {
+  const { code, stdout, stderr } = await run([
+    "docker", "exec",
+    "-e", "N8N_RUNNERS_BROKER_PORT=5690", // the n8n server holds the default runner port
+    "-e", `CRED_ID=${IMAP_CREDENTIAL_ID}`,
+    "-e", `MAILBOX=${MAILBOX}`,
+    container, "sh", "-c", MARK_READ_SCRIPT,
+  ]);
+  const tail = (text: string) => text.trim().split("\n").slice(-3).join(" / ");
+  if (code !== 0) throw new Error(`could not mark the demo inbox read (exit ${code}): ${tail(stderr) || tail(stdout)}`);
+  let result: { marked: number; unread: number };
+  try {
+    result = JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
+  } catch {
+    throw new Error(`unexpected answer from the n8n container: ${tail(stdout)}`);
+  }
+  if (result.unread > 0) throw new Error(`marked ${result.marked} emails read but ${result.unread} unread email(s) left in ${MAILBOX}`);
+  return `marked ${result.marked} unread email(s) as read in ${MAILBOX} (0 unread left)`;
+}
+
+/** The engine's Flow records (`automation_flows.rs`); a missing file has none. */
+function loadStore(path: string): FlowStore {
+  if (!existsSync(path)) return {};
+  try {
+    const store = JSON.parse(readFileSync(path, "utf8")) as FlowStore;
+    if (typeof store === "object" && store !== null && (store.flows === undefined || typeof store.flows === "object")) return store;
+  } catch {
+    // Reported below.
+  }
+  throw new Error(`${path} is not a valid ${STORE_FILE}; it was left untouched`);
+}
+
+function clearTaskAnswers(dir: string): string {
   const previous = readCatalog(dir);
-  if (!previous) throw new Error(`No workflow catalog in ${dir}. Run the demo script first.`);
+  if (!previous) throw new Error(`no workflow catalog in ${dir}; run the demo script first`);
   const { catalog, changed } = clearAnswers(previous);
   if (changed) writeCatalog(dir, previous, catalog);
-  console.log(changed
-    ? `Cleared the answers of ${DEMO_TASK_ID} in ${join(dir, "catalog.json")}`
-    : `${DEMO_TASK_ID} has no saved answers; nothing to reset.`);
-} catch (error) {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
+  return changed
+    ? `cleared the answers of ${DEMO_TASK_ID} in ${join(dir, "catalog.json")}`
+    : `${DEMO_TASK_ID} has no saved answers`;
+}
+
+/** Every step runs even when an earlier one fails; each failure is reported. */
+export async function resetDemo(options: ResetOptions): Promise<ResetReport> {
+  const failures: string[] = [];
+  const fail = (name: string, error: unknown) => {
+    const reason = `${name}: ${error instanceof Error ? error.message : String(error)}`;
+    failures.push(reason);
+    options.log(`FAILED ${reason}`);
+  };
+  const step = async (name: string, action: () => Promise<string> | string) => {
+    try {
+      options.log(`${name}: ${await action()}`);
+    } catch (error) {
+      fail(name, error);
+    }
+  };
+
+  const storePath = join(options.dataDir, STORE_FILE);
+  let store: FlowStore | null;
+  try {
+    store = loadStore(storePath);
+  } catch (error) {
+    store = null;
+    fail("records", error);
+  }
+  const demoIds = Object.entries(store?.flows ?? {})
+    .filter(([, record]) => record.sourceTaskId === DEMO_TASK_ID)
+    .map(([id]) => id);
+
+  const gone: string[] = [];
+  let n8n: N8nCall | null = null;
+  try {
+    if (!options.n8n) throw new Error("no n8n API key: export N8N_API_KEY (the key saved in ScreenPipe > Connections > n8n)");
+    const client = n8nClient(options.n8n);
+    const probe = await client("GET", "/workflows?limit=1");
+    if (!ok(probe.status)) throw new Error(`n8n at ${options.n8n.url} refused the request (${answer(probe)})`);
+    n8n = client;
+    options.log(`n8n: connected to ${options.n8n.url}`);
+  } catch (error) {
+    fail("n8n", error);
+  }
+  for (const id of new Set([...demoIds, DEMO_WORKFLOW_ID])) {
+    if (!n8n) break;
+    const client = n8n;
+    await step("n8n", async () => {
+      const done = await removeWorkflow(client, id);
+      gone.push(id);
+      return done;
+    });
+  }
+
+  if (n8n) {
+    const client = n8n;
+    await step("n8n", async () => {
+      const listed = await client("GET", `/workflows?tags=${FLOW_TAG}&limit=250`);
+      if (!ok(listed.status)) throw new Error(`cannot list the Flows: ${answer(listed)}`);
+      const others = (listed.body?.data ?? []) as N8nWorkflow[];
+      if (others.length === 0) return "the Flows list is empty";
+      const names = others.map(w => `${w.id} (${w.name ?? "unnamed"}, ${w.active ? "active" : "off"})`);
+      return `${others.length} other Flow(s) left untouched: ${names.join(", ")}`;
+    });
+  }
+
+  if (store) {
+    const current = store;
+    await step("records", () => {
+      const removed = Object.keys(current.flows ?? {}).filter(id => gone.includes(id));
+      if (removed.length === 0) return "no demo Flow record to remove";
+      const flows = Object.fromEntries(Object.entries(current.flows ?? {}).filter(([id]) => !removed.includes(id)));
+      // Same format and atomic replace as the engine's `FlowStore::save`.
+      const tmp = `${storePath}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ ...current, flows }, null, 2));
+      renameSync(tmp, storePath);
+      return `removed ${removed.join(", ")} from ${storePath}`;
+    });
+  }
+
+  await step("inbox", () => markInboxRead(options));
+  await step("answers", () => clearTaskAnswers(options.catalogDir));
+  return { failures };
+}
+
+/** The n8n instance root from what the user typed (connector `n8n::instance_url`). */
+const instanceUrl = (raw: string) => raw.trim().replace(/\/+$/, "").replace(/\/api\/v1$/, "").replace(/\/+$/, "");
+
+/** N8N_API_KEY / N8N_API_URL, else ScreenPipe's n8n connection when it is saved
+ * in the legacy `connections.json` (`load_connection`'s file fallback). */
+export function n8nConfig(env: Record<string, string | undefined>, dataDir: string): N8nConfig | null {
+  let saved: { api_url?: string; api_key?: string } = {};
+  try {
+    const connection = JSON.parse(readFileSync(join(dataDir, "connections.json"), "utf8")).n8n;
+    if (connection?.enabled) saved = connection.credentials ?? {};
+  } catch {
+    // No saved connection.
+  }
+  const apiKey = env.N8N_API_KEY?.trim() || saved.api_key?.trim();
+  if (!apiKey) return null;
+  return { url: instanceUrl(env.N8N_API_URL?.trim() || saved.api_url || "http://localhost:5678"), apiKey };
+}
+
+const runCommand: CommandRunner = async argv => {
+  const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { code, stdout, stderr };
+};
+
+if (import.meta.main) {
+  try {
+    const dataDir = process.env.SCREENPIPE_DATA_DIR || join(homedir(), ".screenpipe");
+    const { failures } = await resetDemo({
+      n8n: n8nConfig(process.env, dataDir),
+      dataDir,
+      catalogDir: catalogDir(),
+      container: process.env.N8N_CONTAINER || "automation-flows-n8n-1",
+      run: runCommand,
+      log: line => console.log(line),
+    });
+    if (failures.length > 0) {
+      console.error(`Reset incomplete, ${failures.length} step(s) not restored:\n${failures.map(f => `- ${f}`).join("\n")}`);
+      process.exit(1);
+    }
+    console.log("Reset complete: no demo Flow, no saved answers, no unread demo email.");
+  } catch (error) {
+    console.error(`Reset incomplete: ${error instanceof Error ? error.message : error}`);
+    process.exit(1);
+  }
 }
