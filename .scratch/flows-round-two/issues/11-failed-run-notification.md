@@ -82,11 +82,11 @@ not given the setting (the demo reset deletes it, so `from-task` imports fresh).
 
 ## Tests run
 
-- `cargo test -p screenpipe-engine --test automation_flows_test` → 55 passed, 0 failed
+- `cargo test -p screenpipe-engine --test automation_flows_test` → 73 passed, 0 failed (after merging main, with tickets 04/05)
   (new: `every_flow_reports_its_failed_runs_through_one_error_workflow`,
   `a_failed_run_is_notified_with_its_email_and_the_flow_keeps_running`,
   `a_failing_trigger_is_notified_with_its_error`, `only_a_run_of_that_flow_is_notified`).
 - `cargo test -p screenpipe-engine --lib automation_flows` → 3 passed.
 - `cd apps/screenpipe-app-tauri && bunx vitest run components/automation-flows lib/workflows/automation-flows.test.ts lib/notifications/actions.test.ts lib/__tests__/notification-actions.test.ts app/notification-panel/page.test.tsx components/chat/markdown-block.test.tsx`
-  → all passed.
+  → 8 files, 186 tests passed.
 - `bunx tsc --noEmit -p .` → no error in the changed files.

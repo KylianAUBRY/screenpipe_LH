@@ -18,11 +18,13 @@ import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "./fixtures";
  */
 export const BROWSER_MOCK_FLOW_ACTIVATION_KEY = "browser-mock-flow-activation";
 
-// Activate / Deactivate change this copy until the page reloads.
+// Activate / Deactivate / Delete change this copy until the page reloads.
 let mockFlow: Flow = structuredClone(fixtureFlow);
+let mockDeleted = false;
 
 export function resetAutomationFlowsMock() {
   mockFlow = structuredClone(fixtureFlow);
+  mockDeleted = false;
 }
 
 /** What the engine does on activate / deactivate, without n8n. */
@@ -123,7 +125,7 @@ export function mockAutomationFlowsResponse(
       { status: 502 },
     );
   }
-  const flows = state === "empty" ? [] : [mockFlow];
+  const flows = state === "empty" || mockDeleted ? [] : [mockFlow];
   const method = (init?.method ?? "GET").toUpperCase();
 
   if (url.pathname === "/automation-flows" && method === "GET") {
@@ -140,6 +142,10 @@ export function mockAutomationFlowsResponse(
   const id = decodeURIComponent(rawId);
   const flow = flows.find((candidate) => candidate.id === id);
   if (method === "GET" && flow && !action) return Response.json(flow);
+  if (method === "DELETE" && flow && !action) {
+    mockDeleted = true;
+    return Response.json({ id, deleted: true });
+  }
   if (method === "PUT" && flow && !action) {
     return changeMockFlow(JSON.parse(String(init?.body ?? "{}")));
   }

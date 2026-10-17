@@ -7,8 +7,8 @@
 // Review Screen: what the Flow does, the n8n graph with one sentence per
 // node, links to the graph in n8n, back to the Task Page and
 // to the moment in the timeline where the task was seen, status, last run,
-// activation history, Activate / Deactivate, and "Demander une modification"
-// (the Screenpipe chat, ticket 08).
+// activation history, Activate / Deactivate, "Demander une modification"
+// (the Screenpipe chat, ticket 08) and « Supprimer ».
 
 import React from "react";
 import { ArrowLeft, Clock, ExternalLink, MessageSquare } from "lucide-react";
@@ -23,6 +23,7 @@ import {
   useFlowsLoad,
 } from "./common";
 import { FlowActivation } from "./flow-activation";
+import { FlowDelete } from "./flow-delete";
 import { FlowGraph } from "./flow-graph";
 import { activationLabel, lastRunLabel } from "./labels";
 
@@ -55,6 +56,7 @@ export function FlowReview({
           readVersionId={flow.read.versionId}
           api={api}
           onChange={replace}
+          onDeleted={onBack}
         />
       )}
     </div>
@@ -81,12 +83,14 @@ function ReviewContent({
   readVersionId,
   api,
   onChange,
+  onDeleted,
 }: {
   flow: Flow;
   /** The version the user loaded; a background read may show a newer one. */
   readVersionId: string;
   api: FlowsApi;
   onChange: (flow: Flow, options?: { read?: boolean }) => void;
+  onDeleted: () => void;
 }) {
   // The n8n node order: sorting by position would put an AI agent's model
   // and tools (drawn below it, further left) before the agent itself.
@@ -127,6 +131,7 @@ function ReviewContent({
             </OpenButton>
           )}
           <RequestChange flow={flow} api={api} />
+          <FlowDelete flow={flow} api={api} onDeleted={onDeleted} />
         </div>
       </header>
 

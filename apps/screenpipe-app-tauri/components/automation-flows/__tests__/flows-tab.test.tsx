@@ -38,6 +38,7 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     createFromTask: vi.fn(async () => fixtureFlow),
     activate: vi.fn(async () => activeFlow),
     deactivate: vi.fn(async () => pausedFlow),
+    delete: vi.fn(async () => {}),
     openInN8n: vi.fn(async () => {}),
     openTaskPage: vi.fn(async () => {}),
     openN8nConnection: vi.fn(async () => {}),
@@ -500,6 +501,96 @@ describe("Review Screen", () => {
     });
     render(<FlowsTab flowId="wf1" onSelectFlow={vi.fn()} api={api} />);
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("n8n n'est pas configuré"));
+  });
+});
+
+describe("Deleting a Flow", () => {
+  it("deletes a Flow from the list once confirmed, and the list no longer shows it", async () => {
+    let flows = [summaryOf(fixtureFlow)];
+    const api = fakeApi({
+      list: vi.fn(async () => flows),
+      delete: vi.fn(async () => {
+        flows = [];
+      }),
+    });
+    const onSelectFlow = vi.fn();
+    render(<FlowsTab flowId={null} onSelectFlow={onSelectFlow} api={api} />);
+
+    const row = (await screen.findByTestId(`flow-row-${fixtureFlow.id}`)).closest("li")!;
+    fireEvent.click(within(row).getByRole("button", { name: `Supprimer ${fixtureFlow.name}` }));
+    // A first click only asks; nothing is deleted nor opened yet.
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(onSelectFlow).not.toHaveBeenCalled();
+    fireEvent.click(within(row).getByRole("button", { name: "Supprimer définitivement" }));
+
+    await waitFor(() => expect(screen.queryByTestId(`flow-row-${fixtureFlow.id}`)).toBeNull());
+    expect(api.delete).toHaveBeenCalledWith(fixtureFlow.id);
+    expect(onSelectFlow).not.toHaveBeenCalled();
+    expect(screen.getByText(/Aucun Flow pour l'instant/)).toBeTruthy();
+  });
+
+  it("keeps the Flow when the user cancels", async () => {
+    const api = fakeApi();
+    render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
+
+    const row = (await screen.findByTestId(`flow-row-${fixtureFlow.id}`)).closest("li")!;
+    fireEvent.click(within(row).getByRole("button", { name: `Supprimer ${fixtureFlow.name}` }));
+    fireEvent.click(within(row).getByRole("button", { name: "Annuler" }));
+
+    expect(within(row).queryByRole("button", { name: "Supprimer définitivement" })).toBeNull();
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(screen.getByTestId(`flow-row-${fixtureFlow.id}`)).toBeTruthy();
+  });
+
+  it("deletes a Flow from its Review Screen and goes back to the list", async () => {
+    const api = fakeApi({ get: vi.fn(async () => activeFlow) });
+    const onSelectFlow = vi.fn();
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={onSelectFlow} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Supprimer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer définitivement" }));
+
+    await waitFor(() => expect(onSelectFlow).toHaveBeenCalledWith(null));
+    expect(api.delete).toHaveBeenCalledWith(fixtureFlow.id);
+    // Deleting switches an active Flow off in the engine, never here.
+    expect(api.deactivate).not.toHaveBeenCalled();
+  });
+
+  it("asks to try again when n8n is still processing an email, and keeps the Flow", async () => {
+    const api = fakeApi({
+      get: vi.fn(async () => activeFlow),
+      delete: vi.fn(async () => {
+        throw new FlowsApiError("flow_running", "n8n is still running this Flow");
+      }),
+    });
+    const onSelectFlow = vi.fn();
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={onSelectFlow} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Supprimer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer définitivement" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Suppression impossible")).toBeTruthy();
+    expect(within(alert).getByText(/traite encore un e-mail.*Réessayez dans un instant/)).toBeTruthy();
+    expect(onSelectFlow).not.toHaveBeenCalled();
+    expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+  });
+
+  it("says why n8n refused the deletion", async () => {
+    const api = fakeApi({
+      delete: vi.fn(async () => {
+        throw new FlowsApiError("n8n_failed", "n8n answered 500: database is locked");
+      }),
+    });
+    render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
+
+    const row = (await screen.findByTestId(`flow-row-${fixtureFlow.id}`)).closest("li")!;
+    fireEvent.click(within(row).getByRole("button", { name: `Supprimer ${fixtureFlow.name}` }));
+    fireEvent.click(within(row).getByRole("button", { name: "Supprimer définitivement" }));
+
+    const alert = await within(row).findByRole("alert");
+    expect(within(alert).getByText(/database is locked/)).toBeTruthy();
+    expect(screen.getByTestId(`flow-row-${fixtureFlow.id}`)).toBeTruthy();
   });
 });
 

@@ -53,6 +53,8 @@ struct N8nState {
     /// Executions that were still running when their workflow was
     /// unpublished: n8n leaves them `running` forever (rehearsal 3).
     orphaned: Vec<String>,
+    /// When set, the credentials n8n holds instead of the demo's four.
+    credentials: Option<Vec<Value>>,
 }
 
 #[derive(Clone, Default)]
@@ -127,6 +129,11 @@ impl FakeN8n {
     fn orphaned(&self) -> Vec<String> {
         self.0.lock().unwrap().orphaned.clone()
     }
+
+    /// The credentials n8n holds from now on (`id`, `name`, `type`).
+    fn hold_credentials(&self, credentials: Value) {
+        self.0.lock().unwrap().credentials = Some(credentials.as_array().unwrap().clone());
+    }
 }
 
 /// How many times the fake n8n was asked for the running executions.
@@ -176,6 +183,9 @@ impl Respond for FakeN8n {
         let mut state = self.0.lock().unwrap();
 
         match (request.method.as_str(), segments.as_slice()) {
+            ("GET", ["credentials"]) if state.credentials.is_some() => {
+                json_response(200, json!({"data": state.credentials, "nextCursor": null}))
+            }
             // The credentials the demo workflow uses, as the user's n8n holds them.
             ("GET", ["credentials"]) => json_response(
                 200,
@@ -275,6 +285,14 @@ impl Respond for FakeN8n {
                         }
                         json_response(200, workflow.clone())
                     }
+                    None => json_response(404, json!({"message": "Not Found"})),
+                }
+            }
+            // n8n 2.x public API: DELETE removes the workflow for good (not
+            // archived), active or not.
+            ("DELETE", ["workflows", id]) => {
+                match state.workflows.iter().position(|w| w["id"] == *id) {
+                    Some(index) => json_response(200, state.workflows.remove(index)),
                     None => json_response(404, json!({"message": "Not Found"})),
                 }
             }
@@ -2835,6 +2853,434 @@ async fn switching_off_an_idle_flow_asks_n8n_once() {
         n8n_writes(&server).await.last().unwrap(),
         &format!("POST /api/v1/workflows/{id}/unpublish")
     );
+}
+
+// ---------------------------------------------------------------------------
+// Deleting a Flow (flows-round-two ticket 04)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn deleting_an_idle_flow_removes_it_from_n8n_and_screenpipe() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let uri = format!("/automation-flows/{id}");
+
+    let (status, answer) = app.ui_call("DELETE", &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer, json!({"id": id, "deleted": true}));
+    // Deleted for good in n8n, never archived nor switched.
+    assert_eq!(
+        n8n_writes(&server).await.last().unwrap(),
+        &format!("DELETE /api/v1/workflows/{id}")
+    );
+    assert!(posts_ending_with(&server, "/archive").await.is_empty());
+    assert!(n8n.workflows().is_empty());
+    // The ScreenPipe record (summary, history) is gone too.
+    assert_eq!(app.store()["flows"], json!({}));
+    let (status, _) = app.call("GET", &uri, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, list) = app.call("GET", "/automation-flows", None).await;
+    assert_eq!(list, json!([]));
+}
+
+#[tokio::test]
+async fn deleting_an_active_flow_switches_it_off_after_the_email_being_processed() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.start_execution(&id, Some(3));
+
+    let (status, answer) = app
+        .ui_call("DELETE", &format!("/automation-flows/{id}"), None)
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(running_polls(&server).await >= 4);
+    assert_eq!(n8n.orphaned(), Vec::<String>::new());
+    let writes = n8n_writes(&server).await;
+    assert_eq!(
+        writes[writes.len() - 2..],
+        [
+            format!("POST /api/v1/workflows/{id}/unpublish"),
+            format!("DELETE /api/v1/workflows/{id}"),
+        ]
+    );
+    assert!(n8n.workflows().is_empty());
+    assert_eq!(app.store()["flows"], json!({}));
+}
+
+#[tokio::test]
+async fn a_flow_still_processing_at_the_deadline_is_not_deleted() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.start_execution(&id, None);
+    let writes = n8n_writes(&server).await;
+    let store = app.store();
+
+    // Even the user's click: a deletion never orphans the email.
+    let (status, answer) = app
+        .ui_call("DELETE", &format!("/automation-flows/{id}"), None)
+        .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert_eq!(answer["error"], "flow_running");
+    assert_eq!(n8n_writes(&server).await, writes);
+    assert_eq!(n8n.orphaned(), Vec::<String>::new());
+    assert_eq!(n8n.workflows()[0]["active"], true);
+    assert_eq!(app.store(), store);
+}
+
+#[tokio::test]
+async fn deleting_a_flow_n8n_no_longer_has_clears_it_from_screenpipe() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let uri = format!("/automation-flows/{id}");
+    n8n.0.lock().unwrap().workflows.clear();
+
+    let (status, answer) = app.ui_call("DELETE", &uri, None).await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer, json!({"id": id, "deleted": true}));
+    assert_eq!(app.store()["flows"], json!({}));
+    // Gone everywhere: a second deletion has nothing left to delete.
+    let (status, answer) = app.ui_call("DELETE", &uri, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_eq!(answer["error"], "flow_not_found");
+}
+
+#[tokio::test]
+async fn deleting_an_archived_flow_deletes_it_for_good() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    n8n.edit_workflow(&id, |workflow| workflow["isArchived"] = json!(true));
+
+    let (status, answer) = app
+        .ui_call("DELETE", &format!("/automation-flows/{id}"), None)
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(n8n.workflows().is_empty());
+    assert_eq!(app.store()["flows"], json!({}));
+}
+
+#[tokio::test]
+async fn the_chat_deletes_a_flow_with_the_local_api_key_alone() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::with_local_api_key().await;
+    app.configure_n8n(&server.uri());
+    let bearer = format!("Bearer {LOCAL_API_KEY}");
+    let auth = ("authorization", bearer.as_str());
+    let (_, created) = app
+        .send(
+            "POST",
+            "/automation-flows/from-task",
+            &[auth, JSON],
+            Some(json!({"taskId": TASK_ID, "answers": {}})),
+        )
+        .await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let uri = format!("/automation-flows/{id}");
+
+    // No local API key, or not JSON (a cross-site page): refused untouched.
+    let (status, _) = app.send("DELETE", &uri, &[JSON], None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, answer) = app.send("DELETE", &uri, &[auth], None).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{answer}");
+    assert_eq!(n8n.workflows().len(), 1);
+
+    // What the skill sends: no confirmation, no UI credential.
+    let (status, answer) = app.send("DELETE", &uri, &[auth, JSON], None).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(n8n.workflows().is_empty());
+    assert_eq!(app.store()["flows"], json!({}));
+}
+
+#[tokio::test]
+async fn an_n8n_workflow_that_is_not_a_flow_is_never_deleted() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    n8n.add_workflow(json!({
+        "id": "other", "name": "Unrelated", "active": false, "versionId": "v",
+        "tags": [], "nodes": [], "connections": {}
+    }));
+
+    let (status, answer) = app.ui_call("DELETE", "/automation-flows/other", None).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_eq!(answer["error"], "flow_not_found");
+    assert_eq!(n8n.workflows().len(), 1);
+    assert!(n8n_writes(&server).await.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// The chat looks up the nodes this n8n has (flows-round-two 05)
+// ---------------------------------------------------------------------------
+
+async fn search_nodes(app: &App, query: &str) -> (StatusCode, Value) {
+    app.call("GET", &format!("/automation-flows/nodes?q={query}"), None)
+        .await
+}
+
+fn result_types(body: &Value) -> Vec<String> {
+    body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["type"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn node_search_puts_the_named_node_first() {
+    let app = App::new().await;
+
+    let (status, body) = search_nodes(&app, "gmail").await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let first = &body["results"][0];
+    assert_eq!(first["type"], "n8n-nodes-base.gmail");
+    assert_eq!(first["name"], "Gmail");
+    assert_eq!(first["version"], json!(2.2));
+    assert!(first["credentials"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("gmailOAuth2")));
+    assert!(result_types(&body).contains(&"n8n-nodes-base.gmailTrigger".to_string()));
+}
+
+#[tokio::test]
+async fn node_search_returns_at_most_twenty_entries_and_says_how_many_matched() {
+    let app = App::new().await;
+
+    let (status, body) = search_nodes(&app, "trigger").await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["results"].as_array().unwrap().len(), 20);
+    assert!(body["total"].as_u64().unwrap() > 100, "{}", body["total"]);
+    // Every word must match: two words narrow the search.
+    let (_, narrow) = search_nodes(&app, "gmail%20trigger").await;
+    assert_eq!(result_types(&narrow)[0], "n8n-nodes-base.gmailTrigger");
+    assert!(narrow["total"].as_u64().unwrap() < 5, "{narrow}");
+}
+
+#[tokio::test]
+async fn node_search_lists_switched_off_nodes_flagged_never_usable() {
+    let app = App::new().await;
+
+    let (status, body) = search_nodes(&app, "shell").await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let command = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["type"] == "n8n-nodes-base.executeCommand")
+        .expect("Execute Command is listed");
+    assert_eq!(command["switchedOff"], true);
+    assert!(command["note"]
+        .as_str()
+        .unwrap()
+        .contains("switched off here"));
+    let (_, gmail) = search_nodes(&app, "gmail").await;
+    assert!(gmail["results"][0].get("switchedOff").is_none());
+}
+
+#[tokio::test]
+async fn node_search_needs_words_to_look_for() {
+    let app = App::new().await;
+
+    let (status, body) = search_nodes(&app, "%20").await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_query");
+}
+
+async fn node_card(app: &App, query: &str) -> (StatusCode, Value) {
+    app.call(
+        "GET",
+        &format!("/automation-flows/nodes/card?{query}"),
+        None,
+    )
+    .await
+}
+
+fn property<'a>(card: &'a Value, name: &str) -> Option<&'a Value> {
+    card["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == name)
+}
+
+fn credential<'a>(card: &'a Value, kind: &str) -> &'a Value {
+    card["credentials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["type"] == kind)
+        .unwrap_or_else(|| panic!("credential {kind} in {card}"))
+}
+
+#[tokio::test]
+async fn node_card_narrowed_to_an_operation_lists_its_fields_and_a_skeleton() {
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+
+    let (status, card) = node_card(
+        &app,
+        "type=n8n-nodes-base.gmail&resource=message&operation=send",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{card}");
+    assert_eq!(card["version"], json!(2.2));
+    let send_to = property(&card, "sendTo").expect("sendTo");
+    assert_eq!(send_to["required"], true);
+    // Fields of other operations are left out.
+    assert!(property(&card, "labelIds").is_none(), "{card}");
+    assert!(card.get("fieldsHidden").is_none());
+    let skeleton = &card["skeleton"];
+    assert_eq!(skeleton["type"], "n8n-nodes-base.gmail");
+    assert_eq!(skeleton["typeVersion"], json!(2.2));
+    assert_eq!(skeleton["parameters"]["resource"], "message");
+    assert_eq!(skeleton["parameters"]["operation"], "send");
+    for required in ["sendTo", "subject", "message"] {
+        assert!(skeleton["parameters"].get(required).is_some(), "{skeleton}");
+    }
+    assert!(skeleton.get("credentials").is_none());
+}
+
+#[tokio::test]
+async fn node_card_without_an_operation_lists_the_choices_and_says_fields_are_hidden() {
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+
+    let (status, card) = node_card(&app, "type=n8n-nodes-base.gmail").await;
+
+    assert_eq!(status, StatusCode::OK, "{card}");
+    assert!(property(&card, "resource").is_some());
+    assert!(property(&card, "operation").is_some());
+    assert!(property(&card, "sendTo").is_none());
+    assert!(card["fieldsHidden"]
+        .as_str()
+        .unwrap()
+        .contains("resource and operation"));
+
+    let (status, body) = node_card(&app, "type=n8n-nodes-base.gmail&resource=fax").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["detail"].as_str().unwrap().contains("\"message\""),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn node_card_says_whether_n8n_holds_none_one_or_several_credentials() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    n8n.hold_credentials(json!([
+        {"id": "sp1", "name": "ScreenPipe API (local)", "type": "screenpipeApi"},
+        {"id": "j1", "name": "NovaDesk Jira", "type": "jiraSoftwareCloudApi"},
+        {"id": "j2", "name": "Perso Jira", "type": "jiraSoftwareCloudApi"},
+    ]));
+
+    let (_, gmail) = node_card(&app, "type=n8n-nodes-base.gmail").await;
+    let (_, screenpipe) = node_card(&app, "type=CUSTOM.screenPipe").await;
+    let (_, jira) = node_card(&app, "type=n8n-nodes-base.jira").await;
+
+    let none = credential(&gmail, "gmailOAuth2");
+    assert_eq!(none["inN8n"], "none", "{gmail}");
+    assert!(none["note"].as_str().unwrap().contains("create it in n8n"));
+    let one = credential(&screenpipe, "screenpipeApi");
+    assert_eq!(one["inN8n"], "one");
+    assert_eq!(one["name"], "ScreenPipe API (local)");
+    let several = credential(&jira, "jiraSoftwareCloudApi");
+    assert_eq!(several["inN8n"], "several");
+    assert_eq!(several["names"], json!(["NovaDesk Jira", "Perso Jira"]));
+}
+
+#[tokio::test]
+async fn node_card_of_a_switched_off_node_is_flagged_without_fields() {
+    let app = App::new().await;
+
+    let (status, card) = node_card(&app, "type=n8n-nodes-base.executeCommand").await;
+
+    assert_eq!(status, StatusCode::OK, "{card}");
+    assert_eq!(card["switchedOff"], true);
+    assert!(card.get("skeleton").is_none());
+    assert!(card.get("properties").is_none());
+}
+
+#[tokio::test]
+async fn node_card_of_an_invented_type_is_not_found() {
+    let app = App::new().await;
+
+    let (status, body) = node_card(&app, "type=n8n-nodes-base.openTerminal").await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "node_type_unknown");
+}
+
+#[tokio::test]
+async fn a_node_built_from_its_card_skeleton_passes_the_flow_check() {
+    // Lookup and check come from one catalog: the chat's starting point is
+    // already what ScreenPipe accepts once the empty fields are filled.
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, card) = node_card(&app, "type=CUSTOM.screenPipe&operation=activitySummary").await;
+    let mut node = card["skeleton"].clone();
+    node["id"] = json!("n2");
+    node["name"] = json!("Préparer le résumé");
+    node["notes"] = json!("Le résumé de la journée est préparé.");
+    let mut workflow = chat_workflow();
+    workflow["nodes"][1] = node;
+
+    let (status, flow) = chat_create(
+        &app,
+        json!({"workflow": workflow, "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{flow}");
+}
+
+#[tokio::test]
+async fn node_lookup_takes_the_local_api_key() {
+    let app = App::with_local_api_key().await;
+    let bearer = format!("Bearer {LOCAL_API_KEY}");
+
+    let (refused, _) = app
+        .send("GET", "/automation-flows/nodes?q=jira", &[], None)
+        .await;
+    let (allowed, body) = app
+        .send(
+            "GET",
+            "/automation-flows/nodes?q=jira",
+            &[("authorization", bearer.as_str())],
+            None,
+        )
+        .await;
+
+    assert_eq!(refused, StatusCode::FORBIDDEN);
+    assert_eq!(allowed, StatusCode::OK, "{body}");
 }
 
 // ---------------------------------------------------------------------------
