@@ -42,6 +42,10 @@ export type WorkflowsPlatform = {
   questionnaireVoice?: import("./questionnaire-voice").QuestionnaireVoice;
   saveWorkflowAnswers?: (workflow: WorkflowMap, correction: string) => Promise<WorkflowMap>;
   saveWorkflowEdits?: (draft: import("./workflow-edits").WorkflowEdit) => Promise<WorkflowMap>;
+  /** Hosts that can create Automation Flows: create the Flow from this Detected
+   * Task and open its Review Screen. Present only on such hosts; with it, the
+   * Task Page requires every Clarification Question before creation. */
+  createAutomationFlow?: (taskId: string, answers: import("./workflow-answers").WorkflowAnswer[]) => Promise<void>;
   modelPreference?: import("./model-choice").WorkflowModelPreference;
   /** The existing scheduled-task runtime owns reconciliation and persistence. */
   managesAnalysis?: boolean;
