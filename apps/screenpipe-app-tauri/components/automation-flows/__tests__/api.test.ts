@@ -70,6 +70,20 @@ describe("flowsApi", () => {
     expect(localFetch).toHaveBeenLastCalledWith("/automation-flows/wf%2F1/activity", undefined);
   });
 
+  it("reads the engine's last health check with a plain GET, never asking for a new one (D19)", async () => {
+    const last = {
+      checkedAt: "2026-10-17T09:00:00.000Z",
+      n8n: "unreachable",
+      notified: [],
+      pendingNotifications: [],
+      deletedDrafts: [],
+    };
+    respond(200, last);
+    expect(await flowsApi.health()).toEqual(last);
+    expect(localFetch).toHaveBeenCalledTimes(1);
+    expect(localFetch).toHaveBeenLastCalledWith("/automation-flows/health", undefined);
+  });
+
   it("creates a Flow from a task with its answers", async () => {
     respond(201, fixtureFlow);
     await flowsApi.createFromTask(DEMO_TASK_ID, { q1: "oui" });
@@ -341,6 +355,13 @@ describe("browser mock", () => {
     useBrowserMock();
     window.history.replaceState({}, "", `/home?section=pipes&tab=flows&flowsState=${state}`);
     await expect(flowsApi.list()).rejects.toMatchObject({ code });
+  });
+
+  it("answers the health check with n8n reachable, and unreachable in that state (D19)", async () => {
+    useBrowserMock();
+    expect(await flowsApi.health()).toMatchObject({ n8n: "reachable", notified: [], deletedDrafts: [] });
+    window.history.replaceState({}, "", "/home?section=pipes&tab=flows&flowsState=unreachable");
+    expect(await flowsApi.health()).toMatchObject({ n8n: "unreachable" });
   });
 
   it("shows the demo workflow the engine bundles (ticket 01)", () => {

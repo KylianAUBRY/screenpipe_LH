@@ -5064,6 +5064,29 @@ mod tests {
     }
 
     #[test]
+    fn automation_flows_skill_deletes_a_flow_when_asked_without_confirmation() {
+        // flows-round-two story 35: the user decided the chat deletes a Flow
+        // at once when asked; deletion goes through the Flow service only.
+        let skill = include_str!("../../assets/skills/automation-flows/SKILL.md");
+        assert!(skill.contains("| `DELETE /automation-flows/<id>` "));
+        let section = skill
+            .split("## Delete a Flow")
+            .nth(1)
+            .expect("a « Delete a Flow » procedure")
+            .split("\n## ")
+            .next()
+            .unwrap();
+        assert!(section.contains("without asking for confirmation"));
+        assert!(section.contains("-X DELETE"));
+        assert!(section.contains("/automation-flows/<id>"));
+        assert!(
+            !section.contains("5678"),
+            "the chat never calls n8n directly"
+        );
+        assert!(section.contains("flow_running"));
+    }
+
+    #[test]
     fn automation_flows_guide_ships_beside_the_skill_and_is_linked_from_it() {
         // Pi resolves a skill's relative links against its folder: the guide
         // must be written there, in the chat only, and SKILL.md must point at it.

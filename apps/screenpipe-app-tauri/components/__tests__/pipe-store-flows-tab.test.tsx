@@ -110,4 +110,18 @@ describe("Automations → Flows tab", () => {
     expect(screen.getByText(fixtureFlow.nodes[0].sentence!)).toBeTruthy();
     expect(window.location.search).toContain(`flow=${fixtureFlow.id}`);
   });
+
+  it("shows no control that fakes the detection: the demo starts from the hidden ⌃⌥⌘D shortcut only", async () => {
+    // flows-round-two story 28: the audience never sees « Trouver une
+    // automatisation » next to the bell, on the pipes tab or the Flows tab.
+    window.history.replaceState({}, "", "/home?section=pipes");
+    render(<PipeStoreView />);
+    expect(await screen.findByText("installed tasks")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /automatisation/i })).toBeNull();
+
+    fireEvent.click(screen.getByTestId("tab-flows"));
+    await screen.findByTestId(`flow-row-${fixtureFlow.id}`);
+    expect(screen.queryByRole("button", { name: /Trouver une automatisation/i })).toBeNull();
+    expect(screen.queryByText(/Trouver une automatisation/i)).toBeNull();
+  });
 });

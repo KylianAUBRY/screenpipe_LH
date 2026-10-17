@@ -71,6 +71,13 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(trigger.credentials?.imap.id).toBe("spNovaImap000001");
   });
 
+  test("a failed run keeps its email in n8n so Retry has it: saving failed runs is never switched off (D17)", () => {
+    // The trigger marks the email read as it fetches it (the dedupe), so the
+    // failed run's saved input is the only copy Retry can run again. n8n
+    // saves failed runs with their data unless a workflow says "none".
+    expect(["all", "DEFAULT", undefined]).toContain(workflow.settings.saveDataErrorExecution as string | undefined);
+  });
+
   test("every activation catches up the unread emails, even one that arrived just before or during a pause", () => {
     // n8n's IMAP trigger (v2) fetches on a new arrival only, unless it has a
     // last processed UID in its static data: then each activation catches up
