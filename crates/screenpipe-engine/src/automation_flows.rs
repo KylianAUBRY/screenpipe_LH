@@ -925,12 +925,15 @@ async fn build_flow(api: &N8nApi, workflow: &Value, record: Option<&FlowRecord>)
         .unwrap_or_default()
         .to_string();
     let reviewed_version_id = record.and_then(|r| r.reviewed_version_id.clone());
+    let running = workflow["activeVersionId"].as_str();
     Flow {
         n8n_url: api.editor_url(&head.id),
         // n8n 2.x keeps running the published `activeVersionId` while an edit
-        // in its editor creates a newer draft `versionId` (SPEC D7).
+        // in its editor creates a newer draft `versionId` (SPEC D7); and a
+        // version published in n8n (editor, CLI) was never the user's click.
         review_outdated: head.status == "active"
-            && workflow["activeVersionId"].as_str() != Some(version_id.as_str()),
+            && (running != Some(version_id.as_str())
+                || running != reviewed_version_id.as_deref()),
         id: head.id,
         name: head.name,
         status: head.status,
@@ -1046,16 +1049,28 @@ async fn activate_flow(
     if reviewed != version {
         return Err(FlowError::VersionChanged);
     }
-    // Already running the reviewed version (e.g. a double click).
-    if workflow["active"] == true && workflow["activeVersionId"].as_str() == Some(&version) {
+    let already_running =
+        workflow["active"] == true && workflow["activeVersionId"].as_str() == Some(&version);
+    let already_reviewed = store
+        .flows
+        .get(&id)
+        .and_then(|record| record.reviewed_version_id.as_deref())
+        == Some(version.as_str());
+    // Already running the version the user activated (e.g. a double click).
+    if already_running && already_reviewed {
         return Ok(Json(
             build_flow(&api, &workflow, store.flows.get(&id)).await,
         ));
     }
 
-    let published = api
-        .switch(&id, "publish", Some(&json!({"versionId": version})))
-        .await?;
+    // Published in n8n without the user's click: nothing to switch, only the
+    // user's approval of what runs to record.
+    let published = if already_running {
+        workflow
+    } else {
+        api.switch(&id, "publish", Some(&json!({"versionId": version})))
+            .await?
+    };
     let published_version = published["activeVersionId"]
         .as_str()
         .unwrap_or(&version)

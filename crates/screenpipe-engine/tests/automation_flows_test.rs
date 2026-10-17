@@ -993,6 +993,57 @@ async fn review_is_outdated_while_n8n_runs_an_older_version_than_its_draft() {
     assert_eq!(flow["reviewOutdated"], false);
 }
 
+#[tokio::test]
+async fn review_is_outdated_when_n8n_runs_a_version_the_user_never_activated() {
+    // Published in n8n (the editor, the CLI, anyone) without the Review
+    // Screen's click (ticket 22, item 3).
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let uri = format!("/automation-flows/{id}");
+    let activate = format!("/automation-flows/{id}/activate");
+
+    // Never activated in ScreenPipe, now running its latest version.
+    n8n.edit_workflow(&id, |w| {
+        w["active"] = json!(true);
+        w["activeVersionId"] = json!("version-1");
+    });
+    let (_, flow) = app.call("GET", &uri, None).await;
+    assert_eq!(flow["status"], "active");
+    assert_eq!(flow["reviewedVersionId"], Value::Null);
+    assert_eq!(flow["reviewOutdated"], true);
+
+    // Activated once at version-1, then version-2 published in n8n.
+    app.ui_call("POST", &activate, Some(json!({"versionId": "version-1"})))
+        .await;
+    n8n.edit_workflow(&id, |w| {
+        w["versionId"] = json!("version-2");
+        w["activeVersionId"] = json!("version-2");
+    });
+    let (_, flow) = app.call("GET", &uri, None).await;
+    assert_eq!(flow["status"], "active");
+    assert_eq!(flow["reviewedVersionId"], "version-1");
+    assert_eq!(flow["reviewOutdated"], true);
+
+    // « Activer cette version »: the user approves what already runs.
+    let (status, flow) = app
+        .ui_call("POST", &activate, Some(json!({"versionId": "version-2"})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["reviewOutdated"], false);
+    assert_eq!(flow["reviewedVersionId"], "version-2");
+    assert_eq!(
+        events(&flow),
+        [
+            event("activated", "version-1", "user"),
+            event("activated", "version-2", "user"),
+        ]
+    );
+    assert_eq!(n8n.workflows()[0]["activeVersionId"], "version-2");
+}
+
 // ---------------------------------------------------------------------------
 // Activation (ticket 04)
 // ---------------------------------------------------------------------------
