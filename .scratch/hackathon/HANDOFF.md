@@ -108,7 +108,7 @@ minutes).
 
 ## Open decisions
 
-- **Failure handling (SPEC.md D16–D20) is ticketed on branch `hackathon/failure-handling`:** ticket 25 (idempotent ticket creation) is merged (`e732dc940`, live check pending human); ticket 24 (Failed Run notification) is merged (`cb2add87e`, live check pending human; its native panel unit test never compiled: no machine-wide sccache here); tickets 26, 27, 29 in progress; 26 (Retry) needs 24+25; 27 (Abstention) and 29 (health check) need 24; 28 (Activity) needs 27. Not built yet.
+- **Failure handling (SPEC.md D16–D20) is ticketed on branch `hackathon/failure-handling`:** ticket 25 (idempotent ticket creation) is merged (`e732dc940`, live check pending human); ticket 24 (Failed Run notification) is merged (`cb2add87e`, live check pending human; its native panel unit test never compiled: no machine-wide sccache here); ticket 27 (Abstention) is merged (`114259cd0`, live check pending human); tickets 26, 29, 28 in progress; 26 (Retry) needs 24+25; 27 (Abstention) and 29 (health check) need 24; 28 (Activity) needs 27. Not built yet.
 - **Teammate divergence (settled 2026-10-17):** `main` had another Review
   Screen ("Recommendations" tab, questions on the Review Screen, notification
   opens the Review Screen, demo backend) by a teammate, plus the « Find an
