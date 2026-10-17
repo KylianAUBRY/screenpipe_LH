@@ -7,7 +7,7 @@
 // they are pixels, never recorder frames (see workflows-ui `screenshots.ts`).
 // A capture found in this machine's recordings (`recorded-evidence.ts`) uses
 // its recorder frame instead, so the Task Page loads it live. Shared by the
-// « Trouver une automatisation » button and `infra/automation-flows/demo`.
+// app's demo shortcut ⌃⌥⌘D (`../demo-shortcut.ts`) and `infra/automation-flows/demo`.
 import type { WorkflowMap, WorkflowStage, WorkflowTimingRun } from "@screenpipe/workflows-ui";
 
 export const DEMO_TASK_ID = "wf-novadesk-support-tickets";

@@ -309,9 +309,6 @@ struct FlowNode {
     node_type: String,
     position: [f64; 2],
     sentence: Option<String>,
-    /// What the AI did not write, read from the node itself: the n8n
-    /// credentials it uses and, for an HTTP Request, its method and host.
-    facts: Vec<String>,
 }
 
 /// A captured moment: its recorder frame when it has one (embedded evidence
@@ -1000,7 +997,6 @@ fn review_graph(workflow: &Value) -> (Vec<FlowNode>, Vec<FlowEdge>) {
                     .map(str::trim)
                     .filter(|notes| !notes.is_empty())
                     .map(str::to_string),
-                facts: node_facts(node),
                 name,
             })
         })
@@ -1037,49 +1033,6 @@ fn review_graph(workflow: &Value) -> (Vec<FlowNode>, Vec<FlowEdge>) {
         }
     }
     (nodes, edges)
-}
-
-const HTTP_REQUEST: &str = "n8n-nodes-base.httpRequest";
-
-/// The Review Screen's fixed facts of a node, shown under its AI-written
-/// sentence: each n8n credential it uses (by its name in n8n), and for an
-/// HTTP Request where it goes (method and host, never the path or query).
-fn node_facts(node: &Value) -> Vec<String> {
-    let mut facts: Vec<String> = node["credentials"]
-        .as_object()
-        .into_iter()
-        .flatten()
-        .map(|(kind, credential)| {
-            let name = credential["name"]
-                .as_str()
-                .or(credential["id"].as_str())
-                .unwrap_or(kind);
-            format!("Identifiant n8n : {name}")
-        })
-        .collect();
-    if node["type"] == HTTP_REQUEST {
-        let parameters = &node["parameters"];
-        // n8n's default method when the parameter is absent.
-        let method = parameters["method"].as_str().unwrap_or("GET");
-        facts.push(match parameters["url"].as_str().and_then(url_host) {
-            Some(host) => format!("{method} {host}"),
-            None => format!("{method} (adresse calculée à l'exécution)"),
-        });
-    }
-    facts
-}
-
-/// The host of a fixed URL; `None` for an n8n expression that builds it.
-fn url_host(url: &str) -> Option<String> {
-    let url = url.strip_prefix('=').unwrap_or(url).trim();
-    let parsed = reqwest::Url::parse(url).ok()?;
-    // `https://{{ … }}@host/` parses with the expression as userinfo, but at
-    // run time the expression can rewrite the real host: no fact then.
-    if !parsed.username().is_empty() || parsed.password().is_some() {
-        return None;
-    }
-    let host = parsed.host_str()?.to_string();
-    (!host.contains('{') && !host.contains('$')).then_some(host)
 }
 
 /// The version n8n runs (its published one), for the activation history.
@@ -1588,18 +1541,6 @@ async fn create_from_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_url_hiding_its_real_host_behind_userinfo_has_no_host_fact() {
-        // `https://{{ $json.x }}@jira/…` would show « jira » while an email
-        // could send the request (and the Jira credential) elsewhere.
-        assert_eq!(url_host("=https://{{ $json.x }}@kylianaubry.atlassian.net/rest/api/2/issue"), None);
-        assert_eq!(url_host("https://user:pass@kylianaubry.atlassian.net/"), None);
-        assert_eq!(
-            url_host("=https://kylianaubry.atlassian.net/rest/api/2/issue/{{ $json.id }}").as_deref(),
-            Some("kylianaubry.atlassian.net")
-        );
-    }
 
     fn record(reviewed: Option<&str>) -> FlowRecord {
         FlowRecord {

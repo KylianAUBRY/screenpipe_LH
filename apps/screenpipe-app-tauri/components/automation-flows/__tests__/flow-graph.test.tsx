@@ -50,33 +50,21 @@ describe("Review Screen graph", () => {
     expect(within(card).getByText("Pas d'explication pour cette étape.")).toBeTruthy();
   });
 
-  it("lists the facts the AI did not write under each step's sentence", async () => {
-    const [trigger, agent, ...rest] = fixtureFlow.nodes;
-    const jira = rest.at(-1)!;
-    const graph = await renderGraph({
-      ...fixtureFlow,
-      nodes: [
-        { ...trigger, facts: ["Identifiant n8n : NovaDesk Gmail (IMAP)"] },
-        { ...agent, facts: [] },
-        ...rest.slice(0, -1),
-        { ...jira, facts: ["Identifiant n8n : NovaDesk Jira", "POST kylianaubry.atlassian.net"] },
-      ],
-    });
+  it("shows only the sentence under each step, never n8n credentials or hosts", async () => {
+    // Flows round two, ticket 01: those stay in n8n (« Voir le graphe »).
+    const graph = await renderGraph();
 
-    const card = within(graph).getByTestId(`flow-node-${jira.id}`);
-    // React Flow keeps nodes invisible until it measures them, which jsdom
-    // never does: roles need `hidden`, and the label is read from aria-label.
-    const facts = within(card).getByLabelText("Détails fixes");
-    expect(facts.tagName).toBe("UL");
-    expect(within(facts).getAllByRole("listitem", { hidden: true }).map((item) => item.textContent)).toEqual([
-      "Identifiant n8n : NovaDesk Jira",
-      "POST kylianaubry.atlassian.net",
-    ]);
-    // Under the sentence, not instead of it.
-    const sentence = within(card).getByText(jira.sentence!);
-    expect(sentence.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(within(graph).getByTestId(`flow-node-${trigger.id}`)).getByText("Identifiant n8n : NovaDesk Gmail (IMAP)")).toBeTruthy();
-    expect(within(within(graph).getByTestId(`flow-node-${agent.id}`)).queryByRole("list", { hidden: true })).toBeNull();
+    for (const node of fixtureFlow.nodes) {
+      expect(node).not.toHaveProperty("facts");
+      const card = within(graph).getByTestId(`flow-node-${node.id}`);
+      // React Flow keeps nodes invisible until it measures them, which jsdom
+      // never does: roles need `hidden`.
+      expect(within(card).queryByRole("list", { hidden: true })).toBeNull();
+      expect(within(card).queryByLabelText("Détails fixes")).toBeNull();
+      // Nothing follows the sentence.
+      expect(card.textContent!.endsWith(node.sentence!)).toBe(true);
+    }
+    expect(graph.textContent).not.toMatch(/Identifiant n8n|atlassian\.net|NovaDesk (Jira|Gmail)/);
   });
 
   it("links the nodes along the n8n connections", async () => {
