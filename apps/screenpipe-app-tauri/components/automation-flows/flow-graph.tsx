@@ -8,7 +8,7 @@
 // by its name and three lines of its one-sentence explanation (all of it on
 // hover). Editing happens in n8n ("Open in n8n").
 
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Controls,
   Handle,
@@ -19,20 +19,23 @@ import {
   type Node,
   type NodeHandle,
   type NodeProps,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import type { Flow, FlowNode } from "./api";
 
 // Cards hold the name and three lines of the sentence. Narrow cards and short
 // links keep the whole workflow inside the frame at a readable zoom.
 const NODE_WIDTH = 190;
-const NODE_GAP = 14;
+const NODE_GAP = 44;
 const COLUMN = NODE_WIDTH + NODE_GAP;
 // Arrow heads sized to the short links (React Flow's default is 12.5).
 const ARROW_SIZE = 8;
-// First-render estimate only: the browser measures the real card height.
-const NODE_HEIGHT = 130;
+// Every card has this height: React Flow then knows the picture's real size
+// before measuring, and fits it centred in the frame.
+const NODE_HEIGHT = 136;
 // One row of cards plus room for the links between rows.
-const ROW_HEIGHT = 190;
+const ROW_HEIGHT = 216;
+const FIT_VIEW = { padding: 0.08, maxZoom: 1 };
 // n8n positions this close are the same row / the same column.
 const SAME_ROW = 100;
 const SAME_COLUMN = 60;
@@ -61,7 +64,8 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
     <div
       data-testid={`flow-node-${node.id}`}
       title={node.sentence ?? NO_SENTENCE}
-      className="border border-border bg-background p-3"
+      style={{ height: NODE_HEIGHT }}
+      className="overflow-hidden border border-border bg-background p-3"
     >
       {HANDLES.map((handle) => (
         <Handle
@@ -77,7 +81,7 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
       {/* The step's name, large enough to read in the fitted picture, then
           three lines at most of what it does; the whole sentence is on hover.
           The n8n node type and fixed facts stay in n8n ("Open in n8n"). */}
-      <p className="break-words text-lg font-medium leading-snug">{node.name}</p>
+      <p className="line-clamp-2 break-words text-lg font-medium leading-snug">{node.name}</p>
       <p className="mt-1 line-clamp-3 break-words text-xs leading-snug text-muted-foreground">
         {node.sentence ?? NO_SENTENCE}
       </p>
@@ -175,6 +179,7 @@ function toGraph(nodes: FlowNode[], edges: Flow["edges"]) {
     type: "step",
     position: positions.get(node.id)!,
     width: NODE_WIDTH,
+    height: NODE_HEIGHT,
     handles: HANDLES,
     data: { node },
   }));
@@ -204,16 +209,28 @@ function toGraph(nodes: FlowNode[], edges: Flow["edges"]) {
 
 export function FlowGraph({ nodes, edges }: { nodes: FlowNode[]; edges: Flow["edges"] }) {
   const { stepNodes, links } = useMemo(() => toGraph(nodes, edges), [nodes, edges]);
+  const frame = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState<ReactFlowInstance<StepNode> | null>(null);
+
+  // Keep the picture centred when the frame changes size (window resize,
+  // scrollbar, sidebar): React Flow fits it only once on its own.
+  useEffect(() => {
+    if (!view || !frame.current || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => void view.fitView(FIT_VIEW));
+    observer.observe(frame.current);
+    return () => observer.disconnect();
+  }, [view]);
 
   return (
-    <div className="h-[420px] border border-border">
+    <div ref={frame} className="h-[420px] border border-border">
       <ReactFlow
         aria-label="Flow graph"
         nodes={stepNodes}
         edges={links}
         nodeTypes={NODE_TYPES}
+        onInit={setView}
         fitView
-        fitViewOptions={{ padding: 0.04, maxZoom: 1 }}
+        fitViewOptions={FIT_VIEW}
         minZoom={0.2}
         // Wheel scrolls the page; drag pans, pinch and double click zoom.
         zoomOnScroll={false}

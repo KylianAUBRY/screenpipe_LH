@@ -157,6 +157,23 @@ describe("Review Screen graph", () => {
     }
   });
 
+  it("gives every card the same height and keeps room between cards", async () => {
+    const graph = await renderGraph();
+    const wrappers = fixtureFlow.nodes.map(
+      (node) => within(graph).getByTestId(`flow-node-${node.id}`).closest<HTMLElement>(".react-flow__node")!,
+    );
+    const heights = new Set(wrappers.map((wrapper) => wrapper.style.height));
+    expect(heights.size).toBe(1);
+    expect(parseFloat([...heights][0])).toBeGreaterThan(0);
+
+    const xs = wrappers
+      .filter((wrapper) => wrapper.style.transform.endsWith(", 0px)"))
+      .map((wrapper) => Number(/translate\(([-\d.]+)px/.exec(wrapper.style.transform)![1]))
+      .sort((a, b) => a - b);
+    const width = parseFloat(wrappers[0].style.width);
+    for (const [index, x] of xs.slice(1).entries()) expect(x - xs[index] - width).toBeGreaterThanOrEqual(40);
+  });
+
   it("centres the context nodes under their step, so their curves are symmetrical", async () => {
     const graph = await renderGraph();
     const centreX = (id: string) => {
