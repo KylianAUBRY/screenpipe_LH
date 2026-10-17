@@ -22,10 +22,12 @@ import {
 } from "@xyflow/react";
 import type { Flow, FlowNode } from "./api";
 
-// Cards hold the name and three lines of the sentence: wide enough to read
-// without stretching, short enough that the fitted picture stays legible.
-const NODE_WIDTH = 220;
-const NODE_GAP = 32;
+// Cards hold the name and three lines of the sentence. Narrow cards and short
+// links keep the whole workflow inside the frame at a readable zoom.
+const NODE_WIDTH = 190;
+const NODE_GAP = 14;
+// Arrow heads sized to the short links (React Flow's default is 12.5).
+const ARROW_SIZE = 8;
 const N8N_NODE_SIZE = 100;
 const SPREAD_Y = 1.25;
 // First-render estimate only: the browser measures the real card height.
@@ -133,7 +135,7 @@ function toGraph(nodes: FlowNode[], edges: Flow["edges"]) {
         sourceHandle: fromBelow ? "up" : "out",
         targetHandle: fromBelow ? "under" : "in",
         ariaLabel: `${source.name} → ${target.name}`,
-        markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR },
+        markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR, width: ARROW_SIZE, height: ARROW_SIZE },
         style: { stroke: EDGE_COLOR, strokeDasharray: fromBelow ? "4 4" : undefined },
       },
     ];
