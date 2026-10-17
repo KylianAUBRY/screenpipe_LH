@@ -1,6 +1,6 @@
 # Handoff — Automation Flows (hackathon)
 
-Last updated: 2026-10-17, integration tip `4a50c56da` (pushed).
+Last updated: 2026-10-17, integration tip after the ticket 08 merge (pushed).
 Read this first, then `AGENTS.md` (Hackathon mode), `CONTEXT.md`, `SPEC.md`,
 `automation-flows-spec.md`, and the ticket files in `issues/`.
 
@@ -28,15 +28,15 @@ Read this first, then `AGENTS.md` (Hackathon mode), `CONTEXT.md`, `SPEC.md`,
 | 05 | Read-only graph | merged |
 | 06 | Questions unlock "Créer l'automatisation" | merged |
 | 07 | ScreenPipe node as AI Agent tool | merged; live tool check pending human |
-| 08 | Chat modification (pause → Needs Review) | **in progress**: route, skill and button committed on `hackathon/ticket-08` (pushed as WIP, not merged); finish tests, merge integration tip, then merge it |
-| 09 | Chat creation (Add) | todo, blocked by 08 |
+| 08 | Chat modification (pause → Needs Review) | merged (`9d9d4c952`); live rehearsal pending human (steps in the ticket) |
+| 09 | Chat creation (Add) | **in progress** (implementer on branch `hackathon/ticket-09`) |
 | 10 | ScreenPipe Trigger (deterministic) | merged; manual check pending human |
 | 11 | ScreenPipe AI Trigger | merged; manual check pending human |
-| 12 | Demo assembly + rehearsal | todo, blocked by 08 and 13 (13 done) |
+| 12 | Demo assembly + rehearsal | todo, unblocked (needs the human live checks) |
 | 13 | AI proxy returns OpenAI-shaped tool calls | merged; live check pending human |
 | — | Prompt-injection hardening of the demo workflow | merged |
 
-Remaining implement-spec steps: finish 08 → 09 → 12, then `/code-review` on
+Remaining implement-spec steps: finish 09 → 12, then `/code-review` on
 the integration branch, fix findings in one implementer, set every ticket's
 `Status:` to done, clean up implementer worktrees.
 
