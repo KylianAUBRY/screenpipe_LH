@@ -154,3 +154,15 @@ vide dans NovaCRM » email in Gmail; 17153 = NOVA-25 in Jira.
 deleted `spNovaFlow000001`, Flows list empty, its record removed, 0 unread
 email left, answers empty — « Reset complete: no demo Flow, no saved
 answers, no unread demo email. » (exit 0).
+
+## Independent reviews
+
+- First review (standards, spec, correctness/security) after tickets 14–20:
+  findings became tickets 21–23, all fixed and live-verified above.
+- Second-pass review of the fixes (tickets 21–23 and the late workflow/reset
+  fixes): no regression in the poll loop, credentials matching, `reviewOutdated`,
+  deactivation attribution, adopt path, `sourceMoment`, the reviewed-version
+  state machine, the `{noformat}` expression, the AI Trigger look-back or the
+  catch-up seed. Two findings fixed at once (the user's Désactiver always
+  switches off; no host fact behind URL userinfo); two minor ones left as known
+  limits (`HANDOFF.md`).

@@ -52,3 +52,11 @@ unchanged.
   with no progress indicator beyond the disabled buttons.
 - An executions call that fails (non-2xx) fails the switch-off (`n8n_failed`) rather than
   unpublishing blind.
+
+## Follow-up (second-pass review, 2026-10-17 16:20)
+
+An execution n8n reports as running forever (a hung AI call before the 30 s
+model timeout, a crash) would block every « Désactiver » (90 s, then 409).
+The user's own click now switches off at the deadline anyway; a chat change
+or a non-UI caller still gets `409 flow_running` and nothing changes. Test:
+`the_users_desactiver_switches_off_even_when_an_execution_never_ends`.

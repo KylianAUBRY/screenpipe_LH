@@ -86,6 +86,27 @@ minutes).
   delete.
 - Secrets never go in the repo.
 
+## Known limits (not fixed, judged minor or team decisions)
+
+- The Flows UI and the Task Page creation block are French in JSX, not
+  through the app's localization (`useGT`): team decision for the demo.
+- The « Flow runs » mode of the ScreenPipe Trigger fires once when several
+  runs happen between two polls (it watches the last execution).
+- The Flows list is the n8n workflows tagged `screenpipe-flow`: a workflow
+  tagged by hand in n8n shows up too.
+- The agent's browser can still open the n8n editor (no cookies unless the
+  user shares browser sessions); a version published there is flagged on the
+  Review Screen (« Activer cette version »).
+- Task Page drafts live in the app session (lost on app restart; `reset.ts`
+  cannot clear them).
+- The Flow service holds its write lock while it waits for a running
+  execution (up to ~90 s): other activations/creations queue meanwhile.
+- HTML-only emails: numeric entities above U+FFFF (emoji) are garbled in the
+  Jira description.
+- A chat-created Flow that uses ScreenPipe nodes needs the « ScreenPipe API »
+  credential picked in n8n before it runs (the chat cannot add credentials).
+- Jira NOVA holds the rehearsal tickets NOVA-31…42.
+
 ## Open decisions
 
 - **Teammate divergence:** `origin/main` has another Review Screen
