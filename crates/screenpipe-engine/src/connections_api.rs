@@ -4111,6 +4111,317 @@ mod tests {
         (format!("http://{addr}/hook/credential-sentinel"), server)
     }
 
+    async fn n8n_test_router(dir: &TempDir, connections: &[(Option<&str>, Value)]) -> Router<()> {
+        let screenpipe_dir = dir.path().to_path_buf();
+        let cm = Arc::new(Mutex::new(ConnectionManager::new(
+            screenpipe_dir.clone(),
+            None,
+        )));
+        for (instance, credentials) in connections {
+            cm.lock()
+                .await
+                .connect_instance("n8n", *instance, credentials.as_object().unwrap().clone())
+                .await
+                .unwrap();
+        }
+        let wa = Arc::new(Mutex::new(WhatsAppGateway::new(screenpipe_dir.clone())));
+        router(
+            cm,
+            wa,
+            screenpipe_dir,
+            None,
+            crate::routes::browser::BrowserBridge::new(),
+            BrowserRegistry::new(),
+            None,
+        )
+    }
+
+    struct N8nUpstreamRequest {
+        uri: axum::http::Uri,
+        headers: HeaderMap,
+        body: Vec<u8>,
+    }
+
+    async fn spawn_n8n_upstream(
+        captured: Arc<Mutex<Vec<N8nUpstreamRequest>>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let workflow_requests = captured.clone();
+        let app = Router::new()
+            .route(
+                "/api/v1/workflows",
+                post(move |uri: axum::http::Uri, headers: HeaderMap, body: axum::body::Bytes| {
+                    let captured = workflow_requests.clone();
+                    async move {
+                        captured.lock().await.push(N8nUpstreamRequest {
+                            uri,
+                            headers,
+                            body: body.to_vec(),
+                        });
+                        (
+                            StatusCode::OK,
+                            Json(json!({"id": "workflow-test-123", "name": "Screenpipe draft", "active": false})),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/hook/webhook-secret-sentinel",
+                post(move |uri: axum::http::Uri, headers: HeaderMap, body: axum::body::Bytes| {
+                    let captured = captured.clone();
+                    async move {
+                        captured.lock().await.push(N8nUpstreamRequest {
+                            uri,
+                            headers,
+                            body: body.to_vec(),
+                        });
+                        (StatusCode::ACCEPTED, "private webhook response")
+                    }
+                }),
+            );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), server)
+    }
+
+    fn n8n_workflow_draft() -> Value {
+        json!({
+            "name": "Screenpipe draft",
+            "nodes": [{
+                "id": "start",
+                "name": "Start",
+                "type": "n8n-nodes-base.manualTrigger",
+                "typeVersion": 1,
+                "position": [0, 0],
+                "parameters": {}
+            }],
+            "connections": {},
+            "settings": {"executionOrder": "v1"}
+        })
+    }
+
+    #[tokio::test]
+    async fn n8n_api_proxy_creates_workflow_with_server_side_credentials() {
+        let dir = TempDir::new().unwrap();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (instance_url, server) = spawn_n8n_upstream(captured.clone()).await;
+        let app = n8n_test_router(
+            &dir,
+            &[(
+                None,
+                json!({"instance_url": instance_url, "api_key": "api-secret-sentinel"}),
+            )],
+        )
+        .await;
+        let workflow = n8n_workflow_draft();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/n8n/proxy/workflows")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("X-N8N-API-KEY", "caller-must-not-override-stored-key")
+                    .body(Body::from(workflow.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let result: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result["id"], "workflow-test-123");
+        assert_eq!(result["active"], false);
+        assert!(!String::from_utf8_lossy(&body).contains("api-secret-sentinel"));
+
+        let requests = captured.lock().await;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].uri, "/api/v1/workflows");
+        assert_eq!(requests[0].headers["X-N8N-API-KEY"], "api-secret-sentinel");
+        assert_eq!(
+            requests[0].headers.get_all("X-N8N-API-KEY").iter().count(),
+            1
+        );
+        assert_eq!(
+            requests[0].headers[header::CONTENT_TYPE],
+            "application/json"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&requests[0].body).unwrap(),
+            workflow
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn n8n_api_proxy_selects_named_instance_and_strips_instance_query() {
+        let dir = TempDir::new().unwrap();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (instance_url, server) = spawn_n8n_upstream(captured.clone()).await;
+        let app = n8n_test_router(
+            &dir,
+            &[
+                (None, json!({"instance_url": instance_url, "api_key": "default-key"})),
+                (Some("work"), json!({"instance_url": format!("{instance_url}/api/v1/"), "api_key": "work-key"})),
+            ],
+        )
+        .await;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/n8n/proxy/workflows?instance=work")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(n8n_workflow_draft().to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = captured.lock().await;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].uri, "/api/v1/workflows");
+        assert_eq!(requests[0].headers["X-N8N-API-KEY"], "work-key");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn n8n_api_and_webhook_routes_coexist_without_exposing_credentials() {
+        let dir = TempDir::new().unwrap();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (instance_url, server) = spawn_n8n_upstream(captured.clone()).await;
+        let webhook_url = format!("{instance_url}/hook/webhook-secret-sentinel");
+        let app = n8n_test_router(
+            &dir,
+            &[(
+                None,
+                json!({
+                    "instance_url": instance_url,
+                    "api_key": "api-secret-sentinel",
+                    "webhook_url": webhook_url
+                }),
+            )],
+        )
+        .await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/n8n/proxy/workflows")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(n8n_workflow_draft().to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["id"],
+            "workflow-test-123"
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/n8n/proxy")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"event":"hello"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({"success": true, "upstream_status": 202})
+        );
+
+        for uri in ["/n8n", "/n8n/instances", "/n8n/config"] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let text = String::from_utf8_lossy(&body);
+            assert!(
+                !text.contains("api-secret-sentinel"),
+                "{uri} exposed API key"
+            );
+            assert!(
+                !text.contains("webhook-secret-sentinel"),
+                "{uri} exposed webhook target"
+            );
+        }
+        let requests = captured.lock().await;
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].uri, "/api/v1/workflows");
+        assert_eq!(requests[1].uri, "/hook/webhook-secret-sentinel");
+        assert!(!requests[1].headers.contains_key("X-N8N-API-KEY"));
+        assert_eq!(requests[1].body, br#"{"event":"hello"}"#);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn n8n_proxy_rejects_capabilities_without_their_credentials() {
+        let dir = TempDir::new().unwrap();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (instance_url, server) = spawn_n8n_upstream(captured.clone()).await;
+        let app = n8n_test_router(
+            &dir,
+            &[
+                (
+                    Some("webhook"),
+                    json!({"webhook_url": format!("{instance_url}/hook/webhook-secret-sentinel")}),
+                ),
+                (
+                    Some("api"),
+                    json!({"instance_url": instance_url, "api_key": "api-secret-sentinel"}),
+                ),
+            ],
+        )
+        .await;
+
+        for (uri, expected_status) in [
+            (
+                "/n8n/proxy/workflows?instance=webhook",
+                StatusCode::UNAUTHORIZED,
+            ),
+            ("/n8n/proxy?instance=api", StatusCode::BAD_REQUEST),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                expected_status,
+                "unexpected status for {uri}"
+            );
+        }
+        assert!(captured.lock().await.is_empty());
+        server.abort();
+    }
+
     #[tokio::test]
     async fn webhook_proxy_forwards_json_without_returning_target() {
         let dir = TempDir::new().unwrap();

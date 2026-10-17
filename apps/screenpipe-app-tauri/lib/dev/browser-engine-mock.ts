@@ -61,6 +61,40 @@ let mockPipeHistory = false;
 let mockPipePreset: string | string[] | null = null;
 let mockPipeRunIn: { mode: "existing_chat"; chat_id: string } | null = null;
 
+// Fictional, memory-only n8n connection for the native settings browser harness.
+// These handlers never contact n8n or execute a webhook.
+let mockN8nCredentials: Record<string, string> | null = null;
+const mockN8nDefinition = {
+  id: "n8n",
+  name: "n8n",
+  icon: "n8n",
+  category: "productivity",
+  description: "Create and manage n8n workflows, or trigger an existing webhook workflow.",
+  is_oauth: false,
+  supports_oauth_instances: false,
+  fields: [
+    { key: "instance_url", label: "Instance URL (optional)", secret: false, placeholder: "http://localhost:5678", help_url: "" },
+    { key: "api_key", label: "API key (optional)", secret: true, placeholder: "n8n API key", help_url: "" },
+    { key: "webhook_url", label: "Webhook URL (optional)", secret: true, placeholder: "https://your-n8n.example.com/webhook/...", help_url: "" },
+  ],
+};
+
+function mockN8nInput(init: RequestInit | undefined): Record<string, string> | null {
+  const value = parseJsonBody(init).credentials;
+  if (!value || typeof value !== "object") return null;
+  const credentials = Object.fromEntries(
+    ["instance_url", "api_key", "webhook_url"].map(key => [
+      key,
+      typeof (value as Record<string, unknown>)[key] === "string"
+        ? (value as Record<string, string>)[key].trim()
+        : "",
+    ])
+  );
+  const apiMode = !!(credentials.instance_url || credentials.api_key);
+  if (apiMode ? !credentials.instance_url || !credentials.api_key : !credentials.webhook_url) return null;
+  return credentials;
+}
+
 function mockCloudProviderStatuses() {
   return (["codex", "claude", "cursor"] as const).map((provider) => ({
     provider,
@@ -250,6 +284,33 @@ export function mockLocalApiResponse(
   if (url.pathname === "/health") {
     return Response.json(createMockHealth(scenario));
   }
+  if (url.pathname === "/connections/n8n/instances") {
+    return Response.json({ instances: [] });
+  }
+  if (url.pathname === "/connections/n8n/test") {
+    const credentials = mockN8nInput(init);
+    return credentials
+      ? Response.json({ success: true, message: "Simulated connection check; no request sent to n8n." })
+      : Response.json({ error: "Provide an instance URL and API key, or a webhook URL." }, { status: 400 });
+  }
+  if (url.pathname === "/connections/n8n") {
+    if (method === "DELETE") {
+      mockN8nCredentials = null;
+      return Response.json({ success: true });
+    }
+    if (method === "PUT") {
+      const credentials = mockN8nInput(init);
+      if (!credentials) return Response.json({ error: "Provide an instance URL and API key, or a webhook URL." }, { status: 400 });
+      mockN8nCredentials = credentials;
+      return Response.json({ success: true });
+    }
+    return Response.json({
+      connected: mockN8nCredentials !== null,
+      credentials: mockN8nCredentials?.instance_url
+        ? { instance_url: mockN8nCredentials.instance_url }
+        : {},
+    });
+  }
   // Sharing fixtures are synthetic but connected, so the meeting preview can
   // exercise the same ranked app stack and review dialog as the desktop app.
   if (url.pathname === "/connections") {
@@ -262,6 +323,7 @@ export function mockLocalApiResponse(
               { id: "notion", name: "Notion", connected: true, mcp: true },
               { id: "linear", name: "Linear", connected: true, mcp: true },
               { id: "obsidian", name: "Obsidian", connected: true },
+              { ...mockN8nDefinition, connected: mockN8nCredentials !== null },
             ],
     });
   }

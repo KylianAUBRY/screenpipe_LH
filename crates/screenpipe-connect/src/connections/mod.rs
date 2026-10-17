@@ -471,6 +471,9 @@ fn normalize_credentials(
             credentials.remove(field.key);
         }
     }
+    if def.id == "n8n" {
+        return n8n::normalize_credentials(credentials);
+    }
     Ok(credentials)
 }
 
@@ -890,7 +893,12 @@ pub struct ConnectionInfo {
     pub supports_oauth_instances: bool,
 }
 
-type CredentialConnection<'a> = (&'a dyn Integration, &'static IntegrationDef, Option<String>);
+type CredentialConnection<'a> = (
+    &'a dyn Integration,
+    &'static IntegrationDef,
+    Option<String>,
+    Map<String, Value>,
+);
 
 // ---------------------------------------------------------------------------
 // Pi context rendering — uses proxy URLs instead of raw credentials
@@ -909,7 +917,7 @@ pub async fn render_context(
         let def = integration.def();
         for (instance, conn) in load_all_instances(secret_store, screenpipe_dir, def.id).await {
             if conn.enabled && !conn.credentials.is_empty() {
-                cred_connected.push((integration.as_ref(), def, instance));
+                cred_connected.push((integration.as_ref(), def, instance, conn.credentials));
             }
         }
     }
@@ -952,9 +960,48 @@ pub async fn render_context(
          The proxy injects authentication automatically. NEVER fetch or use raw API keys.\n",
     );
 
-    for (integration, def, instance) in &cred_connected {
+    for (integration, def, instance, credentials) in &cred_connected {
         out.push_str(&connection_context_header(def, instance.as_deref()));
         out.push_str(&format!("{}\n", def.description));
+
+        if def.id == "n8n" {
+            let suffix = instance_query(instance.as_deref());
+            if n8n::has_api_credentials(credentials) {
+                out.push_str(&format!(
+                    "  API proxy: {}/{}/proxy/<api-path>{}\n\
+                     List: GET {}/{}/proxy/workflows{}\n\
+                     Create a workflow draft: POST {}/{}/proxy/workflows{} with JSON containing name, nodes, connections and settings.\n\
+                     Inspect/update: GET/PUT {}/{}/proxy/workflows/<id>{}\n\
+                     Read execution results: GET {}/{}/proxy/executions/<execution-id>{}\n",
+                    base, def.id, suffix,
+                    base, def.id, suffix,
+                    base, def.id, suffix,
+                    base, def.id, suffix,
+                    base, def.id, suffix,
+                ));
+                out.push_str(
+                    "  API paths are relative to /api/v1; do not repeat that prefix. Authentication is injected server-side.\n\
+                     Use verified node versions and existing n8n credential references; never invent credentials.\n\
+                     Omit read-only fields such as id, active and activeVersionId when creating a draft. Return the saved workflow id to the user.\n\
+                     Creating a draft does not run it. Publish/enable only when requested; use an explicitly configured webhook to trigger a run. Do not assume a generic /run API exists.\n",
+                );
+            }
+            if credentials
+                .get("webhook_url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| !url.trim().is_empty())
+            {
+                out.push_str(&format!(
+                    "  webhook: POST {}/{}/proxy{}  (JSON body; target stays server-side; acknowledgement does not verify task completion)\n",
+                    base, def.id, suffix
+                ));
+            }
+            out.push_str(&format!(
+                "  config: {}/{}/config{}  (non-secret settings)\n",
+                base, def.id, suffix
+            ));
+            continue;
+        }
 
         if integration.webhook_proxy_config().is_some() {
             let suffix = instance_query(instance.as_deref());
@@ -991,7 +1038,7 @@ pub async fn render_context(
 
     let manual_instances = cred_connected
         .iter()
-        .map(|(_, def, instance)| (def.id, instance.clone()))
+        .map(|(_, def, instance, _)| (def.id, instance.clone()))
         .collect::<HashSet<_>>();
 
     for (integration, def, instance) in &oauth_connected {
@@ -1515,6 +1562,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn n8n_api_context_uses_the_selected_instance_without_exposing_credentials() {
+        let dir = temp_screenpipe_dir();
+        let mgr = ConnectionManager::new(dir.clone(), None);
+        let credentials = serde_json::json!({
+            "instance_url": "http://localhost:5678/n8n/api/v1/",
+            "api_key": "n8n-api-key-sentinel",
+            "webhook_url": "https://secret.example/n8n/hook-sentinel",
+        });
+        mgr.connect_instance(
+            "n8n",
+            Some("work"),
+            credentials.as_object().unwrap().clone(),
+        )
+        .await
+        .unwrap();
+
+        let saved = mgr
+            .get_credentials_instance("n8n", Some("work"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved["instance_url"], "http://localhost:5678/n8n");
+        let context = render_context(&dir, 3130, None).await;
+        assert!(context
+            .contains("POST http://localhost:3130/connections/n8n/proxy/workflows?instance=work"));
+        assert!(context.contains("POST http://localhost:3130/connections/n8n/proxy?instance=work"));
+        assert!(context.contains("name, nodes, connections and settings"));
+        assert!(!context.contains("n8n-api-key-sentinel"));
+        assert!(!context.contains("hook-sentinel"));
+        assert!(!context.contains("http://localhost:5678"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn n8n_context_advertises_only_configured_capabilities() {
+        let dir = temp_screenpipe_dir();
+        let mgr = ConnectionManager::new(dir.clone(), None);
+        mgr.connect("n8n", manual_webhook_creds()).await.unwrap();
+        let webhook_context = render_context(&dir, 3030, None).await;
+        assert!(
+            webhook_context.contains("webhook: POST http://localhost:3030/connections/n8n/proxy")
+        );
+        assert!(!webhook_context.contains("API proxy:"));
+
+        let credentials =
+            serde_json::json!({"instance_url":"http://localhost:5678", "api_key":"api-sentinel"});
+        mgr.connect("n8n", credentials.as_object().unwrap().clone())
+            .await
+            .unwrap();
+        let api_context = render_context(&dir, 3030, None).await;
+        assert!(api_context.contains("API proxy:"));
+        assert!(!api_context.contains("webhook: POST"));
+        assert!(!api_context.contains("api-sentinel"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn render_context_never_exposes_any_declared_secret_field() {
         let dir = temp_screenpipe_dir();
         let mgr = ConnectionManager::new(dir.clone(), None);
@@ -1526,7 +1630,11 @@ mod tests {
             }
             let mut credentials = Map::new();
             for field in integration.def().fields {
-                let value = format!("sentinel-{}-{}", integration.def().id, field.key);
+                let value = if integration.def().id == "n8n" && field.key == "instance_url" {
+                    "https://n8n.example".to_owned()
+                } else {
+                    format!("sentinel-{}-{}", integration.def().id, field.key)
+                };
                 if field.secret {
                     sentinels.push(value.clone());
                 }

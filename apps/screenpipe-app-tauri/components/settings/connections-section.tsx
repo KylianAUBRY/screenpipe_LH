@@ -24,6 +24,12 @@ import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
 import { appDeepLinkScheme } from "@/lib/connections/mcp-oauth";
 import {
+  initialN8nMode,
+  n8nCredentialsForMode,
+  n8nFieldKeys,
+  type N8nConnectionMode,
+} from "@/lib/connections/n8n-mode";
+import {
   connectionResponseState,
   visibleConnectionCredentials,
 } from "@/lib/utils/connection-credentials";
@@ -2623,6 +2629,14 @@ export function ConnectionCredentialForm({
   const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<"idle" | "connecting" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const fieldId = React.useId();
+  // Older engines advertise only webhook_url. Keep their existing form usable.
+  const hasN8nModes = integrationId === "n8n"
+    && ["instance_url", "api_key"].every(key => fields.some(field => field.key === key));
+  const [n8nMode, setN8nMode] = useState<N8nConnectionMode>(() =>
+    initialN8nMode(initialCredentials, configured
+      && !(typeof window !== "undefined" && sessionStorage.getItem(sessionKey)))
+  );
   // whether credentials are currently saved on the backend
   // suppressed if the user explicitly disconnected this session (persists across remounts)
   const [isSaved, setIsSaved] = useState(() => {
@@ -2639,13 +2653,22 @@ export function ConnectionCredentialForm({
     if (!initialCredentials) return;
     setCreds(safeInitialCredentials());
     setIsSaved(configured);
+    setN8nMode(initialN8nMode(initialCredentials, configured));
   }, [initialCredentials, configured]);
 
   const endpoint = instanceName
     ? `/connections/${integrationId}/instances/${encodeURIComponent(instanceName)}`
     : `/connections/${integrationId}`;
 
+  const formFields = hasN8nModes
+    ? fields.filter(field => n8nFieldKeys(n8nMode).includes(field.key))
+    : fields;
+  const missingRequiredField = formFields.some(
+    field => (hasN8nModes || !isOptionalField(field)) && !(creds[field.key] || "").trim()
+  );
+
   const handleConnect = async () => {
+    if (isSaved || status === "connecting" || missingRequiredField) return;
     setStatus("connecting");
     setError(null);
     // Always send every field's key, defaulting unset ones to "" — this
@@ -2655,7 +2678,9 @@ export function ConnectionCredentialForm({
     // "connected" (ConnectionManager::list). Sending `creds` as-is would omit
     // never-typed-into keys entirely, saving `{}` — which the backend (and
     // this form, post-fix) would then read back as NOT connected.
-    const credsToSend = Object.fromEntries(fields.map(f => [f.key, creds[f.key] ?? ""]));
+    const credsToSend = hasN8nModes
+      ? n8nCredentialsForMode(n8nMode, creds)
+      : Object.fromEntries(fields.map(f => [f.key, creds[f.key] ?? ""]));
     try {
       const testRes = await localFetch(`/connections/${integrationId}/test`, {
         method: "POST",
@@ -2675,6 +2700,10 @@ export function ConnectionCredentialForm({
       userDisconnectedRef.current = false; // allow future syncs after reconnect
       setStatus("idle");
       setIsSaved(true);
+      if (hasN8nModes) {
+        setCreds(visibleConnectionCredentials(fields, credsToSend));
+        setVisible({});
+      }
       notifyConnectionsUpdated();
       posthog.capture("connection_saved", { integration: integrationId });
       onSaved?.();
@@ -2691,6 +2720,8 @@ export function ConnectionCredentialForm({
       sessionStorage.setItem(sessionKey, "1");
       userDisconnectedRef.current = true; // block any async re-sync of saved creds
       setCreds({});
+      setN8nMode("api");
+      setVisible({});
       setIsSaved(false);
       setStatus("idle");
       setError(null);
@@ -2701,21 +2732,47 @@ export function ConnectionCredentialForm({
     }
   };
 
-  // "connect" unlocks once every non-optional field has a value. A field
-  // marked "(optional)" — e.g. OpenCode's config directory — is allowed to
-  // stay blank forever; the button must not sit permanently disabled just
-  // because the user accepted the default, or the field's own "optional"
-  // label would be a lie.
-  const missingRequiredField = fields.some(
-    (f) => !isOptionalField(f) && !(creds[f.key] || "").trim()
-  );
-
   return (
     <div className="space-y-3">
-      {fields.map((field) => (
+      {hasN8nModes && (
+        <div className="space-y-2">
+          <div role="group" aria-label="n8n connection mode" className="flex gap-1">
+            {(["api", "webhook"] as const).map(mode => (
+              <Button
+                key={mode}
+                type="button"
+                variant={n8nMode === mode ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 text-xs normal-case font-sans tracking-normal"
+                aria-pressed={n8nMode === mode}
+                disabled={isSaved || status === "connecting"}
+                onClick={() => {
+                  if (mode === n8nMode) return;
+                  setN8nMode(mode);
+                  setCreds({});
+                  setVisible({});
+                  setStatus("idle");
+                  setError(null);
+                }}
+              >
+                {mode === "api" ? "API" : "Webhook"}
+              </Button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {n8nMode === "api"
+              ? "Create and manage workflows. Connecting checks API access without running a workflow."
+              : "Trigger an existing workflow. Connecting sends a test event to the webhook."}
+          </p>
+          {isSaved && <p className="text-xs text-muted-foreground">Disconnect to change connection mode or credentials.</p>}
+        </div>
+      )}
+      {formFields.map((field) => (
         <div key={field.key} className="space-y-1">
           <div className="flex items-center gap-1">
-            <Label className="text-xs">{field.label}</Label>
+            <Label htmlFor={`${fieldId}-${field.key}`} className="text-xs">
+              {hasN8nModes ? field.label.replace(/\s*\(optional\b[^)]*\)/i, "") : field.label}
+            </Label>
             {field.help_url && (
               <TooltipProvider delayDuration={0}>
                 <Tooltip>
@@ -2736,6 +2793,7 @@ export function ConnectionCredentialForm({
           </div>
           <div className="relative">
             <Input
+              id={`${fieldId}-${field.key}`}
               type={field.secret && !visible[field.key] ? "password" : "text"}
               placeholder={isSaved && field.secret ? ui("Stored securely") : field.placeholder}
               value={creds[field.key] || ""}

@@ -13,6 +13,51 @@ Use the source-build instructions in [`CONTRIBUTING.md`](../../CONTRIBUTING.md):
 Run the Tauri commands from this directory, not the repository root. Product
 usage documentation is available at [docs.screenpi.pe](https://docs.screenpi.pe/getting-started).
 
+## n8n connection
+
+Settings → Connections → n8n supports two modes:
+
+- **API**: enter your instance URL and an API key from n8n Settings → n8n API.
+  Screenpipe stores the key and injects `X-N8N-API-KEY` server-side. Connecting
+  makes a read-only request to list one workflow; it does not create or run one.
+  Instance URLs may include a deployment subpath, a trailing slash, or `/api/v1`.
+- **Webhook**: enter the secret URL of an existing workflow. Connecting sends
+  the existing Screenpipe test event, which can trigger that workflow. Existing
+  webhook-only connections keep working.
+
+For scoped n8n keys, the connection check needs `workflow:list`; creating drafts
+also needs `workflow:create`. Reading, updating and inspecting executions require
+their corresponding scopes. A successful connection check verifies read access,
+not write permission. See [n8n API authentication](https://docs.n8n.io/connect/n8n-api/authentication/).
+
+API connections expose `/connections/n8n/proxy/<api-path>`, relative to n8n's
+`/api/v1`. Agents receive instructions for listing, creating and updating
+workflows and reading execution results. For example, this creates an
+unpublished draft using a node type already available in n8n:
+
+```sh
+curl --fail-with-body \
+  -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/connections/n8n/proxy/workflows" \
+  --data '{"name":"Screenpipe draft","nodes":[{"id":"start","name":"Start","type":"n8n-nodes-base.manualTrigger","typeVersion":1,"position":[0,0],"parameters":{}}],"connections":{},"settings":{"executionOrder":"v1"}}'
+```
+
+The response is the n8n workflow object, including its `id`. Do not include
+read-only fields such as `id`, `active` or `activeVersionId` in the create body.
+For named connections, append `?instance=<name>` to the local proxy URL.
+
+The exact `/connections/n8n/proxy` route remains the send-only webhook trigger;
+its acknowledgement does not verify task completion. Creating a workflow does
+not run it. Production webhook execution requires a published workflow; n8n's
+test URL works only while listening for a test event. There is no assumed
+generic public `/run` endpoint. MCP is not required for these operations.
+
+This extends the connection and agent API access. Automatic translation of
+arbitrary recordings into valid workflow graphs is a separate feature. Native
+source changes require rebuilding the desktop application before they appear
+in an installed AppImage.
+
 ## Workflows integration preview
 
 The workspace menu in `/home` switches between Chat and Workflows. In the
