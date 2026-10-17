@@ -3,8 +3,10 @@
 
 // Scripted Detected Task for the Automation Flows demo (SPEC "Demo data",
 // D8, D10). Evidence is key frames of the team's recording of 2026-10-17
-// (starts 04:05:16 local, 02:05:16Z). Images use negative frame IDs: they are
-// embedded pixels, never recorder frames (see workflows-ui `screenshots.ts`).
+// (starts 04:05:16 local, 02:05:16Z). Embedded images use negative frame IDs:
+// they are pixels, never recorder frames (see workflows-ui `screenshots.ts`).
+// A capture found in this machine's recordings (`recorded-evidence.ts`) uses
+// its recorder frame instead, so the Task Page loads it live.
 import type { WorkflowMap, WorkflowStage, WorkflowTimingRun } from "../../../packages/workflows-ui/src/model";
 
 export const DEMO_TASK_ID = "wf-novadesk-support-tickets";
@@ -17,6 +19,14 @@ export const CLARIFICATION_QUESTIONS = [
 ];
 
 type Capture = { image: string; at: string; app: "Gmail" | "Jira"; quote: string };
+/** Where the quote shows on screen: the window title (an opened email) or the frame text. */
+export type EvidenceCapture = Capture & { quoteIn: "window" | "text" };
+/** A recorder frame: its ID and its exact recorder timestamp. */
+export type RecordedFrame = { frameId: number; timestamp: string };
+
+/** SPEC "Demo data": the three repetitions were recorded on 2026-10-17 between 04:00 and 04:20 local time. */
+export const DEMO_RECORDING = { start: "2026-10-17T04:00:00+02:00", end: "2026-10-17T04:20:00+02:00" };
+
 type Repetition = {
   name: string;
   description: string;
@@ -65,7 +75,10 @@ const REPETITIONS: Repetition[] = [
   },
 ];
 
-export const EVIDENCE_IMAGES = REPETITIONS.flatMap(r => [r.email.image, r.form.image, r.ticket.image]);
+export const EVIDENCE_CAPTURES: EvidenceCapture[] = REPETITIONS.flatMap(r => [
+  { ...r.email, quoteIn: "window" as const }, { ...r.form, quoteIn: "text" as const }, { ...r.ticket, quoteIn: "text" as const },
+]);
+export const EVIDENCE_IMAGES = EVIDENCE_CAPTURES.map(capture => capture.image);
 
 const minutes = (run: WorkflowTimingRun) =>
   (Date.parse(run.end.timestamp) - Date.parse(run.start.timestamp)) / 60_000;
@@ -82,14 +95,21 @@ function timingOf(runs: WorkflowTimingRun[]) {
   };
 }
 
-/** `dataUrl(name)` returns the embedded image for `evidence/<name>.webp`. */
-export function buildDetectedTask(dataUrl: (image: string) => string, now: string): WorkflowMap {
-  let frameId = 0;
+/** `dataUrl(name)` returns the embedded image for `evidence/<name>.webp`.
+ * `recorded[name]` replaces that image, and its time, with a recorder frame. */
+export function buildDetectedTask(dataUrl: (image: string) => string, now: string,
+  recorded: Partial<Record<string, RecordedFrame>> = {}): WorkflowMap {
+  let embeddedId = 0;
   const stages: WorkflowStage[] = REPETITIONS.map(repetition => {
-    const captures = [repetition.email, repetition.form, repetition.ticket];
+    const captures = [repetition.email, repetition.form, repetition.ticket].map(capture => {
+      const frame = recorded[capture.image];
+      const embedded = --embeddedId;
+      return { ...capture, at: frame?.timestamp ?? capture.at, frame, embedded };
+    });
+    const [email, form, ticket] = captures;
     const run: WorkflowTimingRun = {
-      start: { timestamp: repetition.email.at, app: repetition.email.app, quote: repetition.email.quote },
-      end: { timestamp: repetition.ticket.at, app: repetition.ticket.app, quote: repetition.ticket.quote },
+      start: { timestamp: email.at, app: email.app, quote: email.quote },
+      end: { timestamp: ticket.at, app: ticket.app, quote: ticket.quote },
       summary: repetition.description,
     };
     return {
@@ -103,18 +123,19 @@ export function buildDetectedTask(dataUrl: (image: string) => string, now: strin
       observedDays: 1,
       timing: timingOf([run]),
       evidence: captures.map(capture => ({ timestamp: capture.at, app: capture.app, detail: capture.quote, source: "screen" })),
+      // A recorder frame has the shape the engine attaches (`workflow_catalog.rs`): no pixels.
       screenshots: captures.map(capture => ({
-        frameId: --frameId,
+        frameId: capture.frame?.frameId ?? capture.embedded,
         timestamp: capture.at,
         app: capture.app,
         matchDistanceSeconds: 0,
         visualVerified: true,
-        dataUrl: dataUrl(capture.image),
+        dataUrl: capture.frame ? "" : dataUrl(capture.image),
       })),
       procedure: [
-        { kind: "input", text: repetition.procedure.email, quote: repetition.email.quote, timestamp: repetition.email.at, app: repetition.email.app },
-        { kind: "action", text: repetition.procedure.form, quote: repetition.form.quote, timestamp: repetition.form.at, app: repetition.form.app },
-        { kind: "output", text: repetition.procedure.ticket, quote: repetition.ticket.quote, timestamp: repetition.ticket.at, app: repetition.ticket.app },
+        { kind: "input", text: repetition.procedure.email, quote: email.quote, timestamp: email.at, app: email.app },
+        { kind: "action", text: repetition.procedure.form, quote: form.quote, timestamp: form.at, app: form.app },
+        { kind: "output", text: repetition.procedure.ticket, quote: ticket.quote, timestamp: ticket.at, app: ticket.app },
       ],
     };
   });
@@ -154,7 +175,7 @@ export function buildDetectedTask(dataUrl: (image: string) => string, now: strin
       distinctDays: 1,
       stageEvidenceCoverage: 100,
       repeatedStageCoverage: 100,
-      screenshotCount: -frameId,
+      screenshotCount: -embeddedId,
       stageScreenshotCoverage: 100,
       reasons: ["Trois répétitions observées le 17 octobre 2026"],
     },

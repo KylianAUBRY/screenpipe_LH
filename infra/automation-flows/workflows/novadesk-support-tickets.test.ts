@@ -21,6 +21,9 @@ type N8nNode = {
   parameters: Record<string, any>;
   notes?: string;
   onError?: string;
+  retryOnFail?: boolean;
+  maxTries?: number;
+  waitBetweenTries?: number;
   credentials?: Record<string, { id: string; name: string }>;
 };
 
@@ -32,6 +35,7 @@ const workflow = JSON.parse(raw) as {
   nodes: N8nNode[];
   connections: Record<string, Record<string, { node: string; type: string; index: number }[][]>>;
   settings: Record<string, unknown>;
+  staticData?: Record<string, Record<string, unknown>>;
   tags: { name: string }[];
 };
 
@@ -67,6 +71,18 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(trigger.credentials?.imap.id).toBe("spNovaImap000001");
   });
 
+  test("every activation catches up the unread emails, even one that arrived just before or during a pause", () => {
+    // n8n's IMAP trigger (v2) fetches on a new arrival only, unless it has a
+    // last processed UID in its static data: then each activation catches up
+    // every UNSEEN email from that UID. Seeding it makes a freshly created
+    // Flow behave the same; the trigger marks emails read, so each is
+    // processed once.
+    const trigger = onlyNode("n8n-nodes-base.emailReadImap");
+    expect(trigger.typeVersion).toBe(2.2);
+    const seed = workflow.staticData?.[`node:${trigger.name}`];
+    expect(seed?.lastMessageUid).toBe(1);
+  });
+
   test("one AI Agent judges each email, through ScreenPipe's local AI proxy, into a fixed answer shape", () => {
     const trigger = onlyNode("n8n-nodes-base.emailReadImap");
     const agent = onlyNode("@n8n/n8n-nodes-langchain.agent");
@@ -83,6 +99,14 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     // The proxy only speaks /v1/chat/completions and has no /v1/models.
     expect(model.parameters.responsesApiEnabled).toBe(false);
     expect(model.parameters.model).toMatchObject({ mode: "id", value: "auto" });
+    // About 1 call in 10 to ScreenPipe's AI proxy never answers (measured
+    // 2026-10-17; normal calls take 1-6 s). The client's timeout covers its own
+    // retries, so a hung call fails the step: give up after 20 s and let n8n
+    // run the whole AI step again.
+    expect(model.parameters.options.timeout).toBeLessThanOrEqual(20_000);
+    expect(agent.retryOnFail).toBe(true);
+    expect(agent.maxTries).toBeGreaterThanOrEqual(3);
+    expect(agent.waitBetweenTries).toBeLessThanOrEqual(2_000);
 
     const parser = onlyNode("@n8n/n8n-nodes-langchain.outputParserStructured");
     expect(subNodeOf(parser.name, "ai_outputParser")).toBe(agent.name);
@@ -225,10 +249,80 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(issue.fields.summary).toBe("NovaCRM - Export CSV des contacts filtrés vide");
     expect(issue.fields.priority).toEqual({ name: "Highest" });
     expect(issue.fields.labels).toEqual(["back"]);
-    expect(issue.fields.description).toContain(EMAIL.from);
-    expect(issue.fields.description).toContain(EMAIL.subject);
-    expect(issue.fields.description).toContain(`{quote}\n${EMAIL.textPlain}\n{quote}`);
+    const quoted = plainTextBlock(issue.fields.description);
+    expect(quoted).toContain(EMAIL.from);
+    expect(quoted).toContain(EMAIL.subject);
+    expect(quoted.endsWith(`\n\n${EMAIL.textPlain}`)).toBe(true);
     expect(issue.fields).not.toHaveProperty("assignee");
+  });
+
+  test("an email cannot add Jira markup: all of it stays in one {noformat} block it cannot close", () => {
+    const closers = [
+      "{noformat}",
+      "{NOFORMAT}",
+      "{noformat:title=Résolu}",
+      "{ noformat }",
+      "{no{noformat}format}",
+      "{{{noformat}noformat}noformat}",
+      "{{noformat}",
+    ];
+    for (const closer of closers) {
+      const injected = `${closer}\n[Cliquez ici|https://evil.example/login] !https://evil.example/pixel.png! [~accountid:123]\n{quote}`;
+      const description = String(
+        jiraRequestFor(aiAnswer(), {
+          ...EMAIL,
+          from: `Pirate ${closer} <pirate@example.com>`,
+          subject: `Urgent ${closer} [lien|https://evil.example]`,
+          textPlain: `Bonjour\n${injected}\nfin`,
+        }).fields.description,
+      );
+      // The node opens and closes the block; nothing from the email can.
+      expect(description.match(/\{\s*noformat/gi), closer).toHaveLength(2);
+      const quoted = plainTextBlock(description);
+      for (const fragment of ["Pirate", "Urgent", "[lien|https://evil.example]", "[Cliquez ici|https://evil.example/login]", "fin"]) {
+        expect(quoted, `${closer}: ${fragment}`).toContain(fragment);
+      }
+      const outside = description.replace(quoted, "");
+      expect(outside, closer).not.toMatch(/evil|Pirate|Urgent/);
+    }
+  });
+
+  test("an HTML-only email is quoted as its text, without tags, styles or scripts", () => {
+    const description = String(
+      jiraRequestFor(aiAnswer(), {
+        ...EMAIL,
+        textPlain: "",
+        textHtml:
+          "<html><head><style>p { color: red }</style></head><body><p>Bonjour&nbsp;l&#39;équipe,</p>" +
+          "<p>L'export &amp; l'import <b>plantent</b>.<br>Merci</p><script>alert('x')</script>" +
+          "<p>&lt;noformat&gt; &#123;noformat&#125;</p></body></html>",
+      }).fields.description,
+    );
+    const quoted = plainTextBlock(description);
+    expect(quoted).toContain("Bonjour l'équipe,");
+    expect(quoted).toContain("L'export & l'import plantent.\nMerci");
+    expect(quoted).not.toMatch(/<\/?(p|b|br|html|body|head|style|script)\b/i);
+    expect(quoted).not.toContain("color: red");
+    expect(quoted).not.toContain("alert");
+    // Decoded entities cannot rebuild the block's closing tag either.
+    expect(description.match(/\{\s*noformat/gi)).toHaveLength(2);
+  });
+
+  test("a huge email is cut so Jira never refuses the description", () => {
+    for (const email of [
+      { ...EMAIL, textPlain: "Le rapport complet : ".concat("x".repeat(60_000)) },
+      { ...EMAIL, subject: "S".repeat(40_000), textPlain: "court" },
+      { ...EMAIL, textPlain: "{".repeat(30_000) + "noformat}" },
+    ]) {
+      const description = String(jiraRequestFor(aiAnswer(), email).fields.description);
+      expect(description.length).toBeLessThanOrEqual(DESCRIPTION_MAX);
+      expect(description.endsWith("\n{noformat}")).toBe(true);
+      expect(description.match(/\{\s*noformat/gi)).toHaveLength(2);
+    }
+    const cut = String(
+      jiraRequestFor(aiAnswer(), { ...EMAIL, textPlain: "y".repeat(60_000) }).fields.description,
+    );
+    expect(plainTextBlock(cut)).toContain("[…] email tronqué");
   });
 
   test("an improvement idea becomes a Tâche with the AI's priority and label", () => {
@@ -269,11 +363,12 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     }
   });
 
-  test("is an Automation Flow: fixed id, switched off, tagged, visible to n8n MCP", () => {
+  test("is an Automation Flow: fixed id, switched off, tagged, not offered to n8n MCP", () => {
     expect(workflow.id).toBe("spNovaFlow000001");
     expect(workflow.active).toBe(false);
     expect(workflow.tags.map((t) => t.name)).toContain("screenpipe-flow");
-    expect(workflow.settings.availableInMCP).toBe(true);
+    // An n8n MCP client could otherwise run it outside the Review Screen.
+    expect(workflow.settings).not.toHaveProperty("availableInMCP");
     expect(workflow.settings.executionOrder).toBe("v1");
     const ids = workflow.nodes.map((n) => n.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -332,10 +427,10 @@ function walk(value: unknown, visit: (key: string, value: unknown) => void) {
  * Follows the graph from the "ticket needed" branch to the Jira request and
  * returns the JSON body n8n would send for this AI answer and EMAIL.
  */
-function jiraRequestFor(answer: ReturnType<typeof aiAnswer>) {
+function jiraRequestFor(answer: ReturnType<typeof aiAnswer>, email: typeof EMAIL = EMAIL) {
   const trigger = onlyNode("n8n-nodes-base.emailReadImap");
   const gate = onlyNode("n8n-nodes-base.if");
-  const nodes = { [trigger.name]: EMAIL };
+  const nodes = { [trigger.name]: email };
 
   let item: any = { output: answer };
   let current = next(gate.name, 0);
@@ -364,10 +459,23 @@ function jiraRequestFor(answer: ReturnType<typeof aiAnswer>) {
   return (typeof body === "string" ? JSON.parse(body) : body) as { fields: Record<string, any> };
 }
 
+/**
+ * What sits between the description's `{noformat}` tags: Jira shows it as
+ * plain text, so none of it is read as markup. Fails unless the description
+ * is exactly one such block after a short line from the node.
+ */
+function plainTextBlock(description: string): string {
+  const match = /^[^{}\n]*\n\{noformat\}\n([\s\S]*)\n\{noformat\}$/.exec(description);
+  expect(match, description.slice(0, 300)).not.toBeNull();
+  return match![1];
+}
+
 // --- Synthetic data (shapes of the IMAP "simple" item and the AI answer) ---
 
-const PRODUCTS = ["NovaCRM", "NovaPay", "NovaDesk", "Autre"];
+const PRODUCTS = ["NovaCRM", "NovaPay", "NovaPlanning", "NovaDesk", "Autre"];
 const SUMMARY_MAX = 80;
+/** Jira Cloud refuses a description over 32 767 characters; the workflow stays well below. */
+const DESCRIPTION_MAX = 20_000;
 
 const EMAIL = {
   from: "Arthur Test <arthur@example.com>",

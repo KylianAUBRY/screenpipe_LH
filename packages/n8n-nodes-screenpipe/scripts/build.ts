@@ -44,7 +44,8 @@ function mountedCustomNodesDir(): string | null {
   try {
     const mounts = JSON.parse(run(["docker", "inspect", container, "--format", "{{json .Mounts}}"], { quiet: true }));
     const mount = mounts.find((m: { Destination: string }) => m.Destination === "/home/node/custom-nodes");
-    return mount?.Source ?? null;
+    // Docker Desktop may report the bind source as seen from its VM.
+    return mount?.Source?.replace(/^\/host_mnt(?=\/)/, "") ?? null;
   } catch {
     return null;
   }

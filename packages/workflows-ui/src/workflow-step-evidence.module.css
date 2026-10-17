@@ -28,6 +28,7 @@
 
 
 .evidence .recording { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border-radius: 4px; color: var(--muted); flex-shrink: 0; }
+.evidence .recording.labelled { width: auto; gap: 6px; padding: 0 8px; font-size: 11px; white-space: nowrap; }
 .evidence .recording:hover { background: var(--soft); color: var(--ink); }
 .evidence .recording:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
 .evidence .recording:disabled { opacity: .5; }

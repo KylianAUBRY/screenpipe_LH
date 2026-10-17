@@ -11,12 +11,12 @@ history (when, what, which version, by whom).
 
 **Blocked by:** 02.
 
-**Status:** done except the last item (pending human, steps below). Branch `hackathon/ticket-04`.
+**Status:** done (live-verified on the demo machine 2026-10-17)
 
 - [x] Flow service tests against a fake n8n: activate records the version and a history entry; deactivate adds a history entry; status derivation covers Draft, Active, Paused, Needs Review and the "edited in n8n" flag; the last execution is mapped.
 - [x] Review Screen buttons call the typed client and refresh; status, last run and history render (frontend tests).
 - [x] No code path activates a Flow without a user click.
-- [ ] Against the local n8n: activating from the app makes the workflow process a new email; deactivating stops it. **Pending human.**
+- [x] Against the local n8n: activating from the app makes the workflow process a new email; deactivating stops it. Clicks on « ACTIVER » / « DÉSACTIVER » in the native app; emails became NOVA-31…35 while active; while off, an email stayed unread with no execution for 2 min (see `.scratch/hackathon/evidence/LIVE-CHECKS.md`).
 
 ## What was built
 

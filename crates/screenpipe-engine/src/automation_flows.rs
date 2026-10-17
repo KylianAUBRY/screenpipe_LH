@@ -19,12 +19,16 @@
 //! imports switched off, from a Detected Task (`POST /from-task`) or from the
 //! chat (`POST /`, the `automation-flows` skill). A chat modification (`PUT /:id`, from the
 //! `automation-flows` skill) switches an active Flow off before updating it
-//! and never switches it on: the Flow then needs review.
+//! and never switches it on: the Flow then needs review. Switching a Flow off
+//! waits for the execution n8n is running ([`RunningWait`]), so the email it
+//! processes is never lost. The chat never wires n8n credentials.
 
 use crate::atomic_file;
+use crate::routes::workflows::{read_catalog, workflow_id as task_id_of, WorkflowCatalogSource};
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Path, Request, State},
+    http::{header, HeaderMap, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -109,20 +113,105 @@ const SETTINGS_KEYS: &[&str] = &[
     "timeSavedMode",
     "timeSavedPerExecution",
     "redactionPolicy",
-    "availableInMCP",
+    // Not `availableInMCP`: an n8n MCP client could then run a Flow outside
+    // the Review Screen.
 ];
+
+/// Header that carries the [`FlowActivationKey`] on `POST /:id/activate`.
+pub const ACTIVATION_HEADER: &str = "x-screenpipe-flow-activation";
+
+/// The credential that lets only the desktop UI activate a Flow.
+///
+/// The chat agent (Pi), pipes and MCP clients call the local API with the same
+/// API key as the app, so that key cannot tell a user's click from an agent.
+/// This one is random per app process, held in its memory (engine and Tauri
+/// side) and handed to the webview only through a Tauri command. It is never
+/// put in an environment variable (child processes such as Pi inherit them),
+/// a file or a log, and is never the local API key. A server started without
+/// one (the CLI, no Review Screen) refuses every activation.
+#[derive(Clone)]
+pub struct FlowActivationKey(Arc<str>);
+
+impl FlowActivationKey {
+    /// A fresh key from the OS random generator (two v4 UUIDs, 244 bits).
+    pub fn generate() -> Self {
+        let key = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        Self(key.into())
+    }
+
+    /// The key itself, for the Tauri command that hands it to the webview.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// Constant-time comparison: a caller cannot find the key byte by byte.
+    fn matches(&self, candidate: &[u8]) -> bool {
+        let key = self.0.as_bytes();
+        key.len() == candidate.len()
+            && key
+                .iter()
+                .zip(candidate)
+                .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+                == 0
+    }
+}
+
+impl std::fmt::Debug for FlowActivationKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FlowActivationKey(<redacted>)")
+    }
+}
+
+/// How long switching a Flow off waits for the execution n8n is running.
+///
+/// n8n's IMAP trigger marks an email read before its execution starts, and
+/// an execution still running when its workflow is unpublished never
+/// finishes: the email would be lost (rehearsal 3). So the Flow service
+/// polls n8n every `interval` and unpublishes once nothing runs, or changes
+/// nothing after `deadline` (`409 flow_running`). The demo's AI step takes
+/// 10 to 25 s.
+#[derive(Debug, Clone, Copy)]
+pub struct RunningWait {
+    pub interval: Duration,
+    pub deadline: Duration,
+}
+
+impl Default for RunningWait {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_secs(1),
+            deadline: Duration::from_secs(90),
+        }
+    }
+}
 
 #[derive(Clone)]
 struct FlowsState {
     screenpipe_dir: PathBuf,
     secret_store: Option<Arc<SecretStore>>,
+    /// `None` without the desktop UI: activation is then always refused.
+    activation_key: Option<FlowActivationKey>,
+    /// The Detected Task catalog (`/workflows/catalog`), read for the moment
+    /// a task was first seen.
+    workflow_catalog: WorkflowCatalogSource,
+    running_wait: RunningWait,
     http: reqwest::Client,
     /// Serializes store writes and imports so a double click on "create"
     /// cannot import the same task twice.
     write_lock: Arc<Mutex<()>>,
 }
 
-pub fn router<S>(screenpipe_dir: PathBuf, secret_store: Option<Arc<SecretStore>>) -> Router<S>
+pub fn router<S>(
+    screenpipe_dir: PathBuf,
+    secret_store: Option<Arc<SecretStore>>,
+    activation_key: Option<FlowActivationKey>,
+    workflow_catalog_dir: Option<PathBuf>,
+    running_wait: RunningWait,
+) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -134,6 +223,9 @@ where
     let state = FlowsState {
         screenpipe_dir,
         secret_store,
+        activation_key,
+        workflow_catalog: WorkflowCatalogSource(workflow_catalog_dir),
+        running_wait,
         http,
         write_lock: Arc::new(Mutex::new(())),
     };
@@ -144,7 +236,25 @@ where
         .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
         .route("/:id/deactivate", post(deactivate_flow))
+        .layer(middleware::from_fn(require_json))
         .with_state(state)
+}
+
+/// Every state-changing route takes only JSON. A web page cannot send that
+/// type cross-site without a CORS preflight, which the engine refuses for
+/// non-local origins, so it cannot switch a Flow off or change one.
+async fn require_json(request: Request, next: Next) -> Response {
+    let json = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|essence| essence.trim().eq_ignore_ascii_case("application/json"));
+    if request.method().is_safe() || json {
+        next.run(request).await
+    } else {
+        FlowError::JsonRequired.into_response()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +286,9 @@ struct Flow {
     last_execution: Option<LastExecution>,
     n8n_url: String,
     source_task_id: Option<String>,
+    /// Where the source Detected Task was first seen, for « Voir dans la
+    /// timeline »; `None` for a Flow created from the chat.
+    source_moment: Option<SourceMoment>,
     summary: String,
     nodes: Vec<FlowNode>,
     edges: Vec<FlowEdge>,
@@ -193,6 +306,18 @@ struct FlowNode {
     node_type: String,
     position: [f64; 2],
     sentence: Option<String>,
+    /// What the AI did not write, read from the node itself: the n8n
+    /// credentials it uses and, for an HTTP Request, its method and host.
+    facts: Vec<String>,
+}
+
+/// A captured moment: its recorder frame when it has one (embedded evidence
+/// pixels and plain evidence entries have none), and its time.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceMoment {
+    frame_id: Option<i64>,
+    timestamp: String,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -201,10 +326,10 @@ struct FlowEdge {
     to: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ActivateRequest {
-    /// The n8n version the user reviewed on the Review Screen.
+    /// The n8n version the user reviewed on the Review Screen (required).
     #[serde(default)]
     version_id: Option<String>,
 }
@@ -242,17 +367,31 @@ struct FromTaskRequest {
 #[derive(Debug)]
 enum FlowError {
     NotConfigured,
+    /// n8n answered but refused the API key of the n8n connection (401/403).
+    Unauthorized(String),
+    /// No answer from n8n: connection refused, DNS, timeout.
     Unreachable(String),
+    /// n8n answered with any other non-2xx; the detail carries its message.
+    N8nFailed(String),
     TaskNotFound,
     FlowNotFound,
     /// The n8n workflow is no longer the version the user reviewed.
     VersionChanged,
+    /// n8n still runs an execution of the Flow at the end of the wait
+    /// ([`RunningWait`]): switching it off now would lose what it processes.
+    FlowRunning,
     /// n8n answered but refused to switch the workflow on or off.
     ActivationFailed(String),
     /// A chat modification the Review Screen could not explain, or that n8n
     /// rejected; the detail says what to fix.
     InvalidWorkflow(String),
     Internal(String),
+    /// Activation without the UI credential: not the user's click.
+    ActivationRequiresUser,
+    /// Activation without the `versionId` the user reviewed.
+    VersionRequired,
+    /// A state-changing request that is not `Content-Type: application/json`.
+    JsonRequired,
 }
 
 impl IntoResponse for FlowError {
@@ -262,15 +401,30 @@ impl IntoResponse for FlowError {
                 StatusCode::PRECONDITION_FAILED,
                 json!({"error": "n8n_not_configured"}),
             ),
+            FlowError::Unauthorized(detail) => (
+                StatusCode::PRECONDITION_FAILED,
+                json!({"error": "n8n_unauthorized", "detail": detail}),
+            ),
             FlowError::Unreachable(detail) => (
                 StatusCode::BAD_GATEWAY,
                 json!({"error": "n8n_unreachable", "detail": detail}),
+            ),
+            FlowError::N8nFailed(detail) => (
+                StatusCode::BAD_GATEWAY,
+                json!({"error": "n8n_failed", "detail": detail}),
             ),
             FlowError::TaskNotFound => (StatusCode::NOT_FOUND, json!({"error": "task_not_found"})),
             FlowError::FlowNotFound => (StatusCode::NOT_FOUND, json!({"error": "flow_not_found"})),
             FlowError::VersionChanged => {
                 (StatusCode::CONFLICT, json!({"error": "version_changed"}))
             }
+            FlowError::FlowRunning => (
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "flow_running",
+                    "detail": "n8n is still running this Flow (an email is being processed); nothing was changed. Wait a moment, then try again once.",
+                }),
+            ),
             FlowError::ActivationFailed(detail) => (
                 StatusCode::BAD_GATEWAY,
                 json!({"error": "activation_failed", "detail": detail}),
@@ -278,6 +432,27 @@ impl IntoResponse for FlowError {
             FlowError::InvalidWorkflow(detail) => (
                 StatusCode::BAD_REQUEST,
                 json!({"error": "invalid_workflow", "detail": detail}),
+            ),
+            FlowError::ActivationRequiresUser => (
+                StatusCode::FORBIDDEN,
+                json!({
+                    "error": "activation_requires_user",
+                    "detail": "Only the user can activate a Flow, with the Activer button on its Review Screen in ScreenPipe.",
+                }),
+            ),
+            FlowError::VersionRequired => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "version_required",
+                    "detail": "send the `versionId` of the Flow the user reviewed",
+                }),
+            ),
+            FlowError::JsonRequired => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                json!({
+                    "error": "json_required",
+                    "detail": "send `Content-Type: application/json`",
+                }),
             ),
             FlowError::Internal(detail) => {
                 tracing::error!("automation flows: {detail}");
@@ -336,6 +511,11 @@ impl N8nApi {
         })?;
         let status = response.status().as_u16();
         let value = response.json::<Value>().await.unwrap_or(Value::Null);
+        // A refused key fails every call the same way: report it as a setup
+        // problem of the n8n connection, not as n8n being down.
+        if matches!(status, 401 | 403) {
+            return Err(FlowError::Unauthorized(n8n_answer(status, &value)));
+        }
         Ok((status, value))
     }
 
@@ -352,6 +532,27 @@ impl N8nApi {
         } else {
             Err(upstream_error(status, &value))
         }
+    }
+
+    /// Every item of an n8n list endpoint, following its `nextCursor` (n8n
+    /// answers at most 250 per page).
+    async fn all_pages(&self, path: &str, query: &[(&str, &str)]) -> Result<Vec<Value>, FlowError> {
+        let mut items = Vec::new();
+        let mut cursor: Option<String> = None;
+        // Bounds a cursor that never ends: 40 pages of 250.
+        for _ in 0..40 {
+            let mut params = query.to_vec();
+            if let Some(cursor) = cursor.as_deref() {
+                params.push(("cursor", cursor));
+            }
+            let page = self.expect_ok(Method::GET, path, &params, None).await?;
+            items.extend(page["data"].as_array().into_iter().flatten().cloned());
+            match page["nextCursor"].as_str().filter(|next| !next.is_empty()) {
+                Some(next) if cursor.as_deref() != Some(next) => cursor = Some(next.to_string()),
+                _ => break,
+            }
+        }
+        Ok(items)
     }
 
     /// The workflow, or `None` when n8n does not have it (deleted or archived).
@@ -378,7 +579,7 @@ impl N8nApi {
             200..=299 => value["id"]
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| FlowError::Unreachable("n8n returned a tag without id".into())),
+                .ok_or_else(|| FlowError::N8nFailed("n8n returned a tag without id".into())),
             // Created concurrently by someone else: read it back.
             409 => self
                 .find_tag()
@@ -389,14 +590,11 @@ impl N8nApi {
     }
 
     async fn find_tag(&self) -> Result<Option<String>, FlowError> {
-        let tags = self
-            .expect_ok(Method::GET, "/tags", &[("limit", "250")], None)
-            .await?;
-        Ok(tags["data"].as_array().and_then(|tags| {
-            tags.iter()
-                .find(|tag| tag["name"] == FLOW_TAG)
-                .and_then(|tag| tag["id"].as_str().map(str::to_string))
-        }))
+        let tags = self.all_pages("/tags", &[("limit", "250")]).await?;
+        Ok(tags
+            .iter()
+            .find(|tag| tag["name"] == FLOW_TAG)
+            .and_then(|tag| tag["id"].as_str().map(str::to_string)))
     }
 
     /// Adds [`FLOW_TAG`] to the workflow's tags and returns it re-read.
@@ -476,13 +674,55 @@ impl N8nApi {
         }
     }
 
+    /// Whether n8n is running an execution of the workflow right now.
+    async fn is_running(&self, workflow_id: &str) -> Result<bool, FlowError> {
+        let page = self
+            .expect_ok(
+                Method::GET,
+                "/executions",
+                &[
+                    ("workflowId", workflow_id),
+                    ("status", "running"),
+                    ("limit", "1"),
+                ],
+                None,
+            )
+            .await?;
+        Ok(page["data"].as_array().is_some_and(|data| !data.is_empty()))
+    }
+
+    /// Switches a workflow off once n8n runs no execution of it, so the one
+    /// in progress finishes (see [`RunningWait`]). Still running at the
+    /// deadline: nothing changes, [`FlowError::FlowRunning`] — unless the
+    /// user clicked « Désactiver » (`user_stop`): their explicit stop wins
+    /// over an execution that may never end (a hung AI call, a crash).
+    async fn unpublish(
+        &self,
+        workflow_id: &str,
+        wait: RunningWait,
+        user_stop: bool,
+    ) -> Result<Value, FlowError> {
+        let started = tokio::time::Instant::now();
+        while self.is_running(workflow_id).await? {
+            if started.elapsed() >= wait.deadline {
+                if user_stop {
+                    break;
+                }
+                return Err(FlowError::FlowRunning);
+            }
+            tokio::time::sleep(wait.interval).await;
+        }
+        self.switch(workflow_id, "unpublish", None).await
+    }
+
     fn editor_url(&self, workflow_id: &str) -> String {
         format!("{}/workflow/{workflow_id}", self.base)
     }
 }
 
+/// n8n answered, but not with success: not a reachability problem.
 fn upstream_error(status: u16, body: &Value) -> FlowError {
-    FlowError::Unreachable(n8n_answer(status, body))
+    FlowError::N8nFailed(n8n_answer(status, body))
 }
 
 /// "n8n answered 400: <n8n's message>", for the user.
@@ -497,7 +737,7 @@ fn workflow_id(workflow: &Value) -> Result<String, FlowError> {
     workflow["id"]
         .as_str()
         .map(str::to_string)
-        .ok_or_else(|| FlowError::Unreachable("n8n returned a workflow without id".into()))
+        .ok_or_else(|| FlowError::N8nFailed("n8n returned a workflow without id".into()))
 }
 
 fn has_flow_tag(workflow: &Value) -> bool {
@@ -542,6 +782,32 @@ fn importable(workflow: &Value) -> Value {
         Value::Object(pick(&workflow["settings"], SETTINGS_KEYS)),
     );
     Value::Object(body)
+}
+
+/// The chat never wires n8n credentials: the user picks them in n8n. Each
+/// node of `body` keeps only the credentials that `current` (the workflow n8n
+/// holds now) gives the node of the same name and type; a new or retyped node,
+/// or any node of a new workflow (`None`), gets none. Never from the request.
+fn keep_user_credentials(body: &mut Value, current: Option<&Value>) {
+    let current_nodes = current
+        .and_then(|workflow| workflow["nodes"].as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for node in body["nodes"].as_array_mut().into_iter().flatten() {
+        let kept = current_nodes
+            .iter()
+            .find(|old| old["name"] == node["name"] && old["type"] == node["type"])
+            .and_then(|old| old.get("credentials"))
+            .filter(|credentials| !credentials.is_null())
+            .cloned();
+        let Some(fields) = node.as_object_mut() else {
+            continue;
+        };
+        match kept {
+            Some(credentials) => fields.insert("credentials".into(), credentials),
+            None => fields.remove("credentials"),
+        };
+    }
 }
 
 /// Why a chat modification cannot be applied as is, if it cannot: it needs
@@ -620,7 +886,8 @@ struct ActivationEvent {
 
 impl FlowRecord {
     /// Appends an event to the activation history; `by` is "user" for the
-    /// Review Screen's buttons, "chat" for a chat modification.
+    /// Review Screen's buttons, "chat" for a chat modification, "api" for a
+    /// deactivation by any other local caller.
     fn log(&mut self, event: &str, version_id: String, by: &str) {
         self.activation_log.push(ActivationEvent {
             at: chrono::Utc::now().to_rfc3339(),
@@ -712,6 +979,7 @@ fn review_graph(workflow: &Value) -> (Vec<FlowNode>, Vec<FlowEdge>) {
                     .map(str::trim)
                     .filter(|notes| !notes.is_empty())
                     .map(str::to_string),
+                facts: node_facts(node),
                 name,
             })
         })
@@ -750,6 +1018,49 @@ fn review_graph(workflow: &Value) -> (Vec<FlowNode>, Vec<FlowEdge>) {
     (nodes, edges)
 }
 
+const HTTP_REQUEST: &str = "n8n-nodes-base.httpRequest";
+
+/// The Review Screen's fixed facts of a node, shown under its AI-written
+/// sentence: each n8n credential it uses (by its name in n8n), and for an
+/// HTTP Request where it goes (method and host, never the path or query).
+fn node_facts(node: &Value) -> Vec<String> {
+    let mut facts: Vec<String> = node["credentials"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(kind, credential)| {
+            let name = credential["name"]
+                .as_str()
+                .or(credential["id"].as_str())
+                .unwrap_or(kind);
+            format!("Identifiant n8n : {name}")
+        })
+        .collect();
+    if node["type"] == HTTP_REQUEST {
+        let parameters = &node["parameters"];
+        // n8n's default method when the parameter is absent.
+        let method = parameters["method"].as_str().unwrap_or("GET");
+        facts.push(match parameters["url"].as_str().and_then(url_host) {
+            Some(host) => format!("{method} {host}"),
+            None => format!("{method} (adresse calculée à l'exécution)"),
+        });
+    }
+    facts
+}
+
+/// The host of a fixed URL; `None` for an n8n expression that builds it.
+fn url_host(url: &str) -> Option<String> {
+    let url = url.strip_prefix('=').unwrap_or(url).trim();
+    let parsed = reqwest::Url::parse(url).ok()?;
+    // `https://{{ … }}@host/` parses with the expression as userinfo, but at
+    // run time the expression can rewrite the real host: no fact then.
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
+    let host = parsed.host_str()?.to_string();
+    (!host.contains('{') && !host.contains('$')).then_some(host)
+}
+
 /// The version n8n runs (its published one), for the activation history.
 fn running_version(workflow: &Value) -> String {
     workflow["activeVersionId"]
@@ -772,7 +1083,49 @@ fn flow_summary(
     }
 }
 
-async fn build_flow(api: &N8nApi, workflow: &Value, record: Option<&FlowRecord>) -> Flow {
+/// The first moment the Detected Task `task_id` was seen, from the catalog:
+/// the earliest of its evidence entries and recorder frames (a recorder frame
+/// wins a tie, so the timeline opens on it). `None` when the catalog cannot
+/// be read or no longer holds the task.
+async fn source_moment(state: &FlowsState, task_id: &str) -> Option<SourceMoment> {
+    let catalog = read_catalog(&state.workflow_catalog).await.ok()?;
+    let task = catalog["analysis"]["workflows"]
+        .as_array()?
+        .iter()
+        .find(|task| task_id_of(task) == task_id)?;
+    let stages = task["stages"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let frames = stages
+        .iter()
+        .flat_map(screenpipe_core::workflows::stage_screenshots);
+    let evidence = task["evidence"].as_array().into_iter().flatten().chain(
+        stages
+            .iter()
+            .flat_map(|stage| stage["evidence"].as_array().into_iter().flatten()),
+    );
+    frames
+        .chain(evidence)
+        .filter_map(|moment| {
+            let timestamp = moment["timestamp"].as_str()?;
+            let at = chrono::DateTime::parse_from_rfc3339(timestamp).ok()?;
+            let frame_id = moment["frameId"].as_i64().filter(|id| *id > 0);
+            Some((at, frame_id, timestamp))
+        })
+        .min_by_key(|(at, frame_id, _)| (*at, frame_id.is_none()))
+        .map(|(_, frame_id, timestamp)| SourceMoment {
+            frame_id,
+            timestamp: timestamp.to_string(),
+        })
+}
+
+async fn build_flow(
+    state: &FlowsState,
+    api: &N8nApi,
+    workflow: &Value,
+    record: Option<&FlowRecord>,
+) -> Flow {
     let head = flow_summary(
         workflow,
         record,
@@ -785,17 +1138,25 @@ async fn build_flow(api: &N8nApi, workflow: &Value, record: Option<&FlowRecord>)
         .unwrap_or_default()
         .to_string();
     let reviewed_version_id = record.and_then(|r| r.reviewed_version_id.clone());
+    let source_task_id = record.and_then(|r| r.source_task_id.clone());
+    let source_moment = match source_task_id.as_deref() {
+        Some(task_id) => source_moment(state, task_id).await,
+        None => None,
+    };
+    let running = workflow["activeVersionId"].as_str();
     Flow {
         n8n_url: api.editor_url(&head.id),
         // n8n 2.x keeps running the published `activeVersionId` while an edit
-        // in its editor creates a newer draft `versionId` (SPEC D7).
+        // in its editor creates a newer draft `versionId` (SPEC D7); and a
+        // version published in n8n (editor, CLI) was never the user's click.
         review_outdated: head.status == "active"
-            && workflow["activeVersionId"].as_str() != Some(version_id.as_str()),
+            && (running != Some(version_id.as_str()) || running != reviewed_version_id.as_deref()),
         id: head.id,
         name: head.name,
         status: head.status,
         last_execution: head.last_execution,
-        source_task_id: record.and_then(|r| r.source_task_id.clone()),
+        source_task_id,
+        source_moment,
         summary: record.map(|r| r.summary.clone()).unwrap_or_default(),
         nodes,
         edges,
@@ -812,16 +1173,11 @@ async fn build_flow(api: &N8nApi, workflow: &Value, record: Option<&FlowRecord>)
 async fn list_flows(State(state): State<FlowsState>) -> Result<Json<Vec<FlowSummary>>, FlowError> {
     let api = N8nApi::from_connection(&state).await?;
     let store = FlowStore::load(&state.screenpipe_dir)?;
-    let page = api
-        .expect_ok(
-            Method::GET,
-            "/workflows",
-            &[("tags", FLOW_TAG), ("limit", "250")],
-            None,
-        )
+    let workflows = api
+        .all_pages("/workflows", &[("tags", FLOW_TAG), ("limit", "250")])
         .await?;
     let mut flows = Vec::new();
-    for workflow in page["data"].as_array().into_iter().flatten() {
+    for workflow in &workflows {
         if !has_flow_tag(workflow) || workflow["isArchived"] == true {
             continue;
         }
@@ -838,7 +1194,7 @@ async fn get_flow(
 ) -> Result<Json<Flow>, FlowError> {
     let (api, store, workflow) = load_flow(&state, &id).await?;
     Ok(Json(
-        build_flow(&api, &workflow, store.flows.get(&id)).await,
+        build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
     ))
 }
 
@@ -874,38 +1230,65 @@ async fn load_flow(state: &FlowsState, id: &str) -> Result<(N8nApi, FlowStore, V
     Ok((api, store, workflow))
 }
 
+/// Whether the request carries the UI credential ([`FlowActivationKey`]): a
+/// click on the Review Screen. The local API key is shared with the chat
+/// agent, pipes and MCP clients; only the desktop UI holds this credential.
+fn from_user(state: &FlowsState, headers: &HeaderMap) -> bool {
+    headers
+        .get(ACTIVATION_HEADER)
+        .zip(state.activation_key.as_ref())
+        .is_some_and(|(sent, key)| key.matches(sent.as_bytes()))
+}
+
 /// Activation: publishes in n8n exactly the version the user reviewed, records
 /// it as the reviewed version and logs it. Only the Review Screen's
-/// "Activer" button calls this route; nothing in the engine calls it.
+/// "Activer" button calls this route; nothing in the engine calls it, and it
+/// is refused without the UI credential ([`FlowActivationKey`]).
 async fn activate_flow(
     State(state): State<FlowsState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     body: Option<Json<ActivateRequest>>,
 ) -> Result<Json<Flow>, FlowError> {
-    let request = body.map(|Json(request)| request).unwrap_or_default();
+    if !from_user(&state, &headers) {
+        return Err(FlowError::ActivationRequiresUser);
+    }
+    // Activation publishes exactly what the user read, so it must say what that was.
+    let reviewed = body
+        .and_then(|Json(request)| request.version_id)
+        .filter(|version| !version.is_empty())
+        .ok_or(FlowError::VersionRequired)?;
     let _guard = state.write_lock.lock().await;
     let (api, mut store, workflow) = load_flow(&state, &id).await?;
     let version = workflow["versionId"]
         .as_str()
         .unwrap_or_default()
         .to_string();
-    if request
-        .version_id
-        .as_deref()
-        .is_some_and(|reviewed| reviewed != version)
-    {
+    if reviewed != version {
         return Err(FlowError::VersionChanged);
     }
-    // Already running the reviewed version (e.g. a double click).
-    if workflow["active"] == true && workflow["activeVersionId"].as_str() == Some(&version) {
+    let already_running =
+        workflow["active"] == true && workflow["activeVersionId"].as_str() == Some(&version);
+    let already_reviewed = store
+        .flows
+        .get(&id)
+        .and_then(|record| record.reviewed_version_id.as_deref())
+        == Some(version.as_str());
+    // Already running the version the user activated (e.g. a double click).
+    if already_running && already_reviewed {
         return Ok(Json(
-            build_flow(&api, &workflow, store.flows.get(&id)).await,
+            build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
         ));
     }
 
-    let published = api
-        .switch(&id, "publish", Some(&json!({"versionId": version})))
-        .await?;
+    // Published in n8n without the user's click: nothing to switch, only the
+    // user's approval of what runs to record.
+    let published = if already_running {
+        workflow
+    } else {
+        api.switch(&id, "publish", Some(&json!({"versionId": version})))
+            .await?
+    };
     let published_version = published["activeVersionId"]
         .as_str()
         .unwrap_or(&version)
@@ -917,31 +1300,39 @@ async fn activate_flow(
 
     let workflow = api.workflow(&id).await?.unwrap_or(published);
     Ok(Json(
-        build_flow(&api, &workflow, store.flows.get(&id)).await,
+        build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
     ))
 }
 
 /// Switches the n8n workflow off and logs which version stopped running.
+/// Open to any authenticated caller (switching off is always safe); the log
+/// says "user" only for the Review Screen's click, "api" for anyone else.
 async fn deactivate_flow(
     State(state): State<FlowsState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<Flow>, FlowError> {
+    let by = if from_user(&state, &headers) {
+        "user"
+    } else {
+        "api"
+    };
     let _guard = state.write_lock.lock().await;
     let (api, mut store, workflow) = load_flow(&state, &id).await?;
     if workflow["active"] != true {
         return Ok(Json(
-            build_flow(&api, &workflow, store.flows.get(&id)).await,
+            build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
         ));
     }
     let running = running_version(&workflow);
 
-    let unpublished = api.switch(&id, "unpublish", None).await?;
-    store.record_mut(&id).log("deactivated", running, "user");
+    let unpublished = api.unpublish(&id, state.running_wait, by == "user").await?;
+    store.record_mut(&id).log("deactivated", running, by);
     store.save(&state.screenpipe_dir)?;
 
     let workflow = api.workflow(&id).await?.unwrap_or(unpublished);
     Ok(Json(
-        build_flow(&api, &workflow, store.flows.get(&id)).await,
+        build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
     ))
 }
 
@@ -965,10 +1356,11 @@ async fn update_flow(
     if body.get("name").is_none() {
         body["name"] = current["name"].clone();
     }
+    keep_user_credentials(&mut body, Some(&current));
 
     if current["active"] == true {
         let running = running_version(&current);
-        api.switch(&id, "unpublish", None).await?;
+        api.unpublish(&id, state.running_wait, false).await?;
         // Saved at once: the Flow is off even if the update below fails.
         store
             .record_mut(&id)
@@ -1007,7 +1399,7 @@ async fn update_flow(
     store.save(&state.screenpipe_dir)?;
 
     Ok(Json(
-        build_flow(&api, &workflow, store.flows.get(&id)).await,
+        build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
     ))
 }
 
@@ -1030,13 +1422,10 @@ async fn create_flow(
     let mut store = FlowStore::load(dir)?;
 
     // `importable` drops `active` and `tags`: n8n imports it switched off.
+    let mut body = importable(&request.workflow);
+    keep_user_credentials(&mut body, None);
     let (status, created) = api
-        .send(
-            Method::POST,
-            "/workflows",
-            &[],
-            Some(&importable(&request.workflow)),
-        )
+        .send(Method::POST, "/workflows", &[], Some(&body))
         .await?;
     match status {
         200..=299 => {}
@@ -1059,14 +1448,16 @@ async fn create_flow(
     );
     store.save(dir)?;
     let workflow = api.ensure_tagged(created).await?;
-    let flow = build_flow(&api, &workflow, store.flows.get(&id)).await;
+    let flow = build_flow(&state, &api, &workflow, store.flows.get(&id)).await;
     Ok((StatusCode::CREATED, Json(flow)))
 }
 
 /// Demo: imports the task's bundled n8n workflow switched off and tagged (or
-/// adopts the copy the import script already installed), and records its
-/// review material. Calling it again for the same task returns the same Flow
-/// (re-imported only if it was deleted or archived in n8n).
+/// adopts the copy the import script already installed, switching it off if
+/// it was left on), and records its review material. A copy that already has
+/// a local record is a Flow the user knows: it is only linked to the task,
+/// never switched off. Calling it again for the same task returns the same
+/// Flow (re-imported only if it was deleted or archived in n8n).
 async fn create_from_task(
     State(state): State<FlowsState>,
     Json(request): Json<FromTaskRequest>,
@@ -1093,7 +1484,7 @@ async fn create_from_task(
                     record.answers = request.answers;
                 }
                 store.save(dir)?;
-                let flow = build_flow(&api, &workflow, store.flows.get(&id)).await;
+                let flow = build_flow(&state, &api, &workflow, store.flows.get(&id)).await;
                 return Ok((StatusCode::OK, Json(flow)));
             }
             None => {
@@ -1112,7 +1503,34 @@ async fn create_from_task(
         Some(fixed_id) => api.workflow(fixed_id).await?,
         None => None,
     };
+    // That copy is already a Flow here (reviewed, maybe switched on by the
+    // user): link it to the task and leave its state and history alone.
+    let known = preinstalled
+        .as_ref()
+        .and_then(|workflow| workflow["id"].as_str())
+        .filter(|id| store.flows.contains_key(*id))
+        .map(str::to_string);
+    if let (Some(id), Some(workflow)) = (known, preinstalled.clone()) {
+        let record = store.record_mut(&id);
+        record.source_task_id = Some(task.id.to_string());
+        record.answers = request.answers;
+        if record.summary.trim().is_empty() {
+            record.summary = review["summary"].as_str().unwrap_or_default().to_string();
+        }
+        store.save(dir)?;
+        let workflow = api.ensure_tagged(workflow).await?;
+        let flow = build_flow(&state, &api, &workflow, store.flows.get(&id)).await;
+        return Ok((StatusCode::OK, Json(flow)));
+    }
     let created = match preinstalled {
+        // Creation always hands over a switched-off Draft (story 12): a copy
+        // with no record, left on in the n8n editor, is switched off before
+        // it is recorded. Nothing is logged: the user never activated it.
+        Some(workflow) if workflow["active"] == true => {
+            let id = workflow_id(&workflow)?;
+            let unpublished = api.unpublish(&id, state.running_wait, false).await?;
+            api.workflow(&id).await?.unwrap_or(unpublished)
+        }
         Some(workflow) => workflow,
         None => {
             api.expect_ok(
@@ -1140,13 +1558,25 @@ async fn create_from_task(
     );
     store.save(dir)?;
     let workflow = api.ensure_tagged(created).await?;
-    let flow = build_flow(&api, &workflow, store.flows.get(&id)).await;
+    let flow = build_flow(&state, &api, &workflow, store.flows.get(&id)).await;
     Ok((StatusCode::CREATED, Json(flow)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_url_hiding_its_real_host_behind_userinfo_has_no_host_fact() {
+        // `https://{{ $json.x }}@jira/…` would show « jira » while an email
+        // could send the request (and the Jira credential) elsewhere.
+        assert_eq!(url_host("=https://{{ $json.x }}@kylianaubry.atlassian.net/rest/api/2/issue"), None);
+        assert_eq!(url_host("https://user:pass@kylianaubry.atlassian.net/"), None);
+        assert_eq!(
+            url_host("=https://kylianaubry.atlassian.net/rest/api/2/issue/{{ $json.id }}").as_deref(),
+            Some("kylianaubry.atlassian.net")
+        );
+    }
 
     fn record(reviewed: Option<&str>) -> FlowRecord {
         FlowRecord {

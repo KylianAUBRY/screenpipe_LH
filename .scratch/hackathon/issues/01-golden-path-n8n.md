@@ -18,11 +18,11 @@ n8n owner account and API key, and the IMAP, Jira and OpenAI-compatible
 credentials created in the n8n UI by a human. Agents never enter these
 secrets.
 
-**Status:** ready-for-agent
+**Status:** done (live-verified on the demo machine 2026-10-17)
 
-- [ ] With the workflow switched on, a bug email sent to the inbox creates exactly one Bug ticket in `NOVA` with the title convention, a priority, a back/front label and the quoted email.
-- [ ] An improvement-idea email creates a Tâche; a non-ticket email (e.g. a security alert) creates nothing.
-- [ ] Restarting n8n does not reprocess an email already read.
-- [ ] One request with `tools` through ScreenPipe's local AI proxy returns a tool call; the result is recorded in the spec's risks.
-- [ ] Documented in `SPEC.md`: how n8n 2.42.2's public API switches a workflow on and off (activate vs publish) and which version id changes on an edit; D7 updated if the mapping differs.
-- [ ] The workflow (with node notes) and its summary are exported as the bundled demo fixture for the Flow service; the export contains no secrets.
+- [x] With the workflow switched on, a bug email sent to the inbox creates exactly one Bug ticket in `NOVA` with the title convention, a priority, a back/front label and the quoted email. NOVA-33, NOVA-34, NOVA-35 (see `.scratch/hackathon/evidence/LIVE-CHECKS.md`).
+- [x] An improvement-idea email creates a Tâche; a non-ticket email (e.g. a security alert) creates nothing. NOVA-32 (Tâche); 6 Google security alerts and a newsletter → no ticket.
+- [x] Restarting n8n does not reprocess an email already read. `docker restart` with the Flow active: 0 new execution in 90 s.
+- [x] One request with `tools` through ScreenPipe's local AI proxy returns a tool call; the result is recorded in the spec's risks.
+- [x] Documented in `SPEC.md`: how n8n 2.42.2's public API switches a workflow on and off (activate vs publish) and which version id changes on an edit; D7 updated if the mapping differs.
+- [x] The workflow (with node notes) and its summary are exported as the bundled demo fixture for the Flow service; the export contains no secrets.

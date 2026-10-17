@@ -10,11 +10,11 @@ bundled fixture is the final export from the demo n8n instance (credentials
 bound, ScreenPipe tool wired). Demo and reset scripts restore the start
 state between runs.
 
-**Blocked by:** 01, 04, 05, 06, 07, 08, 13.
+**Blocked by:** 01, 04, 05, 06, 07, 08, 13, 14, 15, 16.
 
-**Status:** ready-for-agent
+**Status:** done — 6 rehearsals, the final one on the build with every fix: 50 s to Activer, ticket at 70 s, whole journey 110 s; acceptance list checked in `SPEC.md`; runbook and fallback in `.scratch/hackathon/DEMO.md`; the machine is left in the start state
 
-- [ ] Every item of the acceptance list in `SPEC.md` is checked with its observed result.
-- [ ] Three consecutive rehearsals fit in 3 minutes.
-- [ ] Reset between rehearsals restores the start state (no leftover Flow, answers or unread demo emails).
-- [ ] A fallback is written down if the live chat change fails rehearsal (e.g. a recorded clip).
+- [x] Every item of the acceptance list in `SPEC.md` is checked with its observed result.
+- [x] Three consecutive rehearsals fit in 3 minutes. 106–110 s for the whole journey (rehearsals 1–3).
+- [x] Reset between rehearsals restores the start state (no leftover Flow, answers or unread demo emails).
+- [x] A fallback is written down if the live chat change fails rehearsal (e.g. a recorded clip). `.scratch/hackathon/DEMO.md`.

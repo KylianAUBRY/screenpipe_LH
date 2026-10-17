@@ -12,7 +12,7 @@ explicitly, like any Flow.
 
 **Blocked by:** 08 (same skill).
 
-**Status:** done (branch `hackathon/ticket-09`); live chat creation pending human
+**Status:** done (live-verified on the demo machine 2026-10-17)
 
 - [x] Flow service tests against a fake n8n: create imports switched off and tagged and stores the summary; a workflow without nodes is rejected.
 - [x] The Add button opens the chat with the prefilled prompt.
@@ -34,7 +34,11 @@ explicitly, like any Flow.
   doit faire : », not sent. The chat-opening button is shared with « Demander
   une modification » (`ChatButton` in `common.tsx`).
 
-## Pending human: live chat creation
+## Live chat creation (orchestrator, 2026-10-17)
+
+Done: « AJOUTER » opened the chat prefilled and not sent; the agent created « Noter les points d'étape » (Draft, inactive, tagged, `CUSTOM.screenPipeTrigger` + Set, French sentences) and answered with the « Revoir le Flow » link. The trigger's parameters were empty because the skill did not name them; fixed in ticket 17 (the skill lists every node parameter) and re-checked after the rebuild (see `.scratch/hackathon/evidence/LIVE-CHECKS.md`).
+
+## Original steps
 
 Needs the dev build (engine routes) and n8n running.
 

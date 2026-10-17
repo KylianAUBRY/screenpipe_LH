@@ -8,24 +8,38 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const localFetch = vi.hoisted(() => vi.fn());
 const showChatWithPrefill = vi.hoisted(() => vi.fn(async (_prefill: Record<string, unknown>) => {}));
+const getFlowActivationKey = vi.hoisted(() => vi.fn(async (): Promise<string> => "ui-key"));
 vi.mock("@/lib/api", () => ({ localFetch }));
+const searchNavigateToTimeline = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ status: "ok" as const, data: null })),
+);
+vi.mock("@/lib/utils/tauri", () => ({ commands: { getFlowActivationKey, searchNavigateToTimeline } }));
 vi.mock("@/lib/chat-utils", () => ({ showChatWithPrefill }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
-import { flowsApi, FlowsApiError } from "../api";
+import { CREATION_PROMPT, flowsApi, FlowsApiError, withCreationPrompt } from "../api";
 import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "../fixtures";
 import { mockAutomationFlowsResponse, resetAutomationFlowsMock } from "../mock";
+import { createBrowserIpcMock } from "@/lib/dev/browser-tauri-mock";
 
 const ENGINE = "http://localhost:3030";
 
 /** Route the client through the browser mock, as `bun run dev:web` does. */
 function useBrowserMock() {
+  const invoke = createBrowserIpcMock({ mode: "mock", apiPort: 3030 });
+  getFlowActivationKey.mockImplementation(async () => invoke("get_flow_activation_key") as string);
   localFetch.mockImplementation(async (path: string, init?: RequestInit) => {
     const response = mockAutomationFlowsResponse(new URL(path, ENGINE), init);
     if (!response) throw new Error(`not a Flows route: ${path}`);
     return response;
   });
+}
+
+const ACTIVATION_HEADER = "x-screenpipe-flow-activation";
+
+function sentHeaders(init: RequestInit): Headers {
+  return new Headers(init.headers);
 }
 
 function respond(status: number, body: unknown) {
@@ -34,6 +48,8 @@ function respond(status: number, body: unknown) {
 
 beforeEach(() => {
   localFetch.mockReset();
+  getFlowActivationKey.mockReset();
+  getFlowActivationKey.mockResolvedValue("ui-key");
   showChatWithPrefill.mockClear();
   resetAutomationFlowsMock();
   window.history.replaceState({}, "", "/home?section=pipes");
@@ -59,26 +75,49 @@ describe("flowsApi", () => {
     expect(JSON.parse(init.body)).toEqual({ taskId: DEMO_TASK_ID, answers: { q1: "oui" } });
   });
 
-  it("activates the reviewed version and deactivates", async () => {
+  it("activates the reviewed version with the UI credential and deactivates", async () => {
     respond(200, fixtureFlow);
     await flowsApi.activate("wf/1", "version-7");
     let [path, init] = localFetch.mock.lastCall!;
     expect(path).toBe("/automation-flows/wf%2F1/activate");
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body)).toEqual({ versionId: "version-7" });
+    // The credential only the desktop app hands to its webview (ticket 14).
+    expect(sentHeaders(init).get(ACTIVATION_HEADER)).toBe("ui-key");
+    expect(sentHeaders(init).get("content-type")).toBe("application/json");
 
     respond(200, fixtureFlow);
     await flowsApi.deactivate("wf/1");
     [path, init] = localFetch.mock.lastCall!;
     expect(path).toBe("/automation-flows/wf%2F1/deactivate");
     expect(init.method).toBe("POST");
+    expect(sentHeaders(init).get("content-type")).toBe("application/json");
+    // Not needed to switch off, but the history then says it was the user.
+    expect(sentHeaders(init).get(ACTIVATION_HEADER)).toBe("ui-key");
+  });
+
+  it("outside the desktop app, activates without a credential and reports the refusal", async () => {
+    getFlowActivationKey.mockRejectedValue(new Error("not in Tauri"));
+    respond(403, {
+      error: "activation_requires_user",
+      detail: "Only the user can activate a Flow, from its Review Screen in ScreenPipe.",
+    });
+    const error = await flowsApi.activate("wf1", "version-7").catch((e) => e);
+
+    const [, init] = localFetch.mock.lastCall!;
+    expect(sentHeaders(init).has(ACTIVATION_HEADER)).toBe(false);
+    expect(error).toBeInstanceOf(FlowsApiError);
+    expect(error.code).toBe("activation_requires_user");
   });
 
   it.each([
     [409, { error: "version_changed" }, "version_changed"],
     [502, { error: "activation_failed", detail: "n8n answered 400: bad trigger" }, "activation_failed"],
     [412, { error: "n8n_not_configured" }, "n8n_not_configured"],
+    [412, { error: "n8n_unauthorized", detail: "n8n answered 401: unauthorized" }, "n8n_unauthorized"],
     [502, { error: "n8n_unreachable", detail: "connection refused" }, "n8n_unreachable"],
+    [502, { error: "n8n_failed", detail: "n8n answered 500: database is locked" }, "n8n_failed"],
+    [409, { error: "flow_running", detail: "n8n is still running this Flow" }, "flow_running"],
     [404, { error: "flow_not_found" }, "not_found"],
     [500, { error: "internal" }, "unknown"],
   ])("turns HTTP %i into a typed error", async (status, body, code) => {
@@ -104,6 +143,26 @@ describe("flowsApi", () => {
     expect(prefill.prompt).toContain(fixtureFlow.name);
     expect(prefill.prompt).toContain("automation-flows");
     // Opening the chat changes nothing in the Flow service.
+    expect(localFetch).not.toHaveBeenCalled();
+  });
+
+  it("opens the task's moment through the Timeline handoff the Task Page evidence uses", async () => {
+    searchNavigateToTimeline.mockClear();
+    const timestamp = "2026-10-17T02:07:12.733Z";
+
+    await flowsApi.openTimeline({ frameId: 4242, timestamp });
+    expect(searchNavigateToTimeline).toHaveBeenLastCalledWith(timestamp, 4242, null, null, null, null);
+    // A moment without a recorder frame opens the Timeline at its time.
+    await flowsApi.openTimeline({ frameId: null, timestamp });
+    expect(searchNavigateToTimeline).toHaveBeenLastCalledWith(timestamp, null, null, null, null, null);
+
+    for (const moment of [{ frameId: -1, timestamp }, { frameId: 4242, timestamp: "not a date" }]) {
+      await expect(flowsApi.openTimeline(moment)).rejects.toThrow("Invalid captured moment");
+    }
+    expect(searchNavigateToTimeline).toHaveBeenCalledTimes(2);
+
+    searchNavigateToTimeline.mockResolvedValueOnce({ status: "error", error: "Timeline unavailable" } as never);
+    await expect(flowsApi.openTimeline({ frameId: null, timestamp })).rejects.toThrow("Timeline unavailable");
     expect(localFetch).not.toHaveBeenCalled();
   });
 
@@ -144,9 +203,38 @@ describe("browser mock", () => {
       ["activated", "user"],
       ["deactivated", "user"],
     ]);
+
+    // Switched off by any other local caller (no UI credential): "api".
+    await flowsApi.activate(fixtureFlow.id, fixtureFlow.versionId);
+    await localFetch(`/automation-flows/${fixtureFlow.id}/deactivate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect((await flowsApi.get(fixtureFlow.id)).activationLog.at(-1)).toMatchObject({
+      event: "deactivated",
+      by: "api",
+    });
     await expect(flowsApi.activate(fixtureFlow.id, "stale-version")).rejects.toMatchObject({
       code: "version_changed",
     });
+  });
+
+  it("refuses, like the engine, an activation without the UI credential or the version", async () => {
+    useBrowserMock();
+    const activate = (headers: Record<string, string>, body: unknown) =>
+      localFetch(`/automation-flows/${fixtureFlow.id}/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
+    const ui = { [ACTIVATION_HEADER]: await getFlowActivationKey() };
+
+    // What the chat agent could send with the local API key.
+    expect((await activate({}, { versionId: fixtureFlow.versionId })).status).toBe(403);
+    expect((await activate(ui, {})).status).toBe(400);
+    expect((await flowsApi.get(fixtureFlow.id)).activationLog).toEqual([]);
+    expect((await activate(ui, { versionId: fixtureFlow.versionId })).status).toBe(200);
   });
 
   it("lets a chat change switch the fixture Flow off and leave it needing review", async () => {
@@ -201,5 +289,23 @@ describe("browser mock", () => {
   it("leaves other engine routes alone", () => {
     expect(mockAutomationFlowsResponse(new URL("/pipes", ENGINE), undefined)).toBeNull();
     expect(mockAutomationFlowsResponse(new URL("/automation-flowsX", ENGINE), undefined)).toBeNull();
+  });
+});
+
+describe("withCreationPrompt (Create flow in the main chat)", () => {
+  it("starts an empty composer with the automation-flows skill prompt", () => {
+    expect(withCreationPrompt("")).toBe(CREATION_PROMPT);
+    expect(CREATION_PROMPT).toContain("skill automation-flows");
+  });
+
+  it("keeps what the user already typed as the description", () => {
+    expect(withCreationPrompt("  crée un ticket Jira pour chaque email de bug ")).toBe(
+      `${CREATION_PROMPT}crée un ticket Jira pour chaque email de bug`,
+    );
+  });
+
+  it("does not add the prompt twice", () => {
+    const once = withCreationPrompt("trie mes emails");
+    expect(withCreationPrompt(once)).toBe(once);
   });
 });

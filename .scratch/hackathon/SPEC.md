@@ -81,13 +81,24 @@ type FlowSummary = {
 type Flow = FlowSummary & {
   n8nUrl: string;             // `${api_url}/workflow/${id}`, for "View graph"
   sourceTaskId: string | null; // wf-… id, for the link back to the Task Page
+  // Ticket 22: first evidence moment of the source Detected Task in the
+  // workflow catalog (earliest evidence entry or recorder frame; frameId null
+  // when it has no recorder frame), for « Voir dans la timeline »; null otherwise.
+  sourceMoment: { frameId: number | null; timestamp: string } | null;
   summary: string;            // plain-language explanation
-  nodes: { id: string; name: string; type: string; position: [number, number]; sentence: string | null }[];
+  // `facts` (ticket 22): what the AI did not write, read from the node: the
+  // names of its n8n credentials ("Identifiant n8n : <name>") and, for an
+  // HTTP Request, "<METHOD> <host>" (or "<METHOD> (adresse calculée à l'exécution)").
+  nodes: { id: string; name: string; type: string; position: [number, number]; sentence: string | null; facts: string[] }[];
   edges: { from: string; to: string }[];   // from n8n `connections`, by node id
   versionId: string;
   reviewedVersionId: string | null;
-  reviewOutdated: boolean;    // active and versionId !== reviewedVersionId (edited in n8n)
-  activationLog: { at: string; event: "activated" | "deactivated" | "paused_for_edit" | "modified"; versionId: string; by: "user" | "chat" }[];
+  // Active and n8n runs something the user did not activate: activeVersionId
+  // !== versionId (edited in n8n after publishing, D7) or activeVersionId !==
+  // reviewedVersionId (published in n8n without the Review Screen, ticket 22).
+  reviewOutdated: boolean;
+  // by "api": switched off by a local caller without the UI credential.
+  activationLog: { at: string; event: "activated" | "deactivated" | "paused_for_edit" | "modified"; versionId: string; by: "user" | "chat" | "api" }[];
 };
 ```
 
@@ -100,20 +111,39 @@ excluded from `nodes`. `sentence` is the node's `notes`.
 |---|---|
 | `GET /automation-flows` | `FlowSummary[]` |
 | `GET /automation-flows/:id` | `Flow` |
-| `POST /automation-flows/from-task` `{taskId, answers}` | Demo: maps `taskId` to the bundled fixture (unknown → 404); imports it inactive, tags it, stores summary + `sourceTaskId`. Idempotent per `taskId`. Returns `Flow` (`draft`). |
-| `POST /automation-flows` `{workflow, summary}` | Chat creation: imports `workflow` (n8n JSON with per-node `notes`) inactive and tagged. Returns `Flow`. |
+| `POST /automation-flows/from-task` `{taskId, answers}` | Demo: maps `taskId` to the bundled fixture (unknown → 404); imports it inactive, tags it, stores summary + `sourceTaskId`. Idempotent per `taskId`. Returns `Flow` (`draft`). A pre-imported copy that already has a local record is only linked to the task (history, reviewed version and on/off state kept, `200`); only a copy with no record is switched off. |
+| `POST /automation-flows` `{workflow, summary}` | Chat creation: imports `workflow` (n8n JSON with per-node `notes`) inactive and tagged, without any node `credentials` and without `settings.availableInMCP`. Returns `Flow`. |
 | `GET /automation-flows/:id/workflow` | For the chat: `{id, versionId, summary, workflow}`, the n8n workflow reduced to what an update accepts (no `active`, no tags). |
-| `PUT /automation-flows/:id` `{workflow, summary?}` | Chat modification: refuses (`400 invalid_workflow`, nothing changed) a workflow without nodes or connections or with a non-sticky node lacking `notes`; if active, unpublish first (log `paused_for_edit`); update in place with `publishIfActive=false`; log `modified`; both events `by: "chat"`. n8n's 400 → `400 invalid_workflow` with its message. Returns `Flow`. |
-| `POST /automation-flows/:id/activate` | n8n activate; `reviewedVersionId = versionId`; log `activated`. Only called from a user click. |
-| `POST /automation-flows/:id/deactivate` | n8n deactivate; log `deactivated`. |
+| `PUT /automation-flows/:id` `{workflow, summary?}` | Chat modification: refuses (`400 invalid_workflow`, nothing changed) a workflow without nodes or connections or with a non-sticky node lacking `notes`; if active, unpublish first (log `paused_for_edit`); update in place with `publishIfActive=false`; log `modified`; both events `by: "chat"`. n8n's 400 → `400 invalid_workflow` with its message. Each node's `credentials` come from the current n8n workflow for nodes that keep their name and type, none for new or retyped nodes, never from the request. Returns `Flow`. |
+| `POST /automation-flows/:id/activate` `{versionId}` | Only from the user's click (ticket 14): needs header `x-screenpipe-flow-activation` with the app's UI credential (`403 activation_requires_user` otherwise) and the reviewed `versionId` (`400 version_required` when missing, `409 version_changed` when n8n moved on). n8n publish of that version; `reviewedVersionId = versionId`; log `activated`. |
+| `POST /automation-flows/:id/deactivate` | n8n unpublish; log `deactivated`, `by: "user"` with the UI credential header, `"api"` without. Open to any authenticated caller. |
 
-Errors: `412 {error: "n8n_not_configured"}`, `502 {error: "n8n_unreachable"}`,
+Every unpublish (deactivate, chat change of an active Flow, a pre-imported
+copy left on) first waits while n8n reports a running execution of the
+workflow (`GET /executions?workflowId=&status=running`), polling every 1 s up
+to 90 s (ticket 21, `RunningWait`); still running at the deadline → `409
+{error: "flow_running", detail}`, nothing changed.
+
+Errors: `412 {error: "n8n_not_configured"}`, `412 {error: "n8n_unauthorized",
+detail}` (n8n answered 401/403 to the API key), `502 {error: "n8n_unreachable"}`
+(no answer: connection, timeout), `502 {error: "n8n_failed", detail}` (any other
+non-2xx from n8n), `409 {error: "flow_running", detail}`,
 `404` for an unknown Flow or task, `400 {error: "invalid_workflow", detail}` for
-a chat change that cannot be applied. Storage: one JSON file in the ScreenPipe
-data dir, keyed by n8n workflow id.
+a chat change that cannot be applied, `415 {error: "json_required"}` for a
+POST/PUT without `Content-Type: application/json`. Storage: one JSON file in
+the ScreenPipe data dir, keyed by n8n workflow id.
 
-Fixture: `crates/screenpipe-engine/assets/automation-flows/` holds the n8n
-workflow JSON (with node `notes`) and its review JSON (summary). The workflow
+UI credential (ticket 14): the chat agent, pipes and MCP clients share the
+local API key with the app, so it cannot prove a user click. The desktop app
+generates a random `FlowActivationKey` per process, gives it to the engine it
+embeds and hands it to its webview only through the Tauri command
+`get_flow_activation_key`; never in an environment variable (Pi inherits
+them), a file or a log. An engine without it (CLI) refuses every activation.
+
+Fixture: `infra/automation-flows/workflows/` holds the n8n workflow JSON
+(with node `notes`) and its review JSON (summary); the engine embeds both at
+build time (`include_str!` in `automation_flows.rs`), and
+`infra/automation-flows/import-workflow.sh` imports the same file. The workflow
 JSON is exported from the demo n8n instance after its credentials are bound
 once, so it carries that instance's credential ids (ids are not secrets).
 
@@ -171,15 +201,24 @@ chaque ticket créé ».
 
 ## Acceptance (demo machine)
 
-- The notification opens the Task Page of `wf-novadesk-support-tickets`.
-- "Créer l'automatisation" stays disabled until both answers are filled.
-- After creation, n8n holds one inactive workflow tagged `screenpipe-flow`; a
-  second click does not create a second one.
-- The Review Screen shows every non-sticky node with its sentence.
-- Activer makes the n8n workflow active; Désactiver reverses it; both appear
-  in the activation history.
-- A new bug email becomes one NOVA ticket; a non-ticket email creates none.
-- A chat modification of an active Flow leaves it `needs_review` and inactive.
+Observed on the demo machine on 2026-10-17 (details: `evidence/LIVE-CHECKS.md`):
+
+- [x] The notification opens the Task Page of `wf-novadesk-support-tickets`.
+  Pressing « Voir la tâche » in the app's notification panel opened it in 4–8 s (rehearsals 0–5).
+- [x] "Créer l'automatisation" stays disabled until both answers are filled.
+  `enabled=false` at 0 and 1 answer, `true` at 2 (rehearsals 1–5).
+- [x] After creation, n8n holds one inactive workflow tagged `screenpipe-flow`; a
+  second click does not create a second one. Checked through the n8n API in every rehearsal; a
+  second click returned the same Flow (rehearsal 0).
+- [x] The Review Screen shows every non-sticky node with its sentence. 8 of 8, plus the fixed
+  facts (credentials, Jira host).
+- [x] Activer makes the n8n workflow active; Désactiver reverses it; both appear
+  in the activation history. « Activé par vous » / « Désactivé par vous »; a deactivation outside
+  the app reads « Désactivé hors de Screenpipe ».
+- [x] A new bug email becomes one NOVA ticket; a non-ticket email creates none. NOVA-31…40;
+  6 Google security alerts and a newsletter created none.
+- [x] A chat modification of an active Flow leaves it `needs_review` and inactive. Rehearsals
+  0–4; with an email being processed, the change waits for it (ticket 21).
 
 ## Human setup (agents must not do these)
 

@@ -1,57 +1,63 @@
 # Handoff — Automation Flows (hackathon)
 
-Last updated: 2026-10-17, integration tip after the ticket 08 merge (pushed).
+Last updated: 2026-10-17 ~16:10, integration tip after tickets 14–23 (pushed).
 Read this first, then `AGENTS.md` (Hackathon mode), `CONTEXT.md`, `SPEC.md`,
-`automation-flows-spec.md`, and the ticket files in `issues/`.
+`automation-flows-spec.md`, the ticket files in `issues/`, `DEMO.md` (runbook)
+and `evidence/LIVE-CHECKS.md` (every live check with its observed result).
 
 ## Where the work is
 
 - **Branch:** `hackathon/automation-flows` on `origin` (KylianAUBRY/screenpipe_LH).
-  All finished tickets are merged there. It is deliberately **not merged into
-  `main`** (user decision, see "Teammate divergence").
-- **Process:** `/mattpocock-skills:implement-spec` over
-  `.scratch/hackathon/automation-flows-spec.md`. One implementer per ticket in
-  its own worktree, built with the `tdd` skill, then a merger merges it with
-  `--no-ff` into the integration branch, then push (the user asked to push
-  after every merge).
-- **Integration worktree (local):** `.claude/worktrees/integration`
-  (gitignored). Merges happen there, never in the main checkout.
+  All tickets are merged there. Since 2026-10-17 `main` holds exactly this
+  branch (user decision, see "Teammate divergence").
+- **Process:** `/mattpocock-skills:implement-spec`: one implementer per ticket
+  in its own worktree (`tdd` skill), merged `--no-ff` into the integration
+  branch, pushed after every merge; then an independent code review (standards,
+  spec, correctness/security) whose findings became tickets 21–23.
 
-## Ticket state (true state; some ticket `Status:` lines are stale)
+## Ticket state
 
 | # | Ticket | State |
 |---|---|---|
-| 01 | Golden path n8n workflow | merged; live email→Jira test pending human |
-| 02 | Flow service routes + Flows tab | merged |
-| 03 | Demo Detected Task + evidence + notification | merged |
-| 04 | Activate / deactivate | merged; live check pending human |
-| 05 | Read-only graph | merged |
-| 06 | Questions unlock "Créer l'automatisation" | merged |
-| 07 | ScreenPipe node as AI Agent tool | merged; live tool check pending human |
-| 08 | Chat modification (pause → Needs Review) | merged (`9d9d4c952`); live rehearsal pending human (steps in the ticket) |
-| 09 | Chat creation (Add) | merged (`572075ef1`); live chat creation pending human (steps in the ticket) |
-| 10 | ScreenPipe Trigger (deterministic) | merged; manual check pending human |
-| 11 | ScreenPipe AI Trigger | merged; manual check pending human |
-| 12 | Demo assembly + rehearsal | todo, unblocked (needs the human live checks) |
-| 13 | AI proxy returns OpenAI-shaped tool calls | merged; live check pending human |
-| — | Prompt-injection hardening of the demo workflow | merged |
-| 14 | Server-enforced user-only activation (security review finding) | todo, ready-for-agent |
+| 01–13 | Golden path, Flow service, Task Page, activation, graph, chat, nodes, proxy | done, **live-verified** on this Mac |
+| 14 | Server-enforced user-only activation | done, live-verified |
+| 15 | Task Page evidence from this Mac's real captures (9/9) | done, live-verified |
+| 16 | Demo reset restores the start state | done, live-verified |
+| 17 | NovaPlanning product; skill names CUSTOM.* node types and every parameter | done, live-verified |
+| 18 | Flow service hardening (refused key, creation off, fresh screens) | done, live-verified |
+| 19 | Task Page: creation mode only where it works, drafts | done, live-verified |
+| 20 | Agent browser cannot open the app's own pages | done, live-verified |
+| 21 | Switching a Flow off waits for the running execution | done, live-verified |
+| 22 | Review fixes, engine (who deactivated, outside activation, credentials, facts, sourceMoment, n8n_failed, no MCP) | done, live-verified |
+| 23 | Review fixes, UI/workflow/nodes (DESIGN.md, reviewed version, timeline link, Jira markup, AI trigger) | done, live-verified |
+| 12 | Demo assembly + rehearsal | 5 rehearsals; journey 105–110 s; acceptance list checked in `SPEC.md`; see `DEMO.md` |
 
-Remaining implement-spec steps: 14 (security), 12 (needs the human live checks), then `/code-review` on
-the integration branch, fix findings in one implementer, set every ticket's
-`Status:` to done, clean up implementer worktrees.
+Also fixed from rehearsals: IMAP catch-up seed (an email arriving around
+activation was missed), reset retries while n8n is still unpublishing, the AI
+step times out after 30 s and retries (a hung proxy call held an email for 10
+minutes).
 
 ## Gotchas (each cost time already)
 
-- **Branch base:** agent worktrees are cut from `origin/main`, which has a
-  teammate commit `658549edb` that conflicts with this branch (same files
-  under `components/automation-flows/`). Every implementer must start with
-  `git switch -c hackathon/ticket-NN hackathon/automation-flows`, and every
-  merger checks `git merge-base --is-ancestor 658549edb <branch>` fails.
+- **Branch base:** agent worktrees are cut from `origin/main`. Since
+  2026-10-17 `main` holds this branch's content, so that base is safe; still
+  start implementers with
+  `git switch -c hackathon/ticket-NN hackathon/automation-flows`.
 - **Engine changes need the dev build.** The ScreenPipe running from
   `/Applications` does not contain our routes or the proxy fix. Live checks:
   quit the installed app, then `cd apps/screenpipe-app-tauri && bun run dev:tauri`
   on this branch, signed in (the AI proxy needs the cloud token).
+- **Dev builds are isolated by default** (`~/.screenpipe-dev`, API on port
+  3130). The n8n credentials point at port 3030 and the AI tool needs the real
+  captures, so run the dev build with `SCREENPIPE_DEV_USE_PROD_DATA=1`, from
+  macOS Terminal (screen permissions), never next to the installed app.
+- **Workflows view needs the PostHog `workflows` flag.** The Task Page lives
+  there. On a demo machine whose account lacks the flag, put
+  `NEXT_PUBLIC_SCREENPIPE_WORKFLOWS_ROLLOUT=1` in
+  `apps/screenpipe-app-tauri/.env.local` (gitignored) and rebuild. It only
+  shows the view; background workflow AI still needs its explicit opt-in.
+- **Docker Desktop** reports bind mounts as `/host_mnt/Users/…`;
+  `install-n8n` strips that prefix (it refused to copy before).
 - **n8n 2.42.2:** switch on/off = `publish`/`unpublish` with `versionId`
   (`activate`/`deactivate` are deprecated). CLI runs inside the container need
   `-e N8N_RUNNERS_BROKER_PORT=5690`. Polling triggers only run from the
@@ -65,40 +71,52 @@ the integration branch, fix findings in one implementer, set every ticket's
 
 - n8n: `docker compose -f infra/automation-flows/docker-compose.yml up -d`,
   http://localhost:5678 (owner account exists; the human knows the login).
-- Credentials in n8n (ids are referenced by the workflow): `spNovaImap000001`
-  Gmail IMAP (filled, tested), `spNovaJira000001` Jira (filled, tested),
-  `spProxyOpenAI001` ScreenPipe AI proxy (filled, works; its red `/models`
-  test error is expected), `spScreenpipeApi1` ScreenPipe API (**key still
-  empty** — the human pastes the ScreenPipe API key from Settings → Privacy).
-- n8n currently holds the **ticket-01 version** of `spNovaFlow000001` (no
-  ScreenPipe tool), inactive, so the golden-path test can run on the installed
-  app. Re-import the current version with `infra/automation-flows/import-workflow.sh`
-  once the dev build (proxy fix) is running.
-- Probe workflows `spProbeAgent0001`, `spProbeTool00001`, `spProbeProxy0001`:
-  untagged, inactive, safe to delete in the n8n UI.
-- n8n MCP registered in Claude Code (local scope) at
-  `http://localhost:5678/mcp-server/http`.
-- Secrets never go in the repo, and agents never type Gmail/Jira secrets.
+  Log into it in Safari (default browser) before a demo.
+- Credentials in n8n (ids are referenced by the workflow), all filled and
+  live-tested: `spNovaImap000001` Gmail IMAP, `spNovaJira000001` Jira,
+  `spProxyOpenAI001` ScreenPipe AI proxy, `spScreenpipeApi1` ScreenPipe API.
+- ScreenPipe Connections → n8n holds `http://localhost:5678` and an n8n API
+  key.
+- The dev build runs from Terminal with `SCREENPIPE_DEV_USE_PROD_DATA=1`
+  (see `DEMO.md`); `apps/screenpipe-app-tauri/.env.local` sets
+  `NEXT_PUBLIC_SCREENPIPE_WORKFLOWS_ROLLOUT=1`.
+- `ZZ Probe - vérification des identifiants` in n8n: untagged, inactive,
+  re-runs a credentials check (`n8n execute --id=spProbeVerify001`); safe to
+  delete.
+- Secrets never go in the repo.
 
-## Pending human checks (in order)
+## Known limits (not fixed, judged minor or team decisions)
 
-1. Golden path (ticket 01): mark old inbox mails read → Publish
-   `spNovaFlow000001` in n8n → send a bug email to
-   `servicedesk.novadesk@gmail.com` → one Bug ticket in NOVA → Unpublish.
-2. Paste the ScreenPipe API key into `spScreenpipeApi1`.
-3. Switch to the dev build, re-import the workflow, run the live steps written
-   in tickets 04, 07, 13 (and 10, 11 for the triggers).
-4. Re-record the 3 repetitions with ScreenPipe on this Mac (the AI tool looks
-   them up; this Mac has no captures of NOVA tickets yet).
+- The Flows UI and the Task Page creation block are French in JSX, not
+  through the app's localization (`useGT`): team decision for the demo.
+- The « Flow runs » mode of the ScreenPipe Trigger fires once when several
+  runs happen between two polls (it watches the last execution).
+- The Flows list is the n8n workflows tagged `screenpipe-flow`: a workflow
+  tagged by hand in n8n shows up too.
+- The agent's browser can still open the n8n editor (no cookies unless the
+  user shares browser sessions); a version published there is flagged on the
+  Review Screen (« Activer cette version »).
+- Task Page drafts live in the app session (lost on app restart; `reset.ts`
+  cannot clear them).
+- The Flow service holds its write lock while it waits for a running
+  execution (up to ~90 s): other activations/creations queue meanwhile.
+- HTML-only emails: numeric entities above U+FFFF (emoji) are garbled in the
+  Jira description.
+- A chat-created Flow that uses ScreenPipe nodes needs the « ScreenPipe API »
+  credential picked in n8n before it runs (the chat cannot add credentials).
+- Jira NOVA holds the rehearsal tickets NOVA-31…42.
 
 ## Open decisions
 
 - **Failure handling decided, not yet ticketed:** SPEC.md D16–D20 (failure notification, Retry of a Failed Run, AI Abstention + Activity list, health check at app start and every 15 min, idempotent Retry via a `mail-<hash>` Jira label). Turn them into tickets with `/to-tickets` before building.
-- **Teammate divergence:** `origin/main` has another Review Screen
-  ("Recommendations" tab, questions on the Review Screen, notification opens
-  the Review Screen, demo backend) by a teammate. Our branch follows the
-  user's decision: notification → Task Page → questions → creation → Review
-  Screen. User decision: keep a separate branch for now; do not touch `main`
-  or the teammate's files. Reconciling is a team discussion (their screen has
-  pluggable `setFlowSource`/`setFlowBackend`, which our routes could feed).
+- **Teammate divergence (settled 2026-10-17):** `main` had another Review
+  Screen ("Recommendations" tab, questions on the Review Screen, notification
+  opens the Review Screen, demo backend) by a teammate, plus the « Find an
+  automation » button and its `repeated-workflow-detector` Pipe. User
+  decision: those four commits moved to
+  `archive/main-before-automation-flows` (tip `1196dd10a`), and `main` took
+  this branch's content unchanged (merge `-s ours`, no force-push, so their
+  commits stay in `main`'s history). Pieces worth porting later from the
+  archive: Flows grouped by state, the « if → then » rules with « de vous »
+  for rules from the user's answers, choice pills for the questions.
 - Whether the n8n trigger nodes appear in the 3-minute demo (D12).

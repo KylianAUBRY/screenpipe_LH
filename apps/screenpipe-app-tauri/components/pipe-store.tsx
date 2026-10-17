@@ -357,10 +357,15 @@ export function PipeStoreView() {
   // Automation Flows are addressable: ?tab=flows&flow=<id> stays in the URL
   // while the Flows tab is shown.
   const [flowId, setFlowId] = useState<string | null>(null);
+  const [flowVisit, setFlowVisit] = useState(0);
 
   const showFlows = useCallback((flow: string | null) => {
     setActiveTab("flows");
     setFlowId(flow);
+    // Each navigation is an explicit load, even to the Flow already on
+    // screen (the chat's Review Screen link after a change): Activer then
+    // publishes the version shown.
+    setFlowVisit((visit) => visit + 1);
     const params = new URLSearchParams(window.location.search);
     params.set("tab", "flows");
     if (flow) params.set("flow", flow);
@@ -457,7 +462,7 @@ export function PipeStoreView() {
       {activeTab === "discover" ? (
         <DiscoverView onInstalled={() => setActiveTab("my-pipes")} />
       ) : activeTab === "flows" ? (
-        <FlowsTab flowId={flowId} onSelectFlow={showFlows} />
+        <FlowsTab key={flowVisit} flowId={flowId} onSelectFlow={showFlows} />
       ) : (
         <PipesSection />
       )}

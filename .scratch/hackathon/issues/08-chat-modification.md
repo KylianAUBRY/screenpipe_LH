@@ -14,11 +14,11 @@ until the user activates again.
 
 **Blocked by:** 04.
 
-**Status:** done except the live rehearsal (pending human, steps below). Branch `hackathon/ticket-08`.
+**Status:** done (live-verified on the demo machine 2026-10-17)
 
 - [x] Flow service tests against a fake n8n: updating an active Flow switches it off first and records "paused for edit" then "modified"; the status becomes Needs Review; updating a Draft keeps it Draft.
 - [x] The banner and the button render and behave as expected (frontend tests).
-- [ ] The rehearsed request « Ajoute l'étiquette `auto` à chaque ticket créé » changes the workflow in n8n, leaves the Flow Needs Review and switched off; after re-activation, the next ticket carries the label. **Pending human.**
+- [x] The rehearsed request « Ajoute l'étiquette `auto` à chaque ticket créé » changes the workflow in n8n, leaves the Flow Needs Review and switched off; after re-activation, the next ticket carries the label. Done in ~30 s by the in-app chat; NOVA-35 has labels `auto` + `back` (see `.scratch/hackathon/evidence/LIVE-CHECKS.md`).
 - [x] The skill never calls activate.
 
 ## What was built

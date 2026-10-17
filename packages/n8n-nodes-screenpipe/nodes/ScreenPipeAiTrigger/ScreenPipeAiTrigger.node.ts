@@ -49,7 +49,7 @@ export class ScreenPipeAiTrigger implements INodeType {
         type: "number",
         typeOptions: { minValue: 1 },
         default: 15,
-        description: "How much recent activity the AI looks at on each check",
+        description: "How much recent activity the AI looks at on each check, never before the last time the trigger fired",
       },
       {
         displayName: "Cooldown (Minutes)",
@@ -79,7 +79,12 @@ export class ScreenPipeAiTrigger implements INodeType {
     const apiKey = String(credentials.apiKey ?? "");
     const headers: Record<string, string> = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
 
-    const from = new Date(now.getTime() - lookbackMinutes * 60_000);
+    // An automatic check never looks before the last firing: activity that
+    // already fired the workflow cannot fire it again once the cooldown ends.
+    // A test in the editor looks at the whole window.
+    const windowStart = now.getTime() - lookbackMinutes * 60_000;
+    const from = new Date(manual || !(lastFiredAt > windowStart) ? windowStart : lastFiredAt);
+    if (from.getTime() >= now.getTime()) return null;
     const summary = await getActivitySummary(this, baseUrl, headers, from, now);
 
     let decision: Decision;
@@ -219,9 +224,17 @@ function userPrompt(condition: string, from: Date, to: Date, summary: IDataObjec
     "",
     `Activity from ${from.toISOString()} to ${to.toISOString()}:`,
     "<activity>",
-    JSON.stringify(clipTexts(summary)),
+    activityJson(summary),
     "</activity>",
   ].join("\n");
+}
+
+/**
+ * The activity as JSON with `<` and `>` written as JSON escapes: the same
+ * data for the AI, but no captured text can close the `<activity>` block.
+ */
+function activityJson(summary: IDataObject): string {
+  return JSON.stringify(clipTexts(summary)).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
 }
 
 /** Cuts every string in a JSON value to MAX_TEXT_LENGTH characters, to keep the prompt small. */
