@@ -6,7 +6,7 @@
 
 // Pieces shared by the Flows list and the Review Screen.
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { FlowsApiError, type FlowsApi, type FlowStatus } from "./api";
@@ -17,38 +17,96 @@ type Load<T> =
   | { state: "ready"; data: T }
   | { state: "error"; error: FlowsApiError };
 
+function asFlowsError(error: unknown): FlowsApiError {
+  return error instanceof FlowsApiError ? error : new FlowsApiError("unknown", String(error));
+}
+
 /**
  * Runs `load` on mount and whenever `key` changes; `reload` runs it again;
  * `replace` shows fresher data already in hand (e.g. the Flow an action
  * returned) without going back through "loading".
+ *
+ * While the window is visible it also re-reads in the background when the
+ * window gets the focus or becomes visible again, and every
+ * [`REFRESH_INTERVAL_MS`], so a new run, a chat change or an edit in n8n
+ * shows up on its own. A background read never goes through "loading" and
+ * keeps what is on screen when it fails or brings nothing new.
  */
 export function useFlowsLoad<T>(load: () => Promise<T>, key: string) {
   const [result, setResult] = useState<Load<T>>({ state: "loading" });
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let current = true;
-    setResult({ state: "loading" });
-    load().then(
-      (data) => current && setResult({ state: "ready", data }),
-      (error) =>
-        current &&
-        setResult({
-          state: "error",
-          error:
-            error instanceof FlowsApiError
-              ? error
-              : new FlowsApiError("unknown", String(error)),
-        }),
-    );
-    return () => {
-      current = false;
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  // Bumped by every read and by `replace`: an answer older than what is on
+  // screen is dropped (e.g. a read sent before a click on "Activer").
+  const latest = useRef(0);
+  // The read in flight; background reads wait for it instead of piling up.
+  const pending = useRef<number | null>(null);
+
+  const run = useCallback((mode: "foreground" | "background") => {
+    if (mode === "background" && pending.current !== null) return;
+    const mine = ++latest.current;
+    pending.current = mine;
+    if (mode === "foreground") setResult({ state: "loading" });
+    const settle = (next: (previous: Load<T>) => Load<T>) => {
+      if (pending.current === mine) pending.current = null;
+      if (mine === latest.current) setResult(next);
     };
-    // `load` is recreated every render; `key` and `attempt` say when to reload.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, attempt]);
-  const reload = useCallback(() => setAttempt((n) => n + 1), []);
-  const replace = useCallback((data: T) => setResult({ state: "ready", data }), []);
+    loadRef.current().then(
+      (data) =>
+        settle((previous) =>
+          previous.state === "ready" && sameData(previous.data, data)
+            ? previous
+            : { state: "ready", data },
+        ),
+      (error) =>
+        settle((previous) =>
+          mode === "background" && previous.state === "ready"
+            ? previous
+            : { state: "error", error: asFlowsError(error) },
+        ),
+    );
+  }, []);
+
+  useEffect(() => {
+    run("foreground");
+    return () => {
+      latest.current += 1;
+      pending.current = null;
+    };
+  }, [key, run]);
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") run("background");
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const timer = window.setInterval(refresh, REFRESH_INTERVAL_MS);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      window.clearInterval(timer);
+    };
+  }, [run]);
+
+  const reload = useCallback(() => run("foreground"), [run]);
+  const replace = useCallback((data: T) => {
+    latest.current += 1;
+    setResult({ state: "ready", data });
+  }, []);
   return [result, reload, replace] as const;
+}
+
+/** How often an open Flows screen re-reads n8n while the window is visible. */
+export const REFRESH_INTERVAL_MS = 15_000;
+
+/** Same content: keeps the rendered screen (and the graph) untouched. */
+function sameData<T>(a: T, b: T): boolean {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
 }
 
 /** Status square + label; phosphor marks a Flow that runs (docs/DESIGN.md). */
