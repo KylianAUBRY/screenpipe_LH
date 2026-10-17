@@ -25,6 +25,58 @@ function writeDraft(key: string, draft: Record<string, string>) {
     else sessionStorage.removeItem(key);
   } catch { /* Answering still works when storage is unavailable. */ }
 }
+/** Every task keeps the English, optional block. Creation mode (required answers) is part of the
+ * French Automation Flow demo, so it uses the French copy. */
+const COPY = {
+  en: {
+    section: "Questions and feedback",
+    title: "Help make this workflow accurate",
+    unavailable: "Answers are unavailable in this view.",
+    hint: "Answer what you know. Skip anything you’re unsure about, or talk through the questions.",
+    progress: (answered: number, total: number) => `${answered} of ${total} answered · All optional`,
+    startVoice: "Answer with voice", stopVoice: "Stop recording",
+    connecting: "Connecting microphone…", listening: "Listening", interrupted: "Recording interrupted", stopped: "Recording stopped",
+    level: "Microphone level", remaining: (time: string) => `${time} left`,
+    voiceHint: "Talk naturally. Answers and a summary update as you speak. Anything you edit by hand stays unchanged.",
+    updating: "Updating answers and summary…", byHand: "You can still answer by hand.", review: "Review your answers and summary below.", waiting: "Waiting for your words…",
+    liveTranscript: "Live transcript", originalTranscript: "Original transcript", retryVoice: "Retry filling from voice notes",
+    fillFailed: "Could not fill answers. Your words are kept. Try again.",
+    answered: "Answered", extra: EXTRA,
+    extraHint: "Add a missing step, an exception, or other feedback. When you speak, your summary appears here.",
+    extraPlaceholder: "Add any other feedback…", placeholder: "Your answer…",
+    clear: "Clear", fromVoice: "Filled from voice", summaryFromVoice: "Summary from voice",
+    undo: "Undo", undoLabel: (question: string) => `Undo voice answer: ${question}`,
+    saved: "Answers saved for the next workflow update.",
+    saveFailed: "Couldn’t save answers. Your draft is still here. Try again.",
+    savingStopsVoice: "Saving stops voice and keeps the answers shown here.",
+    footer: "Saved answers refine future workflow updates.",
+    save: "Save answers", saving: "Saving…",
+  },
+  fr: {
+    section: "Questions et remarques",
+    title: "Aidez ScreenPipe à bien comprendre cette tâche",
+    unavailable: "Les réponses ne sont pas disponibles dans cette vue.",
+    hint: "Répondez à chaque question pour créer l'automatisation, par écrit ou à voix haute.",
+    progress: (answered: number, total: number) => `Réponses : ${answered} sur ${total} · Obligatoires pour créer l'automatisation`,
+    startVoice: "Répondre à voix haute", stopVoice: "Arrêter l'enregistrement",
+    connecting: "Connexion au micro…", listening: "À l'écoute", interrupted: "Enregistrement interrompu", stopped: "Enregistrement arrêté",
+    level: "Niveau du micro", remaining: (time: string) => `${time} restantes`,
+    voiceHint: "Parlez naturellement. Les réponses et un résumé se remplissent pendant que vous parlez. Ce que vous modifiez à la main ne change pas.",
+    updating: "Mise à jour des réponses et du résumé…", byHand: "Vous pouvez toujours répondre par écrit.", review: "Vérifiez vos réponses et le résumé ci-dessous.", waiting: "En attente de vos paroles…",
+    liveTranscript: "Transcription en direct", originalTranscript: "Transcription d'origine", retryVoice: "Réessayer de remplir depuis la voix",
+    fillFailed: "Impossible de remplir les réponses. Vos paroles sont conservées. Réessayez.",
+    answered: "Répondu", extra: "Autre chose à savoir ?",
+    extraHint: "Ajoutez une étape manquante, une exception ou une autre remarque. Quand vous parlez, votre résumé apparaît ici.",
+    extraPlaceholder: "Autre remarque…", placeholder: "Votre réponse…",
+    clear: "Effacer", fromVoice: "Rempli à la voix", summaryFromVoice: "Résumé de la voix",
+    undo: "Annuler", undoLabel: (question: string) => `Annuler la réponse vocale : ${question}`,
+    saved: "Réponses enregistrées.",
+    saveFailed: "Impossible d'enregistrer les réponses. Votre brouillon est conservé. Réessayez.",
+    savingStopsVoice: "Enregistrer arrête la voix et garde les réponses affichées ici.",
+    footer: "Vos réponses restent ici si vous quittez la page.",
+    save: "Enregistrer les réponses", saving: "Enregistrement…",
+  },
+};
 export function WorkflowQuestions({ workflow, save, voice, active = true, createFlow }: {
   workflow: WorkflowMap;
   save?: (correction: string) => Promise<WorkflowMap>;
@@ -33,6 +85,8 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
   /** Present when the host can create an Automation Flow: every question becomes required. */
   createFlow?: (answers: WorkflowAnswer[]) => Promise<void>;
 }) {
+  const t = createFlow ? COPY.fr : COPY.en;
+  const copy = useRef(t); copy.current = t;
   const questions = [...new Set((workflow.openQuestions ?? []).map(q => q.trim()).filter(q => q && q !== EXTRA))];
   const fields = [...questions, EXTRA];
   const initial = () => Object.fromEntries(readWorkflowAnswers(workflow.userCorrection).map(a => [a.question, a.answer]));
@@ -92,7 +146,7 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
         });
         setVoiceFields(current => new Set([...current, ...patches.filter(p => !locked.current.has(p.question) && fieldsRef.current.includes(p.question) && p.quote.trim() && text.includes(p.quote)).map(p => p.question)]));
         setError("");
-      } catch (cause) { if (mounted) setError(cause instanceof Error ? cause.message : "Could not fill answers. Your words are kept. Try again."); }
+      } catch (cause) { if (mounted) setError(cause instanceof Error ? cause.message : copy.current.fillFailed); }
     }, value => { if (mounted) setFilling(value); });
     filler.current = fill;
     const connection = new QuestionnaireVoiceSession(voice, state => {
@@ -144,8 +198,8 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
     saving.current = true; setBusy(true); setError(""); setNotice("");
     try {
       await persist(save);
-      setNotice("Answers saved for the next workflow update.");
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Couldn’t save answers. Your draft is still here. Try again."); }
+      setNotice(t.saved);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : t.saveFailed); }
     finally { saving.current = false; setBusy(false); }
   }
   /** Saves the answers first, so the Flow is never created from answers that were not kept. */
@@ -160,40 +214,40 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
     finally { saving.current = false; setBusy(false); setCreating(false); }
   }
   if (!questions.length) return null;
-  const saveButton = <button type="submit" className={createFlow ? styles.secondary : undefined} disabled={!changed || busy}>{busy && !creating ? "Saving…" : "Save answers"}</button>;
-  return <section className={styles.questions} aria-label="Questions and feedback">
+  const saveButton = <button type="submit" className={createFlow ? styles.secondary : undefined} disabled={!changed || busy}>{busy && !creating ? t.saving : t.save}</button>;
+  return <section className={styles.questions} aria-label={t.section}>
     <div className={styles.heading}>
-      <div><h2>Help make this workflow accurate</h2><p className={styles.hint}>{!save ? "Answers are unavailable in this view." : createFlow ? "Answer every question to create the automation, or talk through the questions." : "Answer what you know. Skip anything you’re unsure about, or talk through the questions."}</p></div>
+      <div><h2>{t.title}</h2><p className={styles.hint}>{!save ? t.unavailable : t.hint}</p></div>
       {voice && save && <button type="button" className={styles.voiceButton} disabled={!active || busy || (!recording && filling)} onClick={toggleVoice}>
-        {recording ? <Square size={14} fill="currentColor" /> : <Mic size={16} />}{recording ? "Stop recording" : "Answer with voice"}
+        {recording ? <Square size={14} fill="currentColor" /> : <Mic size={16} />}{recording ? t.stopVoice : t.startVoice}
       </button>}
     </div>
-    <p className={styles.progress} role="status">{answered} of {questions.length} answered · {createFlow ? "Required to create the automation" : "All optional"}</p>
+    <p className={styles.progress} role="status">{t.progress(answered, questions.length)}</p>
     {(recording || transcript || voiceState.error) && <div className={styles.voicePanel}>
-      <div className={styles.voiceStatus}><span>{voiceState.status === "connecting" ? <Loader2 size={16} /> : <Mic size={16} />}{voiceState.status === "connecting" ? "Connecting microphone…" : recording ? "Listening" : voiceState.status === "error" ? "Recording interrupted" : "Recording stopped"}</span>
-        {recording && <span><meter aria-label="Microphone level" min={0} max={1} value={voiceState.level ?? 0} />{Math.floor(voiceState.remaining / 60)}:{String(voiceState.remaining % 60).padStart(2, "0")} left</span>}
+      <div className={styles.voiceStatus}><span>{voiceState.status === "connecting" ? <Loader2 size={16} /> : <Mic size={16} />}{voiceState.status === "connecting" ? t.connecting : recording ? t.listening : voiceState.status === "error" ? t.interrupted : t.stopped}</span>
+        {recording && <span><meter aria-label={t.level} min={0} max={1} value={voiceState.level ?? 0} />{t.remaining(`${Math.floor(voiceState.remaining / 60)}:${String(voiceState.remaining % 60).padStart(2, "0")}`)}</span>}
       </div>
-      <p className={styles.hint}>Talk naturally. Answers and a summary update as you speak. Anything you edit by hand stays unchanged.</p>
-      <p className={styles.progress} aria-live="polite">{filling ? "Updating answers and summary…" : voiceState.error ? "You can still answer by hand." : transcript ? "Review your answers and summary below." : "Waiting for your words…"}</p>
+      <p className={styles.hint}>{t.voiceHint}</p>
+      <p className={styles.progress} aria-live="polite">{filling ? t.updating : voiceState.error ? t.byHand : transcript ? t.review : t.waiting}</p>
       {voiceState.error && <p className={styles.error} role="alert">{voiceState.error}</p>}
-      {transcript && <details open={recording}><summary>{recording ? "Live transcript" : "Original transcript"}</summary><p className={styles.transcript}>{transcript}</p></details>}
-      {!recording && transcript && <button type="button" className={styles.textButton} disabled={filling || busy} onClick={() => filler.current?.enqueue(transcriptRef.current, true, true)}>Retry filling from voice notes</button>}
+      {transcript && <details open={recording}><summary>{recording ? t.liveTranscript : t.originalTranscript}</summary><p className={styles.transcript}>{transcript}</p></details>}
+      {!recording && transcript && <button type="button" className={styles.textButton} disabled={filling || busy} onClick={() => filler.current?.enqueue(transcriptRef.current, true, true)}>{t.retryVoice}</button>}
     </div>}
     <form onSubmit={e => { e.preventDefault(); void submit(); }}>
       {fields.map((question, index) => <div key={question} className={styles.field}>
-        <label htmlFor={`${id}-${index}`}><span className={styles.number}>{index < questions.length ? String(index + 1).padStart(2, "0") : ""}</span><span>{question}</span>{answers[question]?.trim() && <Check size={16} aria-label="Answered" />}</label>
+        <label htmlFor={`${id}-${index}`}><span className={styles.number}>{index < questions.length ? String(index + 1).padStart(2, "0") : ""}</span><span>{question === EXTRA ? t.extra : question}</span>{answers[question]?.trim() && <Check size={16} aria-label={t.answered} />}</label>
         <div className={styles.answer}>
-          {question === EXTRA && <p className={styles.hint}>Add a missing step, an exception, or other feedback. When you speak, your summary appears here.</p>}
-          <textarea id={`${id}-${index}`} aria-label={question} rows={question === EXTRA ? 3 : 2} maxLength={4000} value={answers[question] ?? ""} placeholder={question === EXTRA ? "Add any other feedback…" : "Your answer…"} disabled={!save || busy} onChange={e => manual(question, e.target.value)} />
+          {question === EXTRA && <p className={styles.hint}>{t.extraHint}</p>}
+          <textarea id={`${id}-${index}`} aria-label={question === EXTRA ? t.extra : question} rows={question === EXTRA ? 3 : 2} maxLength={4000} value={answers[question] ?? ""} placeholder={question === EXTRA ? t.extraPlaceholder : t.placeholder} disabled={!save || busy} onChange={e => manual(question, e.target.value)} />
           <div className={styles.fieldActions}>
             {question !== EXTRA && !createFlow && <label><input type="checkbox" checked={answers[question] === "Not sure"} disabled={!save || busy} onChange={e => manual(question, e.target.checked ? "Not sure" : "")} />Not sure</label>}
-            {answers[question]?.trim() && <button type="button" disabled={!save || busy} onClick={() => manual(question, "")}>Clear</button>}
-            {voiceFields.has(question) && <span><Mic size={12} />{question === EXTRA ? "Summary from voice" : "Filled from voice"}<button type="button" disabled={busy} aria-label={`Undo voice answer: ${question}`} onClick={() => manual(question, beforeVoice.current[question] ?? "")}><Undo2 size={12} />Undo</button></span>}
+            {answers[question]?.trim() && <button type="button" disabled={!save || busy} onClick={() => manual(question, "")}>{t.clear}</button>}
+            {voiceFields.has(question) && <span><Mic size={12} />{question === EXTRA ? t.summaryFromVoice : t.fromVoice}<button type="button" disabled={busy} aria-label={t.undoLabel(question === EXTRA ? t.extra : question)} onClick={() => manual(question, beforeVoice.current[question] ?? "")}><Undo2 size={12} />{t.undo}</button></span>}
           </div>
         </div>
       </div>)}
       {error && <p className={styles.error} role="alert">{error}</p>}
-      {save && <div className={styles.actions}><span role="status">{notice || (recording || filling ? "Saving stops voice and keeps the answers shown here." : "Saved answers refine future workflow updates.")}</span>{createFlow ? <div className={styles.actionButtons}>{saveButton}<button type="button" disabled={!complete || busy} onClick={() => void create()}>{creating ? "Création…" : "Créer l'automatisation"}</button></div> : saveButton}</div>}
+      {save && <div className={styles.actions}><span role="status">{notice || (recording || filling ? t.savingStopsVoice : t.footer)}</span>{createFlow ? <div className={styles.actionButtons}>{saveButton}<button type="button" disabled={!complete || busy} onClick={() => void create()}>{creating ? "Création…" : "Créer l'automatisation"}</button></div> : saveButton}</div>}
     </form>
   </section>;
 }

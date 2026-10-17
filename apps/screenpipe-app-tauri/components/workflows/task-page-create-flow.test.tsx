@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import React from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { serializeWorkflowData, WorkflowsApp, type WorkflowsPlatform } from "@screenpipe/workflows-ui";
 import { createFixtureWorkflowsPlatform } from "@screenpipe/workflows-ui/fixture";
@@ -53,7 +53,9 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     const createAutomationFlow = vi.fn(async () => {});
     await openTaskPage({ createAutomationFlow, canCreateAutomationFlow: id => id === DEMO_TASK_ID }, "wf-other-task");
     expect(screen.queryByRole("button", { name: CREATE })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Help make this workflow accurate" })).toBeVisible();
     expect(screen.getByText("0 of 2 answered · All optional")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save answers" })).toBeDisabled();
     expect(screen.getAllByRole("checkbox", { name: "Not sure" })).toHaveLength(2);
     expect(createAutomationFlow).not.toHaveBeenCalled();
   });
@@ -66,8 +68,22 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
 
   it("marks the questions as required when the host can create Flows", async () => {
     await openTaskPage({ createAutomationFlow: vi.fn(async () => {}) });
-    expect(screen.getByText("0 of 2 answered · Required to create the automation")).toBeVisible();
+    expect(screen.getByText("Réponses : 0 sur 2 · Obligatoires pour créer l'automatisation")).toBeVisible();
     expect(screen.queryByRole("checkbox", { name: "Not sure" })).toBeNull();
+  });
+
+  it("shows the question block in French, like the rest of the demo flow", async () => {
+    await openTaskPage({ createAutomationFlow: vi.fn(async () => {}), canCreateAutomationFlow: id => id === DEMO_TASK_ID });
+    const block = within(screen.getByRole("region", { name: "Questions et remarques" }));
+    expect(block.getByRole("heading", { name: "Aidez ScreenPipe à bien comprendre cette tâche" })).toBeVisible();
+    expect(block.getByRole("button", { name: "Répondre à voix haute" })).toBeVisible();
+    expect(block.getByRole("textbox", { name: "Autre chose à savoir ?" })).toHaveAttribute("placeholder", "Autre remarque…");
+    expect(block.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] })).toHaveAttribute("placeholder", "Votre réponse…");
+    expect(block.getByRole("button", { name: "Enregistrer les réponses" })).toBeDisabled();
+    answer(CLARIFICATION_QUESTIONS[0], "Oui, en Tâche.");
+    expect(block.getByRole("button", { name: "Effacer" })).toBeVisible();
+    expect(block.getByLabelText("Répondu")).toBeVisible();
+    expect(block.queryByText(/answered|Save answers|Anything else|Your answer|Clear/)).toBeNull();
   });
 
   it("saves the answers, then asks the host once to create the Flow from the task", async () => {
