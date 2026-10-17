@@ -81,7 +81,7 @@ type Flow = FlowSummary & {
   edges: { from: string; to: string }[];   // from n8n `connections`, by node id
   versionId: string;
   reviewedVersionId: string | null;
-  reviewOutdated: boolean;    // active and versionId !== reviewedVersionId (edited in n8n)
+  reviewOutdated: boolean;    // active and versionId !== activeVersionId (edited in n8n after publishing, D7)
   activationLog: { at: string; event: "activated" | "deactivated" | "paused_for_edit" | "modified"; versionId: string; by: "user" | "chat" }[];
 };
 ```
@@ -107,8 +107,10 @@ Errors: `412 {error: "n8n_not_configured"}`, `502 {error: "n8n_unreachable"}`,
 a chat change that cannot be applied. Storage: one JSON file in the ScreenPipe
 data dir, keyed by n8n workflow id.
 
-Fixture: `crates/screenpipe-engine/assets/automation-flows/` holds the n8n
-workflow JSON (with node `notes`) and its review JSON (summary). The workflow
+Fixture: `infra/automation-flows/workflows/` holds the n8n workflow JSON
+(with node `notes`) and its review JSON (summary); the engine embeds both at
+build time (`include_str!` in `automation_flows.rs`), and
+`infra/automation-flows/import-workflow.sh` imports the same file. The workflow
 JSON is exported from the demo n8n instance after its credentials are bound
 once, so it carries that instance's credential ids (ids are not secrets).
 
