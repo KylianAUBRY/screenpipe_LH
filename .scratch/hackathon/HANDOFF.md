@@ -35,8 +35,9 @@ Read this first, then `AGENTS.md` (Hackathon mode), `CONTEXT.md`, `SPEC.md`,
 | 12 | Demo assembly + rehearsal | todo, unblocked (needs the human live checks) |
 | 13 | AI proxy returns OpenAI-shaped tool calls | merged; live check pending human |
 | — | Prompt-injection hardening of the demo workflow | merged |
+| 14 | Server-enforced user-only activation (security review finding) | todo, ready-for-agent |
 
-Remaining implement-spec steps: 12 (needs the human live checks), then `/code-review` on
+Remaining implement-spec steps: 14 (security), 12 (needs the human live checks), then `/code-review` on
 the integration branch, fix findings in one implementer, set every ticket's
 `Status:` to done, clean up implementer worktrees.
 
