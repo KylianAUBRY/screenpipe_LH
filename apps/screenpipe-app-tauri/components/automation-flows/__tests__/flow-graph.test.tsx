@@ -20,6 +20,7 @@ function fakeApi(flow: Flow = fixtureFlow): FlowsApi {
     openInN8n: vi.fn(async () => {}),
     openTaskPage: vi.fn(async () => {}),
     openN8nConnection: vi.fn(async () => {}),
+    activity: vi.fn(async () => []),
   };
 }
 

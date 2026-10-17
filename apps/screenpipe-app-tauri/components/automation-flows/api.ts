@@ -76,6 +76,32 @@ export type Flow = FlowSummary & {
   activationLog: ActivationEvent[];
 };
 
+/**
+ * What became of one handled item (an email) of a Run (ticket 28):
+ * `unknown` when the Run left no outcome for it, never read as a success.
+ */
+export type ActivityOutcome =
+  | "ticket_created"
+  | "already_exists"
+  | "ignored"
+  | "abstained"
+  | "failed"
+  | "unknown";
+
+/** One line of a Flow's Activity; never the email body or an error message. */
+export type ActivityItem = {
+  runId: string;
+  startedAt: string | null;
+  from: string | null;
+  subject: string | null;
+  outcome: ActivityOutcome;
+  ticketKey: string | null;
+  /** The AI's reason for its decision, one line, cut. */
+  reason: string | null;
+  /** The step a failed Run stopped on. */
+  failedStep: string | null;
+};
+
 export type FlowsErrorCode =
   | "n8n_not_configured"
   /** n8n answered but refused the API key of Connections → n8n. */
@@ -166,6 +192,10 @@ export const flowsApi = {
 
   get: (id: string) =>
     request<Flow>(`/automation-flows/${encodeURIComponent(id)}`),
+
+  /** The Flow's Activity: its recent Runs' items, newest Run first. */
+  activity: (id: string) =>
+    request<ActivityItem[]>(`/automation-flows/${encodeURIComponent(id)}/activity`),
 
   createFromTask: (taskId: string, answers: unknown) =>
     request<Flow>("/automation-flows/from-task", {
