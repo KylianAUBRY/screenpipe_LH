@@ -322,6 +322,8 @@ pub struct SCServer {
     /// default, e.g. the CLI) refuses every activation. The desktop app sets
     /// the key it hands to its webview. See `automation_flows::FlowActivationKey`.
     pub flow_activation_key: Option<crate::automation_flows::FlowActivationKey>,
+    /// How long switching a Flow off waits for an execution n8n is running.
+    pub flow_running_wait: crate::automation_flows::RunningWait,
 }
 
 fn should_advertise_mdns(addr: SocketAddr) -> bool {
@@ -423,6 +425,7 @@ impl SCServer {
             timeline_disabled: false,
             advertise_mdns: should_advertise_mdns(addr),
             flow_activation_key: None,
+            flow_running_wait: Default::default(),
         }
     }
 
@@ -1491,6 +1494,8 @@ impl SCServer {
                 self.screenpipe_dir.clone(),
                 self.secret_store.clone(),
                 self.flow_activation_key.clone(),
+                self.workflow_catalog_dir.clone(),
+                self.flow_running_wait,
             ),
         );
 

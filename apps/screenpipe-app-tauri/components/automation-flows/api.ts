@@ -42,7 +42,8 @@ export type ActivationEvent = {
   at: string;
   event: "activated" | "deactivated" | "paused_for_edit" | "modified";
   versionId: string;
-  by: "user" | "chat";
+  /** "api": switched off by a local caller other than the Review Screen. */
+  by: "user" | "chat" | "api";
 };
 
 /** A recorded moment: a recorder frame, or a time alone (`frameId: null`). */
@@ -70,6 +71,10 @@ export type FlowsErrorCode =
   /** n8n answered but refused the API key of Connections → n8n. */
   | "n8n_unauthorized"
   | "n8n_unreachable"
+  /** n8n answered with another error (detail carries its message). */
+  | "n8n_failed"
+  /** Switching off (Désactiver, a chat change): n8n is still processing an email; retry in a moment. */
+  | "flow_running"
   | "not_found"
   /** Activation: the n8n workflow changed since the user loaded it. */
   | "version_changed"
@@ -83,6 +88,8 @@ const SERVER_CODES: readonly FlowsErrorCode[] = [
   "n8n_not_configured",
   "n8n_unauthorized",
   "n8n_unreachable",
+  "n8n_failed",
+  "flow_running",
   "version_changed",
   "activation_failed",
   "activation_requires_user",
@@ -106,6 +113,12 @@ async function activationKey(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** A click on the Review Screen: JSON, with the UI credential when there is one. */
+async function clickHeaders(): Promise<Record<string, string>> {
+  const key = await activationKey();
+  return key ? { ...JSON_HEADERS, [ACTIVATION_HEADER]: key } : JSON_HEADERS;
 }
 
 export class FlowsApiError extends Error {
@@ -157,20 +170,25 @@ export const flowsApi = {
    * engine refuses it without the UI credential.
    */
   async activate(id: string, versionId: string) {
-    const key = await activationKey();
     return request<Flow>(`/automation-flows/${encodeURIComponent(id)}/activate`, {
       method: "POST",
-      headers: key ? { ...JSON_HEADERS, [ACTIVATION_HEADER]: key } : JSON_HEADERS,
+      headers: await clickHeaders(),
       body: JSON.stringify({ versionId }),
     });
   },
 
-  deactivate: (id: string) =>
-    request<Flow>(`/automation-flows/${encodeURIComponent(id)}/deactivate`, {
+  /**
+   * Switching off is open to any local caller; the UI credential only makes
+   * the history say it was the user (`by: "user"`, otherwise `"api"`). May
+   * answer `flow_running` while n8n processes an email: retry in a moment.
+   */
+  async deactivate(id: string) {
+    return request<Flow>(`/automation-flows/${encodeURIComponent(id)}/deactivate`, {
       method: "POST",
-      headers: JSON_HEADERS,
+      headers: await clickHeaders(),
       body: "{}",
-    }),
+    });
+  },
 
   /** "Voir le graphe": the workflow in the n8n editor. */
   async openInN8n(url: string) {

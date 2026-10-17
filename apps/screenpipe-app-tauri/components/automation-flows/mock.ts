@@ -55,12 +55,17 @@ function switchMockFlow(
       };
     }
   } else if (mockFlow.status === "active") {
+    // Like the engine: the user's click only with the UI credential.
+    const by =
+      headers.get("x-screenpipe-flow-activation") === BROWSER_MOCK_FLOW_ACTIVATION_KEY
+        ? "user"
+        : "api";
     mockFlow = {
       ...mockFlow,
       status: "paused",
       activationLog: [
         ...mockFlow.activationLog,
-        { at, event: "deactivated", versionId: mockFlow.versionId, by: "user" },
+        { at, event: "deactivated", versionId: mockFlow.versionId, by },
       ],
     };
   }

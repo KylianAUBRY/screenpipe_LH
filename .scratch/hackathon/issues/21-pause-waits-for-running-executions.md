@@ -21,8 +21,34 @@ unchanged.
 
 **Blocked by:** None.
 
-**Status:** ready-for-agent
+**Status:** done on `hackathon/ticket-22` (with ticket 22; tests only, live check pending)
 
-- [ ] Engine tests (fake n8n): a running execution that finishes → the change/deactivation waits, then unpublishes; one still running at the deadline → 409 `flow_running`, no unpublish, no history entry; none running → immediate as today.
-- [ ] Review Screen « Désactiver » and the chat show the `flow_running` message; skill updated.
+- [x] Engine tests (fake n8n): a running execution that finishes → the change/deactivation waits, then unpublishes; one still running at the deadline → 409 `flow_running`, no unpublish, no history entry; none running → immediate as today.
+  `switching_off_waits_for_the_email_being_processed` (Désactiver and a chat change of an active
+  Flow; the fake n8n records any execution still running at unpublish as orphaned: none),
+  `a_flow_still_processing_at_the_deadline_is_left_running_with_409` (no n8n write, still active,
+  history unchanged), `switching_off_an_idle_flow_asks_n8n_once` (one poll, then unpublish).
+- [x] Review Screen « Désactiver » and the chat show the `flow_running` message; skill updated.
+  `flows-tab.test.tsx`: « Désactivation impossible » + « n8n traite encore un e-mail avec ce Flow :
+  rien n'a changé. Réessayez dans un instant. ». Skill: `409 flow_running` → wait a minute, send the
+  same request once more, then tell the user.
 - [ ] Live (orchestrator): bug email, then the chat change while it is processed → the ticket is created, then the Flow is paused.
+
+## What was built
+
+- `RunningWait {interval, deadline}` (default 1 s / 90 s), a public `SCServer.flow_running_wait`
+  passed to the Flow router; tests use 10 ms / 300 ms.
+- `N8nApi::unpublish` polls `GET /executions?workflowId=<id>&status=running&limit=1` and unpublishes
+  once nothing runs; at the deadline it answers `409 {error: "flow_running", detail}` and changes
+  nothing. Every unpublish goes through it: `POST /:id/deactivate`, `PUT /:id` of an active Flow
+  (after the edit is validated, before anything changes), and `from-task`'s pre-imported copy left
+  on. The write lock is held while waiting, so a second click waits and then sees the Flow off.
+- Commands and results: see ticket 22 (same branch, same runs).
+
+## Notes
+
+- The poll and the unpublish are two calls: an execution n8n starts in between (an email arriving
+  in that instant) can still be cut. The 90 s bound means a Review Screen click can take that long
+  with no progress indicator beyond the disabled buttons.
+- An executions call that fails (non-2xx) fails the switch-off (`n8n_failed`) rather than
+  unpublishing blind.
