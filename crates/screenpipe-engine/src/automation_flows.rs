@@ -22,6 +22,13 @@
 //! and never switches it on: the Flow then needs review. Switching a Flow off
 //! waits for the execution n8n is running ([`RunningWait`]), so the email it
 //! processes is never lost. The chat never wires n8n credentials.
+//!
+//! Failed Runs (SPEC D16): every Flow the service creates, imports or updates
+//! names ScreenPipe's one n8n error workflow (tagged [`ERRORS_TAG`], never a
+//! Flow). n8n runs it when a Run stops on an error; it calls
+//! `POST /failed-runs`, which notifies the user once through the desktop
+//! app's `/notify`. A Flow shows its Failed Run (`failedRun`) until a later
+//! Run succeeds. Nothing is switched off on failure.
 
 use crate::atomic_file;
 use crate::routes::workflows::{read_catalog, workflow_id as task_id_of, WorkflowCatalogSource};
@@ -46,8 +53,19 @@ use tokio::sync::Mutex;
 
 /// n8n tag that marks a workflow as a ScreenPipe Automation Flow.
 pub const FLOW_TAG: &str = "screenpipe-flow";
+/// n8n tag of ScreenPipe's error workflow: one per n8n instance, never a Flow.
+pub const ERRORS_TAG: &str = "screenpipe-flow-errors";
+/// The desktop app's notification route (`POST /notify`).
+pub const DEFAULT_NOTIFY_URL: &str = "http://localhost:11435/notify";
 const STORE_FILE: &str = "automation-flows.json";
 const STICKY_NOTE: &str = "n8n-nodes-base.stickyNote";
+
+/// The n8n error workflow (SPEC D16, ticket 24): n8n runs it when a Run of a
+/// Flow stops on an error, and it hands the Run's ids to `POST /failed-runs`.
+/// Installed once, switched off (an Error Trigger needs no activation), and
+/// named in every Flow's `settings.errorWorkflow`.
+const ERROR_WORKFLOW: &str =
+    include_str!("../../../infra/automation-flows/workflows/screenpipe-flow-errors.json");
 
 /// Demo contract: a Detected Task maps to a pre-built n8n workflow and its
 /// pre-written review material. The answers are stored but do not change it.
@@ -199,6 +217,8 @@ struct FlowsState {
     /// a task was first seen.
     workflow_catalog: WorkflowCatalogSource,
     running_wait: RunningWait,
+    /// Where a Failed Run is notified (the desktop app's `/notify`).
+    notify_url: Option<String>,
     http: reqwest::Client,
     /// Serializes store writes and imports so a double click on "create"
     /// cannot import the same task twice.
@@ -211,6 +231,7 @@ pub fn router<S>(
     activation_key: Option<FlowActivationKey>,
     workflow_catalog_dir: Option<PathBuf>,
     running_wait: RunningWait,
+    notify_url: Option<String>,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -226,12 +247,14 @@ where
         activation_key,
         workflow_catalog: WorkflowCatalogSource(workflow_catalog_dir),
         running_wait,
+        notify_url,
         http,
         write_lock: Arc::new(Mutex::new(())),
     };
     Router::new()
         .route("/", get(list_flows).post(create_flow))
         .route("/from-task", post(create_from_task))
+        .route("/failed-runs", post(failed_run))
         .route("/:id", get(get_flow).put(update_flow))
         .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
@@ -268,6 +291,15 @@ struct LastExecution {
     started_at: String,
 }
 
+/// The latest finished Run of a Flow, when it failed (SPEC D16): the Flow
+/// shows red until a later Run succeeds.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FailedRun {
+    execution_id: String,
+    started_at: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FlowSummary {
@@ -275,6 +307,7 @@ struct FlowSummary {
     name: String,
     status: &'static str,
     last_execution: Option<LastExecution>,
+    failed_run: Option<FailedRun>,
 }
 
 #[derive(Debug, Serialize)]
@@ -284,6 +317,7 @@ struct Flow {
     name: String,
     status: &'static str,
     last_execution: Option<LastExecution>,
+    failed_run: Option<FailedRun>,
     n8n_url: String,
     source_task_id: Option<String>,
     /// Where the source Detected Task was first seen, for « Voir dans la
@@ -392,6 +426,10 @@ enum FlowError {
     VersionRequired,
     /// A state-changing request that is not `Content-Type: application/json`.
     JsonRequired,
+    /// A Failed Run report naming an execution n8n does not have.
+    RunNotFound,
+    /// The desktop app's notification route did not take the notification.
+    NotifyFailed(String),
 }
 
 impl IntoResponse for FlowError {
@@ -414,6 +452,11 @@ impl IntoResponse for FlowError {
                 json!({"error": "n8n_failed", "detail": detail}),
             ),
             FlowError::TaskNotFound => (StatusCode::NOT_FOUND, json!({"error": "task_not_found"})),
+            FlowError::RunNotFound => (StatusCode::NOT_FOUND, json!({"error": "run_not_found"})),
+            FlowError::NotifyFailed(detail) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error": "notify_failed", "detail": detail}),
+            ),
             FlowError::FlowNotFound => (StatusCode::NOT_FOUND, json!({"error": "flow_not_found"})),
             FlowError::VersionChanged => {
                 (StatusCode::CONFLICT, json!({"error": "version_changed"}))
@@ -568,12 +611,12 @@ impl N8nApi {
         }
     }
 
-    async fn tag_id(&self) -> Result<String, FlowError> {
-        if let Some(id) = self.find_tag().await? {
+    async fn tag_id(&self, name: &str) -> Result<String, FlowError> {
+        if let Some(id) = self.find_tag(name).await? {
             return Ok(id);
         }
         let (status, value) = self
-            .send(Method::POST, "/tags", &[], Some(&json!({"name": FLOW_TAG})))
+            .send(Method::POST, "/tags", &[], Some(&json!({"name": name})))
             .await?;
         match status {
             200..=299 => value["id"]
@@ -582,24 +625,29 @@ impl N8nApi {
                 .ok_or_else(|| FlowError::N8nFailed("n8n returned a tag without id".into())),
             // Created concurrently by someone else: read it back.
             409 => self
-                .find_tag()
+                .find_tag(name)
                 .await?
                 .ok_or_else(|| upstream_error(status, &value)),
             _ => Err(upstream_error(status, &value)),
         }
     }
 
-    async fn find_tag(&self) -> Result<Option<String>, FlowError> {
+    async fn find_tag(&self, name: &str) -> Result<Option<String>, FlowError> {
         let tags = self.all_pages("/tags", &[("limit", "250")]).await?;
         Ok(tags
             .iter()
-            .find(|tag| tag["name"] == FLOW_TAG)
+            .find(|tag| tag["name"] == name)
             .and_then(|tag| tag["id"].as_str().map(str::to_string)))
     }
 
     /// Adds [`FLOW_TAG`] to the workflow's tags and returns it re-read.
     async fn ensure_tagged(&self, workflow: Value) -> Result<Value, FlowError> {
-        if has_flow_tag(&workflow) {
+        self.ensure_tag(workflow, FLOW_TAG).await
+    }
+
+    /// Adds tag `name` to the workflow's tags and returns it re-read.
+    async fn ensure_tag(&self, workflow: Value, name: &str) -> Result<Value, FlowError> {
+        if has_tag(&workflow, name) {
             return Ok(workflow);
         }
         let id = workflow_id(&workflow)?;
@@ -609,7 +657,7 @@ impl N8nApi {
             .flatten()
             .filter_map(|tag| tag["id"].as_str().map(|id| json!({"id": id})))
             .collect();
-        tags.push(json!({"id": self.tag_id().await?}));
+        tags.push(json!({"id": self.tag_id(name).await?}));
         self.expect_ok(
             Method::PUT,
             &format!("/workflows/{id}/tags"),
@@ -620,12 +668,15 @@ impl N8nApi {
         self.workflow(&id).await?.ok_or(FlowError::FlowNotFound)
     }
 
-    async fn last_execution(&self, workflow_id: &str) -> Option<LastExecution> {
+    /// The Flow's last Run and, when the latest finished Run failed, that
+    /// Failed Run: it stays until a later Run succeeds (SPEC D16). Read from
+    /// n8n's recent executions, newest first.
+    async fn runs(&self, workflow_id: &str) -> Runs {
         let page = match self
             .expect_ok(
                 Method::GET,
                 "/executions",
-                &[("workflowId", workflow_id), ("limit", "1")],
+                &[("workflowId", workflow_id), ("limit", RECENT_RUNS)],
                 None,
             )
             .await
@@ -633,22 +684,30 @@ impl N8nApi {
             Ok(page) => page,
             Err(e) => {
                 tracing::warn!("automation flows: last execution of {workflow_id}: {e:?}");
-                return None;
+                return Runs::default();
             }
         };
-        let execution = page["data"].as_array()?.first()?;
-        let status = match execution["status"].as_str() {
-            Some("success") => "success",
-            Some("running" | "new" | "waiting") => "running",
-            Some(_) => "error",
-            None if execution["finished"] == true => "success",
-            None if execution["stoppedAt"].is_null() => "running",
-            None => "error",
-        };
-        Some(LastExecution {
-            status,
-            started_at: execution["startedAt"].as_str()?.to_string(),
-        })
+        let executions = page["data"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let last = executions.first().and_then(|execution| {
+            Some(LastExecution {
+                status: run_status(execution),
+                started_at: execution["startedAt"].as_str()?.to_string(),
+            })
+        });
+        // Running, waiting or canceled Runs neither clear nor set it.
+        let failed = executions
+            .iter()
+            .find(|execution| {
+                matches!(execution["status"].as_str(), Some("success" | "error" | "crashed"))
+            })
+            .filter(|execution| execution["status"] != "success")
+            .and_then(|execution| {
+                Some(FailedRun {
+                    execution_id: execution_id(execution)?,
+                    started_at: execution["startedAt"].as_str()?.to_string(),
+                })
+            });
+        Runs { last, failed }
     }
 
     /// Switches a workflow on (`publish`) or off (`unpublish`), n8n 2.x
@@ -718,6 +777,111 @@ impl N8nApi {
     fn editor_url(&self, workflow_id: &str) -> String {
         format!("{}/workflow/{workflow_id}", self.base)
     }
+
+    /// The id of ScreenPipe's error workflow, installed from the bundled file
+    /// (switched off, tagged [`ERRORS_TAG`]) when n8n has none. Callers hold
+    /// the write lock, so it is installed once.
+    async fn error_workflow_id(&self) -> Result<String, FlowError> {
+        let installed = self
+            .all_pages("/workflows", &[("tags", ERRORS_TAG), ("limit", "250")])
+            .await?;
+        if let Some(id) = installed
+            .iter()
+            .filter(|w| has_tag(w, ERRORS_TAG) && w["isArchived"] != true)
+            .find_map(|w| w["id"].as_str())
+        {
+            return Ok(id.to_string());
+        }
+        let bundled: Value = serde_json::from_str(ERROR_WORKFLOW)
+            .map_err(|e| FlowError::Internal(format!("bundled error workflow: {e}")))?;
+        let created = self
+            .expect_ok(Method::POST, "/workflows", &[], Some(&importable(&bundled)))
+            .await?;
+        let tagged = self.ensure_tag(created, ERRORS_TAG).await?;
+        workflow_id(&tagged)
+    }
+
+    /// The error workflow every Flow names, or `None` when it cannot be
+    /// installed: the Flow is still created or updated (it only misses the
+    /// Failed Run notification) and the next create or update retries.
+    async fn error_workflow(&self) -> Option<String> {
+        match self.error_workflow_id().await {
+            Ok(id) => Some(id),
+            Err(e) => {
+                tracing::warn!("automation flows: cannot install the error workflow: {e:?}");
+                None
+            }
+        }
+    }
+
+    /// Names the error workflow in an inactive workflow n8n already holds
+    /// (the import script's copy), unless it already does. Returns the
+    /// workflow as n8n now holds it.
+    async fn attach_error_workflow(&self, workflow: Value) -> Result<Value, FlowError> {
+        let Some(errors) = self.error_workflow().await else {
+            return Ok(workflow);
+        };
+        if workflow["settings"]["errorWorkflow"] == errors.as_str() {
+            return Ok(workflow);
+        }
+        let id = workflow_id(&workflow)?;
+        let mut body = importable(&workflow);
+        with_error_workflow(&mut body, Some(&errors));
+        let updated = self
+            .expect_ok(
+                Method::PUT,
+                &format!("/workflows/{id}"),
+                &[("publishIfActive", "false")],
+                Some(&body),
+            )
+            .await?;
+        Ok(self.workflow(&id).await?.unwrap_or(updated))
+    }
+}
+
+/// Sets (or, without one, removes) the Flow's error workflow in an n8n
+/// request body: whatever the chat or a file asked for, only ScreenPipe's.
+fn with_error_workflow(body: &mut Value, errors: Option<&str>) {
+    if !body["settings"].is_object() {
+        body["settings"] = json!({});
+    }
+    let Some(settings) = body["settings"].as_object_mut() else {
+        return;
+    };
+    match errors {
+        Some(id) => settings.insert("errorWorkflow".into(), json!(id)),
+        None => settings.remove("errorWorkflow"),
+    };
+}
+
+/// How many recent executions are read to find the Failed Run.
+const RECENT_RUNS: &str = "20";
+
+#[derive(Default)]
+struct Runs {
+    last: Option<LastExecution>,
+    failed: Option<FailedRun>,
+}
+
+fn run_status(execution: &Value) -> &'static str {
+    match execution["status"].as_str() {
+        Some("success") => "success",
+        Some("running" | "new" | "waiting") => "running",
+        Some(_) => "error",
+        None if execution["finished"] == true => "success",
+        None if execution["stoppedAt"].is_null() => "running",
+        None => "error",
+    }
+}
+
+/// n8n's public API gives execution ids as numbers, its Error Trigger as
+/// strings.
+fn execution_id(execution: &Value) -> Option<String> {
+    match &execution["id"] {
+        Value::String(id) => Some(id.clone()),
+        Value::Number(id) => Some(id.to_string()),
+        _ => None,
+    }
 }
 
 /// n8n answered, but not with success: not a reachability problem.
@@ -741,9 +905,13 @@ fn workflow_id(workflow: &Value) -> Result<String, FlowError> {
 }
 
 fn has_flow_tag(workflow: &Value) -> bool {
+    has_tag(workflow, FLOW_TAG)
+}
+
+fn has_tag(workflow: &Value, name: &str) -> bool {
     workflow["tags"]
         .as_array()
-        .is_some_and(|tags| tags.iter().any(|tag| tag["name"] == FLOW_TAG))
+        .is_some_and(|tags| tags.iter().any(|tag| tag["name"] == name))
 }
 
 /// n8n workflow ids are short alphanumeric strings; anything else would be
@@ -859,7 +1027,13 @@ fn creation_problem(request: &CreateRequest) -> Option<String> {
 struct FlowStore {
     #[serde(default)]
     flows: BTreeMap<String, FlowRecord>,
+    /// n8n execution ids of the Failed Runs already notified, oldest first
+    /// (at most [`NOTIFIED_RUNS_KEPT`]): each Failed Run is notified once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    notified_failed_runs: Vec<String>,
 }
+
+const NOTIFIED_RUNS_KEPT: usize = 500;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1070,16 +1244,13 @@ fn running_version(workflow: &Value) -> String {
         .to_string()
 }
 
-fn flow_summary(
-    workflow: &Value,
-    record: Option<&FlowRecord>,
-    last_execution: Option<LastExecution>,
-) -> FlowSummary {
+fn flow_summary(workflow: &Value, record: Option<&FlowRecord>, runs: Runs) -> FlowSummary {
     FlowSummary {
         id: workflow["id"].as_str().unwrap_or_default().to_string(),
         name: workflow["name"].as_str().unwrap_or_default().to_string(),
         status: derive_status(workflow, record),
-        last_execution,
+        last_execution: runs.last,
+        failed_run: runs.failed,
     }
 }
 
@@ -1129,8 +1300,7 @@ async fn build_flow(
     let head = flow_summary(
         workflow,
         record,
-        api.last_execution(workflow["id"].as_str().unwrap_or_default())
-            .await,
+        api.runs(workflow["id"].as_str().unwrap_or_default()).await,
     );
     let (nodes, edges) = review_graph(workflow);
     let version_id = workflow["versionId"]
@@ -1155,6 +1325,7 @@ async fn build_flow(
         name: head.name,
         status: head.status,
         last_execution: head.last_execution,
+        failed_run: head.failed_run,
         source_task_id,
         source_moment,
         summary: record.map(|r| r.summary.clone()).unwrap_or_default(),
@@ -1182,8 +1353,8 @@ async fn list_flows(State(state): State<FlowsState>) -> Result<Json<Vec<FlowSumm
             continue;
         }
         let id = workflow["id"].as_str().unwrap_or_default();
-        let last_execution = api.last_execution(id).await;
-        flows.push(flow_summary(workflow, store.flows.get(id), last_execution));
+        let runs = api.runs(id).await;
+        flows.push(flow_summary(workflow, store.flows.get(id), runs));
     }
     Ok(Json(flows))
 }
@@ -1357,6 +1528,7 @@ async fn update_flow(
         body["name"] = current["name"].clone();
     }
     keep_user_credentials(&mut body, Some(&current));
+    with_error_workflow(&mut body, api.error_workflow().await.as_deref());
 
     if current["active"] == true {
         let running = running_version(&current);
@@ -1424,6 +1596,7 @@ async fn create_flow(
     // `importable` drops `active` and `tags`: n8n imports it switched off.
     let mut body = importable(&request.workflow);
     keep_user_credentials(&mut body, None);
+    with_error_workflow(&mut body, api.error_workflow().await.as_deref());
     let (status, created) = api
         .send(Method::POST, "/workflows", &[], Some(&body))
         .await?;
@@ -1529,17 +1702,17 @@ async fn create_from_task(
         Some(workflow) if workflow["active"] == true => {
             let id = workflow_id(&workflow)?;
             let unpublished = api.unpublish(&id, state.running_wait, false).await?;
-            api.workflow(&id).await?.unwrap_or(unpublished)
+            let off = api.workflow(&id).await?.unwrap_or(unpublished);
+            api.attach_error_workflow(off).await?
         }
-        Some(workflow) => workflow,
+        // The import script's copy: a Draft, so naming the error workflow
+        // (a new n8n version) changes nothing the user reviewed.
+        Some(workflow) => api.attach_error_workflow(workflow).await?,
         None => {
-            api.expect_ok(
-                Method::POST,
-                "/workflows",
-                &[],
-                Some(&importable(&workflow)),
-            )
-            .await?
+            let mut body = importable(&workflow);
+            with_error_workflow(&mut body, api.error_workflow().await.as_deref());
+            api.expect_ok(Method::POST, "/workflows", &[], Some(&body))
+                .await?
         }
     };
     let id = workflow_id(&created)?;
@@ -1560,6 +1733,189 @@ async fn create_from_task(
     let workflow = api.ensure_tagged(created).await?;
     let flow = build_flow(&state, &api, &workflow, store.flows.get(&id)).await;
     Ok((StatusCode::CREATED, Json(flow)))
+}
+
+// ---------------------------------------------------------------------------
+// Failed Runs (SPEC D16, ticket 24)
+// ---------------------------------------------------------------------------
+
+/// What the n8n error workflow sends: the ids of the failed Run. Only the
+/// execution id is used; the workflow is read from n8n.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FailedRunReport {
+    #[serde(default)]
+    execution_id: Value,
+}
+
+/// A Run of a Flow stopped on an error (called by the n8n error workflow):
+/// reads that Run in n8n and notifies the user once, naming the Flow, the
+/// failing step and, when the Run handled an email, its sender and subject.
+/// Never the email body or the error message (it can quote what the step
+/// read). Nothing is switched off: a transient outage must not stop a Flow.
+/// Anything but a failed Run of a Flow answers `notified: false`.
+async fn failed_run(
+    State(state): State<FlowsState>,
+    Json(report): Json<FailedRunReport>,
+) -> Result<Json<Value>, FlowError> {
+    let not_notified = |reason: &str| Ok(Json(json!({"notified": false, "reason": reason})));
+    // The trigger itself failed (no Run): nothing to name or reopen.
+    let Some(execution_id) = execution_id(&json!({"id": report.execution_id})) else {
+        return not_notified("no_run");
+    };
+    if !valid_workflow_id(&execution_id) {
+        return Err(FlowError::RunNotFound);
+    }
+    let api = N8nApi::from_connection(&state).await?;
+    let (status, execution) = api
+        .send(
+            Method::GET,
+            &format!("/executions/{execution_id}"),
+            &[("includeData", "true")],
+            None,
+        )
+        .await?;
+    match status {
+        200..=299 => {}
+        404 => return Err(FlowError::RunNotFound),
+        _ => return Err(upstream_error(status, &execution)),
+    }
+    if !matches!(execution["status"].as_str(), Some("error" | "crashed")) {
+        return not_notified("not_failed");
+    }
+    let workflow_id = match &execution["workflowId"] {
+        Value::String(id) => id.clone(),
+        Value::Number(id) => id.to_string(),
+        _ => return not_notified("not_a_flow"),
+    };
+
+    // One notification per Run, even when n8n retries the call.
+    let _guard = state.write_lock.lock().await;
+    let mut store = FlowStore::load(&state.screenpipe_dir)?;
+    if store.notified_failed_runs.contains(&execution_id) {
+        return not_notified("already_notified");
+    }
+    let known = store.flows.contains_key(&workflow_id);
+    let workflow = match valid_workflow_id(&workflow_id) {
+        true => api.workflow(&workflow_id).await?,
+        false => None,
+    };
+    let Some(workflow) = workflow.filter(|w| has_flow_tag(w) || known) else {
+        return not_notified("not_a_flow");
+    };
+    let Some(url) = state.notify_url.as_deref() else {
+        return not_notified("no_notifier");
+    };
+    let notification = failed_run_notification(&workflow, &execution, &execution_id);
+    let response = state
+        .http
+        .post(url)
+        .json(&notification)
+        .send()
+        .await
+        .map_err(|e| FlowError::NotifyFailed(format!("cannot reach ScreenPipe's notifications: {e}")))?;
+    if !response.status().is_success() {
+        return Err(FlowError::NotifyFailed(format!(
+            "ScreenPipe's notifications answered {}",
+            response.status()
+        )));
+    }
+    store.notified_failed_runs.push(execution_id);
+    let excess = store
+        .notified_failed_runs
+        .len()
+        .saturating_sub(NOTIFIED_RUNS_KEPT);
+    store.notified_failed_runs.drain(..excess);
+    store.save(&state.screenpipe_dir)?;
+    Ok(Json(json!({"notified": true})))
+}
+
+/// The `/notify` payload of a Failed Run: the Flow, the failing step, the
+/// handled email's sender and subject (as plain text), and a click that opens
+/// the Flow's Review Screen.
+fn failed_run_notification(workflow: &Value, execution: &Value, execution_id: &str) -> Value {
+    let flow_id = workflow["id"].as_str().unwrap_or_default();
+    let name = plain_text(workflow["name"].as_str().unwrap_or("Flow"), 120);
+    let result = &execution["data"]["resultData"];
+    let step = result["error"]["node"]["name"]
+        .as_str()
+        .or(result["lastNodeExecuted"].as_str())
+        .map(|step| plain_text(step, 120));
+    let mut body = match step {
+        Some(step) => format!("L'étape « {step} » s'est arrêtée sur une erreur."),
+        None => "Un passage s'est arrêté sur une erreur.".to_string(),
+    };
+    if let Some((from, subject)) = handled_email(workflow, result) {
+        body.push_str(&format!("\n\nE-mail de {from} : « {subject} »"));
+    }
+    body.push_str("\n\nLe Flow reste actif. Il apparaît en rouge jusqu'au prochain passage réussi.");
+    let review = format!("screenpipe://flows/{flow_id}");
+    json!({
+        "id": format!("automation-flow-failed-run:{execution_id}"),
+        "title": format!("Échec du Flow « {name} »"),
+        "body": body,
+        "type": "pipe",
+        "priority": "high",
+        "transient": false,
+        "source_url": review,
+        "actions": [{"type": "deeplink", "label": "Voir le Flow", "url": review, "primary": true}],
+    })
+}
+
+/// Sender and subject of the email the Run started from: the first item a
+/// start node (one no connection leads to) emitted with a `subject`, as the
+/// IMAP and Gmail triggers do. Nothing else of the email is read.
+fn handled_email(workflow: &Value, result: &Value) -> Option<(String, String)> {
+    let connections = workflow["connections"].as_object();
+    let targets: Vec<&str> = connections
+        .into_iter()
+        .flatten()
+        .flat_map(|(_, outputs)| outputs.as_object().into_iter().flatten())
+        .filter_map(|(_, output)| output.as_array())
+        .flatten()
+        .filter_map(Value::as_array)
+        .flatten()
+        .filter_map(|target| target["node"].as_str())
+        .collect();
+    workflow["nodes"]
+        .as_array()?
+        .iter()
+        .filter(|node| node["type"] != STICKY_NOTE)
+        .filter_map(|node| node["name"].as_str())
+        .filter(|name| !targets.contains(name))
+        .find_map(|name| {
+            let item = &result["runData"][name][0]["data"]["main"][0][0]["json"];
+            let subject = item["subject"].as_str()?;
+            let from = &item["from"];
+            let from = from
+                .as_str()
+                .or(from["text"].as_str())
+                .or(from["value"][0]["address"].as_str())
+                .unwrap_or("expéditeur inconnu");
+            Some((plain_text(from, 120), plain_text(subject, 160)))
+        })
+}
+
+/// Text from an email or a workflow, made safe for a markdown notification
+/// body: one line, at most `max` characters, markdown punctuation escaped
+/// (no links, emphasis or HTML).
+fn plain_text(text: &str, max: usize) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut cut: String = line.chars().take(max).collect();
+    if line.chars().count() > max {
+        cut.push('…');
+    }
+    let mut escaped = String::with_capacity(cut.len());
+    for c in cut.chars() {
+        if c.is_control() {
+            continue;
+        }
+        if "\\`*_[](){}<>#!|~".contains(c) {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
 }
 
 #[cfg(test)]
@@ -1615,6 +1971,26 @@ mod tests {
             let (nodes, _) = review_graph(&workflow);
             assert!(nodes.iter().all(|node| node.sentence.is_some()));
         }
+    }
+
+    #[test]
+    fn the_bundled_error_workflow_imports_as_is_and_never_names_itself() {
+        let bundled: Value = serde_json::from_str(ERROR_WORKFLOW).unwrap();
+        let body = importable(&bundled);
+        assert!(body.get("active").is_none());
+        assert!(body["settings"].get("errorWorkflow").is_none());
+        // Its call to ScreenPipe keeps the ScreenPipe API credential.
+        assert!(body["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["credentials"]["screenpipeApi"]["id"] == "spScreenpipeApi1"));
+    }
+
+    #[test]
+    fn email_text_cannot_add_markup_to_a_notification() {
+        assert_eq!(plain_text("[a](https://x)\n**b**", 50), "\\[a\\]\\(https://x\\) \\*\\*b\\*\\*");
+        assert_eq!(plain_text("abcdef", 3), "abc…");
     }
 
     #[test]

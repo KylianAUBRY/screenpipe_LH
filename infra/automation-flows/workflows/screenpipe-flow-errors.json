@@ -1,0 +1,44 @@
+{
+  "name": "ScreenPipe : échecs des Flows",
+  "nodes": [
+    {
+      "id": "7e1a2b3c-24f0-4e24-9a24-24a000000001",
+      "name": "Un Flow a échoué",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {},
+      "notes": "n8n lance cette étape quand un passage d'un Flow ScreenPipe s'arrête sur une erreur."
+    },
+    {
+      "id": "7e1a2b3c-24f0-4e24-9a24-24a000000002",
+      "name": "Prévenir ScreenPipe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [260, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3030/automation-flows/failed-runs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "screenpipeApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ executionId: ($json.execution && $json.execution.id) || null, workflowId: ($json.workflow && $json.workflow.id) || null }) }}",
+        "options": { "timeout": 10000 }
+      },
+      "credentials": {
+        "screenpipeApi": { "id": "spScreenpipeApi1", "name": "ScreenPipe API (local)" }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Seuls les identifiants du passage en échec partent vers ScreenPipe, qui le relit dans n8n et vous notifie."
+    }
+  ],
+  "connections": {
+    "Un Flow a échoué": {
+      "main": [[{ "node": "Prévenir ScreenPipe", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}
