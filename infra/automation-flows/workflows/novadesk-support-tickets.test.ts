@@ -366,7 +366,7 @@ function jiraRequestFor(answer: ReturnType<typeof aiAnswer>) {
 
 // --- Synthetic data (shapes of the IMAP "simple" item and the AI answer) ---
 
-const PRODUCTS = ["NovaCRM", "NovaPay", "NovaDesk", "Autre"];
+const PRODUCTS = ["NovaCRM", "NovaPay", "NovaPlanning", "NovaDesk", "Autre"];
 const SUMMARY_MAX = 80;
 
 const EMAIL = {
