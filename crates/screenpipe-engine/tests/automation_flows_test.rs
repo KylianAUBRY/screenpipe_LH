@@ -334,6 +334,8 @@ impl App {
             "balanced".to_string(),
         );
         server.flow_activation_key = ui_key.clone();
+        // The desktop owner's Detected Task catalog (empty until written).
+        server.workflow_catalog_dir = Some(dir.path().join("workflow-catalog"));
         if local_api_auth {
             server.api_auth = true;
             server.api_auth_key = Some(LOCAL_API_KEY.to_string());
@@ -365,6 +367,14 @@ impl App {
 
     fn store(&self) -> Value {
         read_json(&self.dir.path().join("automation-flows.json"))
+    }
+
+    /// The Detected Task catalog the desktop app keeps (`/workflows/catalog`).
+    fn write_catalog(&self, workflows: Value) {
+        let dir = self.dir.path().join("workflow-catalog");
+        std::fs::create_dir_all(&dir).unwrap();
+        let catalog = json!({"schemaVersion": 5, "analysis": {"workflows": workflows}});
+        std::fs::write(dir.join("catalog.json"), catalog.to_string()).unwrap();
     }
 
     fn write_store(&self, store: Value) {
@@ -944,6 +954,89 @@ async fn each_step_lists_the_facts_the_ai_did_not_write() {
         facts("Appeler le webhook"),
         json!(["GET (adresse calculée à l'exécution)"])
     );
+}
+
+/// The demo Detected Task as the catalog holds it: two repetitions, the
+/// first capture of each either embedded pixels (negative frame id) or a
+/// recorder frame.
+fn detected_task(first_frame: i64) -> Value {
+    let screenshot = |frame_id: i64, timestamp: &str| {
+        json!({"frameId": frame_id, "timestamp": timestamp, "app": "Gmail", "dataUrl": ""})
+    };
+    json!({
+        "id": TASK_ID,
+        "title": "Transformer les e-mails de bug en tickets Jira",
+        "evidence": [{"timestamp": "2026-10-17T02:05:41Z", "app": "Gmail", "source": "screen"}],
+        "stages": [
+            {
+                "name": "Répétition 2",
+                "evidence": [{"timestamp": "2026-10-17T02:09:41Z", "app": "Gmail", "source": "screen"}],
+                "screenshots": [screenshot(5000, "2026-10-17T02:09:41Z")]
+            },
+            {
+                "name": "Répétition 1",
+                "evidence": [{"timestamp": "2026-10-17T02:05:41Z", "app": "Gmail", "source": "screen"}],
+                "screenshots": [
+                    screenshot(first_frame, "2026-10-17T02:05:41Z"),
+                    screenshot(4242, "2026-10-17T02:08:01Z")
+                ]
+            }
+        ]
+    })
+}
+
+fn moment(flow: &Value) -> (Value, chrono::DateTime<chrono::FixedOffset>) {
+    let moment = &flow["sourceMoment"];
+    (
+        moment["frameId"].clone(),
+        chrono::DateTime::parse_from_rfc3339(moment["timestamp"].as_str().unwrap()).unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn a_flow_from_a_task_points_at_the_first_moment_the_task_was_seen() {
+    // Ticket 22, item 9: « Voir dans la timeline » opens the first evidence
+    // moment of the Detected Task, with its recorder frame when it has one.
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let first = chrono::DateTime::parse_from_rfc3339("2026-10-17T02:05:41Z").unwrap();
+
+    // The first capture is embedded pixels: no recorder frame to open.
+    app.write_catalog(json!([detected_task(-1)]));
+    let (status, flow) = app.create_from_task().await;
+    assert_eq!(status, StatusCode::CREATED, "{flow}");
+    assert_eq!(moment(&flow), (Value::Null, first));
+
+    // It was found in this machine's recordings: its recorder frame.
+    app.write_catalog(json!([detected_task(4141)]));
+    let uri = format!("/automation-flows/{}", flow["id"].as_str().unwrap());
+    let (_, flow) = app.call("GET", &uri, None).await;
+    assert_eq!(moment(&flow), (json!(4141), first));
+
+    // The task is no longer in the catalog: nothing to point at.
+    app.write_catalog(json!([]));
+    let (status, flow) = app.call("GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["sourceMoment"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_flow_from_the_chat_has_no_source_moment() {
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    app.write_catalog(json!([detected_task(4141)]));
+
+    let (status, flow) = chat_create(
+        &app,
+        json!({"workflow": chat_workflow(), "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{flow}");
+    assert_eq!(flow["sourceMoment"], Value::Null);
+    assert!(flow.as_object().unwrap().contains_key("sourceMoment"));
 }
 
 #[tokio::test]

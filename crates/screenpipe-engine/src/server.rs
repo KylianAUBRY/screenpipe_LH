@@ -1491,6 +1491,7 @@ impl SCServer {
                 self.screenpipe_dir.clone(),
                 self.secret_store.clone(),
                 self.flow_activation_key.clone(),
+                self.workflow_catalog_dir.clone(),
             ),
         );
 

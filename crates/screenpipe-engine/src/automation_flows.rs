@@ -22,6 +22,7 @@
 //! and never switches it on: the Flow then needs review.
 
 use crate::atomic_file;
+use crate::routes::workflows::{read_catalog, workflow_id as task_id_of, WorkflowCatalogSource};
 use axum::{
     extract::{Path, Request, State},
     http::{header, HeaderMap, StatusCode},
@@ -169,6 +170,9 @@ struct FlowsState {
     secret_store: Option<Arc<SecretStore>>,
     /// `None` without the desktop UI: activation is then always refused.
     activation_key: Option<FlowActivationKey>,
+    /// The Detected Task catalog (`/workflows/catalog`), read for the moment
+    /// a task was first seen.
+    workflow_catalog: WorkflowCatalogSource,
     http: reqwest::Client,
     /// Serializes store writes and imports so a double click on "create"
     /// cannot import the same task twice.
@@ -179,6 +183,7 @@ pub fn router<S>(
     screenpipe_dir: PathBuf,
     secret_store: Option<Arc<SecretStore>>,
     activation_key: Option<FlowActivationKey>,
+    workflow_catalog_dir: Option<PathBuf>,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -192,6 +197,7 @@ where
         screenpipe_dir,
         secret_store,
         activation_key,
+        workflow_catalog: WorkflowCatalogSource(workflow_catalog_dir),
         http,
         write_lock: Arc::new(Mutex::new(())),
     };
@@ -252,6 +258,9 @@ struct Flow {
     last_execution: Option<LastExecution>,
     n8n_url: String,
     source_task_id: Option<String>,
+    /// Where the source Detected Task was first seen, for « Voir dans la
+    /// timeline »; `None` for a Flow created from the chat.
+    source_moment: Option<SourceMoment>,
     summary: String,
     nodes: Vec<FlowNode>,
     edges: Vec<FlowEdge>,
@@ -272,6 +281,15 @@ struct FlowNode {
     /// What the AI did not write, read from the node itself: the n8n
     /// credentials it uses and, for an HTTP Request, its method and host.
     facts: Vec<String>,
+}
+
+/// A captured moment: its recorder frame when it has one (embedded evidence
+/// pixels and plain evidence entries have none), and its time.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceMoment {
+    frame_id: Option<i64>,
+    timestamp: String,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -980,7 +998,48 @@ fn flow_summary(
     }
 }
 
-async fn build_flow(api: &N8nApi, workflow: &Value, record: Option<&FlowRecord>) -> Flow {
+/// The first moment the Detected Task `task_id` was seen, from the catalog:
+/// the earliest of its evidence entries and recorder frames (a recorder frame
+/// wins a tie, so the timeline opens on it). `None` when the catalog cannot
+/// be read or no longer holds the task.
+async fn source_moment(state: &FlowsState, task_id: &str) -> Option<SourceMoment> {
+    let catalog = read_catalog(&state.workflow_catalog).await.ok()?;
+    let task = catalog["analysis"]["workflows"]
+        .as_array()?
+        .iter()
+        .find(|task| task_id_of(task) == task_id)?;
+    let stages = task["stages"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let frames = stages
+        .iter()
+        .flat_map(screenpipe_core::workflows::stage_screenshots);
+    let evidence = task["evidence"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(stages.iter().flat_map(|stage| {
+            stage["evidence"].as_array().into_iter().flatten()
+        }));
+    frames
+        .chain(evidence)
+        .filter_map(|moment| {
+            let timestamp = moment["timestamp"].as_str()?;
+            let at = chrono::DateTime::parse_from_rfc3339(timestamp).ok()?;
+            let frame_id = moment["frameId"].as_i64().filter(|id| *id > 0);
+            Some((at, frame_id, timestamp))
+        })
+        .min_by_key(|(at, frame_id, _)| (*at, frame_id.is_none()))
+        .map(|(_, frame_id, timestamp)| SourceMoment {
+            frame_id,
+            timestamp: timestamp.to_string(),
+        })
+}
+
+async fn build_flow(
+    state: &FlowsState,
+    api: &N8nApi,
+    workflow: &Value,
+    record: Option<&FlowRecord>,
+) -> Flow {
     let head = flow_summary(
         workflow,
         record,
@@ -993,6 +1052,11 @@ async fn build_flow(api: &N8nApi, workflow: &Value, record: Option<&FlowRecord>)
         .unwrap_or_default()
         .to_string();
     let reviewed_version_id = record.and_then(|r| r.reviewed_version_id.clone());
+    let source_task_id = record.and_then(|r| r.source_task_id.clone());
+    let source_moment = match source_task_id.as_deref() {
+        Some(task_id) => source_moment(state, task_id).await,
+        None => None,
+    };
     let running = workflow["activeVersionId"].as_str();
     Flow {
         n8n_url: api.editor_url(&head.id),
@@ -1006,7 +1070,8 @@ async fn build_flow(api: &N8nApi, workflow: &Value, record: Option<&FlowRecord>)
         name: head.name,
         status: head.status,
         last_execution: head.last_execution,
-        source_task_id: record.and_then(|r| r.source_task_id.clone()),
+        source_task_id,
+        source_moment,
         summary: record.map(|r| r.summary.clone()).unwrap_or_default(),
         nodes,
         edges,
@@ -1044,7 +1109,7 @@ async fn get_flow(
 ) -> Result<Json<Flow>, FlowError> {
     let (api, store, workflow) = load_flow(&state, &id).await?;
     Ok(Json(
-        build_flow(&api, &workflow, store.flows.get(&id)).await,
+        build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
     ))
 }
 
@@ -1127,7 +1192,7 @@ async fn activate_flow(
     // Already running the version the user activated (e.g. a double click).
     if already_running && already_reviewed {
         return Ok(Json(
-            build_flow(&api, &workflow, store.flows.get(&id)).await,
+            build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
         ));
     }
 
@@ -1150,7 +1215,7 @@ async fn activate_flow(
 
     let workflow = api.workflow(&id).await?.unwrap_or(published);
     Ok(Json(
-        build_flow(&api, &workflow, store.flows.get(&id)).await,
+        build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
     ))
 }
 
@@ -1171,7 +1236,7 @@ async fn deactivate_flow(
     let (api, mut store, workflow) = load_flow(&state, &id).await?;
     if workflow["active"] != true {
         return Ok(Json(
-            build_flow(&api, &workflow, store.flows.get(&id)).await,
+            build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
         ));
     }
     let running = running_version(&workflow);
@@ -1182,7 +1247,7 @@ async fn deactivate_flow(
 
     let workflow = api.workflow(&id).await?.unwrap_or(unpublished);
     Ok(Json(
-        build_flow(&api, &workflow, store.flows.get(&id)).await,
+        build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
     ))
 }
 
@@ -1249,7 +1314,7 @@ async fn update_flow(
     store.save(&state.screenpipe_dir)?;
 
     Ok(Json(
-        build_flow(&api, &workflow, store.flows.get(&id)).await,
+        build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
     ))
 }
 
@@ -1298,7 +1363,7 @@ async fn create_flow(
     );
     store.save(dir)?;
     let workflow = api.ensure_tagged(created).await?;
-    let flow = build_flow(&api, &workflow, store.flows.get(&id)).await;
+    let flow = build_flow(&state, &api, &workflow, store.flows.get(&id)).await;
     Ok((StatusCode::CREATED, Json(flow)))
 }
 
@@ -1334,7 +1399,7 @@ async fn create_from_task(
                     record.answers = request.answers;
                 }
                 store.save(dir)?;
-                let flow = build_flow(&api, &workflow, store.flows.get(&id)).await;
+                let flow = build_flow(&state, &api, &workflow, store.flows.get(&id)).await;
                 return Ok((StatusCode::OK, Json(flow)));
             }
             None => {
@@ -1369,7 +1434,7 @@ async fn create_from_task(
         }
         store.save(dir)?;
         let workflow = api.ensure_tagged(workflow).await?;
-        let flow = build_flow(&api, &workflow, store.flows.get(&id)).await;
+        let flow = build_flow(&state, &api, &workflow, store.flows.get(&id)).await;
         return Ok((StatusCode::OK, Json(flow)));
     }
     let created = match preinstalled {
@@ -1408,7 +1473,7 @@ async fn create_from_task(
     );
     store.save(dir)?;
     let workflow = api.ensure_tagged(created).await?;
-    let flow = build_flow(&api, &workflow, store.flows.get(&id)).await;
+    let flow = build_flow(&state, &api, &workflow, store.flows.get(&id)).await;
     Ok((StatusCode::CREATED, Json(flow)))
 }
 
