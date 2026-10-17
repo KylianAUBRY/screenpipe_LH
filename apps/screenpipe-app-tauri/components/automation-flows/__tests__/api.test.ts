@@ -137,6 +137,28 @@ describe("browser mock", () => {
     });
   });
 
+  it("lets a chat change switch the fixture Flow off and leave it needing review", async () => {
+    useBrowserMock();
+    await flowsApi.activate(fixtureFlow.id, fixtureFlow.versionId);
+
+    // What the automation-flows skill sends from the chat.
+    const response = await localFetch(`/automation-flows/${fixtureFlow.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ workflow: {}, summary: "Résumé modifié par le chat." }),
+    });
+    expect(response.status).toBe(200);
+
+    const changed = await flowsApi.get(fixtureFlow.id);
+    expect(changed.status).toBe("needs_review");
+    expect(changed.summary).toBe("Résumé modifié par le chat.");
+    expect(changed.versionId).not.toBe(fixtureFlow.versionId);
+    expect(changed.activationLog.map((entry) => [entry.event, entry.by])).toEqual([
+      ["activated", "user"],
+      ["paused_for_edit", "chat"],
+      ["modified", "chat"],
+    ]);
+  });
+
   it.each([
     ["not-configured", "n8n_not_configured"],
     ["unreachable", "n8n_unreachable"],
