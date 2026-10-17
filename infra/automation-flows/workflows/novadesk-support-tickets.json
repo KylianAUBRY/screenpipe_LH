@@ -28,6 +28,9 @@
       "name": "Analyser l'email (IA)",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
       "position": [260, 0],
       "parameters": {
         "promptType": "define",
@@ -49,7 +52,7 @@
       "parameters": {
         "model": { "__rl": true, "mode": "id", "value": "auto" },
         "responsesApiEnabled": false,
-        "options": { "timeout": 30000, "maxRetries": 2 }
+        "options": { "timeout": 20000, "maxRetries": 0 }
       },
       "credentials": {
         "openAiApi": { "id": "spProxyOpenAI001", "name": "ScreenPipe AI proxy" }

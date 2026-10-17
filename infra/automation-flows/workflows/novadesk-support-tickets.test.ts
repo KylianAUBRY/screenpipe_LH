@@ -21,6 +21,9 @@ type N8nNode = {
   parameters: Record<string, any>;
   notes?: string;
   onError?: string;
+  retryOnFail?: boolean;
+  maxTries?: number;
+  waitBetweenTries?: number;
   credentials?: Record<string, { id: string; name: string }>;
 };
 
@@ -96,10 +99,14 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     // The proxy only speaks /v1/chat/completions and has no /v1/models.
     expect(model.parameters.responsesApiEnabled).toBe(false);
     expect(model.parameters.model).toMatchObject({ mode: "id", value: "auto" });
-    // A proxy call that never answers must not hold the email for the client's
-    // 10-minute default (rehearsals 3 and 5): give up after 30 s and try again.
-    expect(model.parameters.options.timeout).toBeLessThanOrEqual(30_000);
-    expect(model.parameters.options.maxRetries).toBeGreaterThanOrEqual(2);
+    // About 1 call in 10 to ScreenPipe's AI proxy never answers (measured
+    // 2026-10-17; normal calls take 1-6 s). The client's timeout covers its own
+    // retries, so a hung call fails the step: give up after 20 s and let n8n
+    // run the whole AI step again.
+    expect(model.parameters.options.timeout).toBeLessThanOrEqual(20_000);
+    expect(agent.retryOnFail).toBe(true);
+    expect(agent.maxTries).toBeGreaterThanOrEqual(3);
+    expect(agent.waitBetweenTries).toBeLessThanOrEqual(2_000);
 
     const parser = onlyNode("@n8n/n8n-nodes-langchain.outputParserStructured");
     expect(subNodeOf(parser.name, "ai_outputParser")).toBe(agent.name);
