@@ -179,5 +179,4 @@ n8n check ran in a temporary workflow, deleted afterwards.
 | ScreenPipe AI Trigger active in n8n (every minute, default `chatgpt/gpt-5.6-luna:max`) | fired at its first poll: « L'utilisateur travaille clairement dans l'assistant IA Claude, avec un terminal également ouvert. » |
 | ScreenPipe Trigger active in n8n: window `Terminal`, flow `DucCIr8YH6FdrZOZ`, keyword « automatisation » | each polled without error and set its cursor; nothing fired (no new event during the minute, by design) |
 | ScreenPipe Trigger, « Fetch Test Event » path (real node code against ScreenPipe): keyword « ok », window Terminal, pipe `digital-clone`, flow NovaDesk | each returned its newest real event |
-
 | ScreenPipe Trigger window `Terminal` active in n8n, Terminal brought to the front for 12 s (19:42:37), then Claude | first poll set the cursor (`active: false`, Claude in front); the next poll (19:43:03) fired once: execution 60, mode `trigger`, success, event `matchedAt` 19:42:37 |
