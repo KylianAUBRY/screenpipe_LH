@@ -101,6 +101,18 @@ async function markInboxRead({ container, run }: ResetOptions): Promise<string> 
   return `marked ${result.marked} unread email(s) as read in ${MAILBOX} (0 unread left)`;
 }
 
+/** The engine's Flow records (`automation_flows.rs`); a missing file has none. */
+function loadStore(path: string): FlowStore {
+  if (!existsSync(path)) return {};
+  try {
+    const store = JSON.parse(readFileSync(path, "utf8")) as FlowStore;
+    if (typeof store === "object" && store !== null && (store.flows === undefined || typeof store.flows === "object")) return store;
+  } catch {
+    // Reported below.
+  }
+  throw new Error(`${path} is not a valid ${STORE_FILE}; it was left untouched`);
+}
+
 function clearTaskAnswers(dir: string): string {
   const previous = readCatalog(dir);
   if (!previous) throw new Error(`no workflow catalog in ${dir}; run the demo script first`);
@@ -114,44 +126,66 @@ function clearTaskAnswers(dir: string): string {
 /** Every step runs even when an earlier one fails; each failure is reported. */
 export async function resetDemo(options: ResetOptions): Promise<ResetReport> {
   const failures: string[] = [];
+  const fail = (name: string, error: unknown) => {
+    const reason = `${name}: ${error instanceof Error ? error.message : String(error)}`;
+    failures.push(reason);
+    options.log(`FAILED ${reason}`);
+  };
   const step = async (name: string, action: () => Promise<string> | string) => {
     try {
       options.log(`${name}: ${await action()}`);
     } catch (error) {
-      const reason = `${name}: ${error instanceof Error ? error.message : String(error)}`;
-      failures.push(reason);
-      options.log(`FAILED ${reason}`);
+      fail(name, error);
     }
   };
 
   const storePath = join(options.dataDir, STORE_FILE);
-  const store: FlowStore = existsSync(storePath) ? JSON.parse(readFileSync(storePath, "utf8")) : {};
-  const demoIds = Object.entries(store.flows ?? {})
+  let store: FlowStore | null;
+  try {
+    store = loadStore(storePath);
+  } catch (error) {
+    store = null;
+    fail("records", error);
+  }
+  const demoIds = Object.entries(store?.flows ?? {})
     .filter(([, record]) => record.sourceTaskId === DEMO_TASK_ID)
     .map(([id]) => id);
 
   const gone: string[] = [];
   let n8n: N8nCall | null = null;
-  await step("n8n", async () => {
-    if (!options.n8n) throw new Error(`no n8n API key: export N8N_API_KEY (the key saved in ScreenPipe > Connections > n8n)`);
+  try {
+    if (!options.n8n) throw new Error("no n8n API key: export N8N_API_KEY (the key saved in ScreenPipe > Connections > n8n)");
     const client = n8nClient(options.n8n);
     const probe = await client("GET", "/workflows?limit=1");
     if (!ok(probe.status)) throw new Error(`n8n at ${options.n8n.url} refused the request (${answer(probe)})`);
     n8n = client;
-    return `connected to ${options.n8n.url}`;
-  });
-  for (const id of n8n ? new Set([...demoIds, DEMO_WORKFLOW_ID]) : []) {
+    options.log(`n8n: connected to ${options.n8n.url}`);
+  } catch (error) {
+    fail("n8n", error);
+  }
+  for (const id of new Set([...demoIds, DEMO_WORKFLOW_ID])) {
+    if (!n8n) break;
+    const client = n8n;
     await step("n8n", async () => {
-      const done = await removeWorkflow(n8n!, id);
+      const done = await removeWorkflow(client, id);
       gone.push(id);
       return done;
     });
   }
 
-  const flows = Object.fromEntries(Object.entries(store.flows ?? {}).filter(([id]) => !gone.includes(id)));
-  const tmp = `${storePath}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ ...store, flows }, null, 2));
-  renameSync(tmp, storePath);
+  if (store) {
+    const current = store;
+    await step("records", () => {
+      const removed = Object.keys(current.flows ?? {}).filter(id => gone.includes(id));
+      if (removed.length === 0) return "no demo Flow record to remove";
+      const flows = Object.fromEntries(Object.entries(current.flows ?? {}).filter(([id]) => !removed.includes(id)));
+      // Same format and atomic replace as the engine's `FlowStore::save`.
+      const tmp = `${storePath}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ ...current, flows }, null, 2));
+      renameSync(tmp, storePath);
+      return `removed ${removed.join(", ")} from ${storePath}`;
+    });
+  }
 
   await step("inbox", () => markInboxRead(options));
   await step("answers", () => clearTaskAnswers(options.catalogDir));

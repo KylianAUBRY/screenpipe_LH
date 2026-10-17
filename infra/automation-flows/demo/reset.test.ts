@@ -199,6 +199,20 @@ describe("demo reset", () => {
     expect(noContainer.failures).toEqual([expect.stringContaining("No such container: n8n-test")]);
     expect(stillUnread.failures).toEqual([expect.stringContaining("1 unread email(s) left in INBOX")]);
   });
+
+  it("leaves an unreadable Flow store untouched and still removes the pre-imported copy", async () => {
+    const n8n = serve([{ id: "spNovaFlow000001", name: "NovaDesk", active: false }]);
+    const data = mkdtempSync(join(tmpdir(), "demo-reset-data-"));
+    writeFileSync(join(data, "automation-flows.json"), "{ not json");
+
+    const report = await resetDemo({
+      n8n: { url: n8n.url, apiKey: KEY }, dataDir: data, catalogDir: catalogDir(), container: "n8n-test", run: inbox(), log: () => {},
+    });
+
+    expect(report.failures).toEqual([expect.stringContaining("automation-flows.json")]);
+    expect(readFileSync(join(data, "automation-flows.json"), "utf8")).toBe("{ not json");
+    expect(n8n.workflows.size).toBe(0);
+  });
 });
 
 // mark-read.sh runs inside the n8n container. Here it runs locally with a fake
