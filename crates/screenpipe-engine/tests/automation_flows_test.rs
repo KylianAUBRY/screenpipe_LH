@@ -1184,6 +1184,58 @@ async fn the_local_api_key_alone_cannot_activate_a_flow() {
 }
 
 #[tokio::test]
+async fn activation_needs_the_version_the_user_reviewed() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let activate = format!("/automation-flows/{id}/activate");
+
+    for body in [
+        None,
+        Some(json!({})),
+        Some(json!({"versionId": null})),
+        Some(json!({"versionId": ""})),
+    ] {
+        let (status, answer) = app.ui_call("POST", &activate, body.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}: {answer}");
+        assert_eq!(answer["error"], "version_required", "{body:?}");
+    }
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    assert_eq!(n8n.workflows()[0]["active"], false);
+    let (_, flow) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    assert_eq!(flow["activationLog"], json!([]));
+}
+
+#[tokio::test]
+async fn without_the_desktop_app_no_flow_can_be_activated() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::headless().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let activate = format!("/automation-flows/{id}/activate");
+
+    for key in ["", "anything", LOCAL_API_KEY] {
+        let (status, body) = app
+            .send(
+                "POST",
+                &activate,
+                &[JSON, (ACTIVATION_HEADER, key)],
+                Some(json!({"versionId": "version-1"})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{key:?}: {body}");
+        assert_eq!(body["error"], "activation_requires_user");
+    }
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    assert_eq!(n8n.workflows()[0]["active"], false);
+}
+
+#[tokio::test]
 async fn review_screen_shows_the_last_execution() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;

@@ -257,10 +257,10 @@ struct FlowEdge {
     to: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ActivateRequest {
-    /// The n8n version the user reviewed on the Review Screen.
+    /// The n8n version the user reviewed on the Review Screen (required).
     #[serde(default)]
     version_id: Option<String>,
 }
@@ -311,6 +311,8 @@ enum FlowError {
     Internal(String),
     /// Activation without the UI credential: not the user's click.
     ActivationRequiresUser,
+    /// Activation without the `versionId` the user reviewed.
+    VersionRequired,
 }
 
 impl IntoResponse for FlowError {
@@ -342,6 +344,13 @@ impl IntoResponse for FlowError {
                 json!({
                     "error": "activation_requires_user",
                     "detail": "Only the user can activate a Flow, with the Activer button on its Review Screen in ScreenPipe.",
+                }),
+            ),
+            FlowError::VersionRequired => (
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "error": "version_required",
+                    "detail": "send the `versionId` of the Flow the user reviewed",
                 }),
             ),
             FlowError::Internal(detail) => {
@@ -958,18 +967,18 @@ async fn activate_flow(
     if !from_user {
         return Err(FlowError::ActivationRequiresUser);
     }
-    let request = body.map(|Json(request)| request).unwrap_or_default();
+    // Activation publishes exactly what the user read, so it must say what that was.
+    let reviewed = body
+        .and_then(|Json(request)| request.version_id)
+        .filter(|version| !version.is_empty())
+        .ok_or(FlowError::VersionRequired)?;
     let _guard = state.write_lock.lock().await;
     let (api, mut store, workflow) = load_flow(&state, &id).await?;
     let version = workflow["versionId"]
         .as_str()
         .unwrap_or_default()
         .to_string();
-    if request
-        .version_id
-        .as_deref()
-        .is_some_and(|reviewed| reviewed != version)
-    {
+    if reviewed != version {
         return Err(FlowError::VersionChanged);
     }
     // Already running the reviewed version (e.g. a double click).
