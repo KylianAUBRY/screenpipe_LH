@@ -10,12 +10,13 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use screenpipe_audio::audio_manager::AudioManagerBuilder;
 use screenpipe_db::DatabaseManager;
-use screenpipe_engine::automation_flows::{FlowActivationKey, ACTIVATION_HEADER};
+use screenpipe_engine::automation_flows::{FlowActivationKey, RunningWait, ACTIVATION_HEADER};
 use screenpipe_engine::SCServer;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tower::ServiceExt;
 use wiremock::matchers::any;
 use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
@@ -47,6 +48,9 @@ struct N8nState {
     /// When set, the workflow list answers at most this many per page (n8n
     /// pages by `limit` and an opaque `cursor`).
     page_size: Option<usize>,
+    /// Executions that were still running when their workflow was
+    /// unpublished: n8n leaves them `running` forever (rehearsal 3).
+    orphaned: Vec<String>,
 }
 
 #[derive(Clone, Default)]
@@ -74,6 +78,42 @@ impl FakeN8n {
     fn add_execution(&self, execution: Value) {
         self.0.lock().unwrap().executions.push(execution);
     }
+
+    /// An execution of `workflow_id` in progress (an email being processed);
+    /// it finishes after n8n was asked about running executions `polls`
+    /// times, or never.
+    fn start_execution(&self, workflow_id: &str, polls: Option<u32>) {
+        let mut state = self.0.lock().unwrap();
+        let id = format!("exec{}", state.executions.len() + 1);
+        state.executions.insert(
+            0,
+            json!({
+                "id": id, "workflowId": workflow_id, "status": "running",
+                "startedAt": "2026-10-17T09:00:00.000Z", "stoppedAt": null,
+                "finishAfterPolls": polls
+            }),
+        );
+    }
+
+    fn orphaned(&self) -> Vec<String> {
+        self.0.lock().unwrap().orphaned.clone()
+    }
+}
+
+/// How many times the fake n8n was asked for the running executions.
+async fn running_polls(server: &MockServer) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| {
+            r.url.path() == "/api/v1/executions"
+                && r.url
+                    .query_pairs()
+                    .any(|(key, value)| key == "status" && value == "running")
+        })
+        .count()
 }
 
 fn json_response(status: u16, body: Value) -> ResponseTemplate {
@@ -233,6 +273,13 @@ impl Respond for FakeN8n {
                 }
             }
             ("POST", ["workflows", id, "unpublish"]) => {
+                let running: Vec<String> = state
+                    .executions
+                    .iter()
+                    .filter(|e| e["workflowId"] == *id && e["status"] == "running")
+                    .map(|e| e["id"].as_str().unwrap().to_string())
+                    .collect();
+                state.orphaned.extend(running);
                 match state.workflows.iter_mut().find(|w| w["id"] == *id) {
                     Some(workflow) => {
                         workflow["active"] = json!(false);
@@ -254,10 +301,27 @@ impl Respond for FakeN8n {
             }
             ("GET", ["executions"]) => {
                 let workflow_id = query("workflowId");
+                let status = query("status");
+                if status.as_deref() == Some("running") {
+                    // Each question brings a finishing execution closer to its end.
+                    for execution in state.executions.iter_mut() {
+                        let left = execution["finishAfterPolls"].as_u64();
+                        if execution["status"] != "running" || left.is_none() {
+                            continue;
+                        }
+                        if left == Some(0) {
+                            execution["status"] = json!("success");
+                            execution["stoppedAt"] = json!("2026-10-17T09:00:20.000Z");
+                        } else {
+                            execution["finishAfterPolls"] = json!(left.unwrap() - 1);
+                        }
+                    }
+                }
                 let data: Vec<Value> = state
                     .executions
                     .iter()
                     .filter(|e| e["workflowId"].as_str().map(str::to_string) == workflow_id)
+                    .filter(|e| status.as_ref().is_none_or(|s| e["status"] == s.as_str()))
                     .take(1)
                     .cloned()
                     .collect();
@@ -336,6 +400,11 @@ impl App {
         server.flow_activation_key = ui_key.clone();
         // The desktop owner's Detected Task catalog (empty until written).
         server.workflow_catalog_dir = Some(dir.path().join("workflow-catalog"));
+        // Waiting for a running execution: the real pace, scaled down.
+        server.flow_running_wait = RunningWait {
+            interval: Duration::from_millis(10),
+            deadline: Duration::from_millis(300),
+        };
         if local_api_auth {
             server.api_auth = true;
             server.api_auth_key = Some(LOCAL_API_KEY.to_string());
@@ -2445,4 +2514,118 @@ async fn chat_create_refuses_a_workflow_the_review_screen_cannot_explain() {
     // Nothing was created anywhere.
     assert!(n8n.workflows().is_empty());
     assert!(!app.dir.path().join("automation-flows.json").exists());
+}
+
+// ---------------------------------------------------------------------------
+// Switching off never orphans a running execution (ticket 21)
+// ---------------------------------------------------------------------------
+
+/// An active demo Flow (activated by the user at version-1) and its id.
+async fn active_flow(app: &App) -> String {
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let (status, flow) = app
+        .ui_call(
+            "POST",
+            &format!("/automation-flows/{id}/activate"),
+            Some(json!({"versionId": "version-1"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    id
+}
+
+#[tokio::test]
+async fn switching_off_waits_for_the_email_being_processed() {
+    // Rehearsal 3: the chat change unpublished the workflow while n8n was
+    // processing an email; the execution never finished and the email was lost.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    let uri = format!("/automation-flows/{id}");
+
+    // Désactiver while an email is processed: unpublished once it is done.
+    n8n.start_execution(&id, Some(3));
+    let (status, flow) = app
+        .ui_call("POST", &format!("{uri}/deactivate"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["status"], "paused");
+    assert!(running_polls(&server).await >= 4);
+    assert_eq!(n8n.workflows()[0]["active"], false);
+
+    // A chat change of the active Flow: the same.
+    app.ui_call(
+        "POST",
+        &format!("{uri}/activate"),
+        Some(json!({"versionId": "version-1"})),
+    )
+    .await;
+    n8n.start_execution(&id, Some(3));
+    let workflow = edited_workflow(&n8n, &id, add_auto_label);
+    let (status, flow) = app
+        .call("PUT", &uri, Some(json!({"workflow": workflow})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["status"], "needs_review");
+
+    assert_eq!(n8n.orphaned(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_flow_still_processing_at_the_deadline_is_left_running_with_409() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    let uri = format!("/automation-flows/{id}");
+    n8n.start_execution(&id, None);
+    let writes = n8n_writes(&server).await;
+
+    // « Désactiver » on the Review Screen, then a chat change.
+    let (status, answer) = app
+        .ui_call("POST", &format!("{uri}/deactivate"), None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert_eq!(answer["error"], "flow_running");
+    assert!(!answer["detail"].as_str().unwrap().is_empty());
+    let workflow = edited_workflow(&n8n, &id, add_auto_label);
+    let (status, answer) = app
+        .call("PUT", &uri, Some(json!({"workflow": workflow})))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert_eq!(answer["error"], "flow_running");
+
+    // Nothing changed: still running the reviewed version, nothing logged.
+    assert_eq!(n8n_writes(&server).await, writes);
+    assert_eq!(n8n.orphaned(), Vec::<String>::new());
+    let (_, flow) = app.call("GET", &uri, None).await;
+    assert_eq!(flow["status"], "active");
+    assert_eq!(events(&flow), [event("activated", "version-1", "user")]);
+}
+
+#[tokio::test]
+async fn switching_off_an_idle_flow_asks_n8n_once() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    // A finished execution does not hold anything up.
+    n8n.add_execution(json!({
+        "id": "done", "workflowId": id, "status": "success",
+        "startedAt": "2026-10-17T08:00:00.000Z", "stoppedAt": "2026-10-17T08:00:12.000Z"
+    }));
+
+    let (status, flow) = app
+        .ui_call("POST", &format!("/automation-flows/{id}/deactivate"), None)
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["status"], "paused");
+    assert_eq!(running_polls(&server).await, 1);
+    assert_eq!(
+        n8n_writes(&server).await.last().unwrap(),
+        &format!("POST /api/v1/workflows/{id}/unpublish")
+    );
 }

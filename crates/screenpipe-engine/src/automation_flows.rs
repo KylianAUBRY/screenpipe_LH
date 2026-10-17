@@ -164,6 +164,29 @@ impl std::fmt::Debug for FlowActivationKey {
     }
 }
 
+/// How long switching a Flow off waits for the execution n8n is running.
+///
+/// n8n's IMAP trigger marks an email read before its execution starts, and
+/// an execution still running when its workflow is unpublished never
+/// finishes: the email would be lost (rehearsal 3). So the Flow service
+/// polls n8n every `interval` and unpublishes once nothing runs, or changes
+/// nothing after `deadline` (`409 flow_running`). The demo's AI step takes
+/// 10 to 25 s.
+#[derive(Debug, Clone, Copy)]
+pub struct RunningWait {
+    pub interval: Duration,
+    pub deadline: Duration,
+}
+
+impl Default for RunningWait {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_secs(1),
+            deadline: Duration::from_secs(90),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct FlowsState {
     screenpipe_dir: PathBuf,
@@ -173,6 +196,7 @@ struct FlowsState {
     /// The Detected Task catalog (`/workflows/catalog`), read for the moment
     /// a task was first seen.
     workflow_catalog: WorkflowCatalogSource,
+    running_wait: RunningWait,
     http: reqwest::Client,
     /// Serializes store writes and imports so a double click on "create"
     /// cannot import the same task twice.
@@ -184,6 +208,7 @@ pub fn router<S>(
     secret_store: Option<Arc<SecretStore>>,
     activation_key: Option<FlowActivationKey>,
     workflow_catalog_dir: Option<PathBuf>,
+    running_wait: RunningWait,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -198,6 +223,7 @@ where
         secret_store,
         activation_key,
         workflow_catalog: WorkflowCatalogSource(workflow_catalog_dir),
+        running_wait,
         http,
         write_lock: Arc::new(Mutex::new(())),
     };
@@ -349,6 +375,9 @@ enum FlowError {
     FlowNotFound,
     /// The n8n workflow is no longer the version the user reviewed.
     VersionChanged,
+    /// n8n still runs an execution of the Flow at the end of the wait
+    /// ([`RunningWait`]): switching it off now would lose what it processes.
+    FlowRunning,
     /// n8n answered but refused to switch the workflow on or off.
     ActivationFailed(String),
     /// A chat modification the Review Screen could not explain, or that n8n
@@ -387,6 +416,13 @@ impl IntoResponse for FlowError {
             FlowError::VersionChanged => {
                 (StatusCode::CONFLICT, json!({"error": "version_changed"}))
             }
+            FlowError::FlowRunning => (
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "flow_running",
+                    "detail": "n8n is still running this Flow (an email is being processed); nothing was changed. Wait a moment, then try again once.",
+                }),
+            ),
             FlowError::ActivationFailed(detail) => (
                 StatusCode::BAD_GATEWAY,
                 json!({"error": "activation_failed", "detail": detail}),
@@ -634,6 +670,37 @@ impl N8nApi {
             404 => Err(FlowError::FlowNotFound),
             _ => Err(FlowError::ActivationFailed(n8n_answer(status, &value))),
         }
+    }
+
+    /// Whether n8n is running an execution of the workflow right now.
+    async fn is_running(&self, workflow_id: &str) -> Result<bool, FlowError> {
+        let page = self
+            .expect_ok(
+                Method::GET,
+                "/executions",
+                &[
+                    ("workflowId", workflow_id),
+                    ("status", "running"),
+                    ("limit", "1"),
+                ],
+                None,
+            )
+            .await?;
+        Ok(page["data"].as_array().is_some_and(|data| !data.is_empty()))
+    }
+
+    /// Switches a workflow off once n8n runs no execution of it, so the one
+    /// in progress finishes (see [`RunningWait`]). Still running at the
+    /// deadline: nothing changes, [`FlowError::FlowRunning`].
+    async fn unpublish(&self, workflow_id: &str, wait: RunningWait) -> Result<Value, FlowError> {
+        let started = tokio::time::Instant::now();
+        while self.is_running(workflow_id).await? {
+            if started.elapsed() >= wait.deadline {
+                return Err(FlowError::FlowRunning);
+            }
+            tokio::time::sleep(wait.interval).await;
+        }
+        self.switch(workflow_id, "unpublish", None).await
     }
 
     fn editor_url(&self, workflow_id: &str) -> String {
@@ -1241,7 +1308,7 @@ async fn deactivate_flow(
     }
     let running = running_version(&workflow);
 
-    let unpublished = api.switch(&id, "unpublish", None).await?;
+    let unpublished = api.unpublish(&id, state.running_wait).await?;
     store.record_mut(&id).log("deactivated", running, by);
     store.save(&state.screenpipe_dir)?;
 
@@ -1275,7 +1342,7 @@ async fn update_flow(
 
     if current["active"] == true {
         let running = running_version(&current);
-        api.switch(&id, "unpublish", None).await?;
+        api.unpublish(&id, state.running_wait).await?;
         // Saved at once: the Flow is off even if the update below fails.
         store
             .record_mut(&id)
@@ -1443,7 +1510,7 @@ async fn create_from_task(
         // it is recorded. Nothing is logged: the user never activated it.
         Some(workflow) if workflow["active"] == true => {
             let id = workflow_id(&workflow)?;
-            let unpublished = api.switch(&id, "unpublish", None).await?;
+            let unpublished = api.unpublish(&id, state.running_wait).await?;
             api.workflow(&id).await?.unwrap_or(unpublished)
         }
         Some(workflow) => workflow,
