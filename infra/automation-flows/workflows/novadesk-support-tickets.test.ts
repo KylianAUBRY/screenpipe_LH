@@ -327,11 +327,13 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(plainTextBlock(cut)).toContain("[…] email tronqué");
   });
 
-  test("an improvement idea becomes a Tâche with the AI's priority and label", () => {
+  test("an improvement idea becomes a Jira Task with the AI's priority and label", () => {
     const issue = jiraRequestFor(
       aiAnswer({ type: "Tâche", summary: "Filtre Dernière relance", priority: "Low", label: "front" }),
     );
-    expect(issue.fields.issuetype).toEqual({ name: "Tâche" });
+    // The AI answers in the demo's French vocabulary; the NOVA project's
+    // issue types are English (Bug, Task). Jira rejects "Tâche".
+    expect(issue.fields.issuetype).toEqual({ name: "Task" });
     expect(issue.fields.summary).toBe("NovaCRM - Filtre Dernière relance");
     expect(issue.fields.priority).toEqual({ name: "Low" });
     expect(issue.fields.labels).toEqual(["front"]);

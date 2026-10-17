@@ -170,7 +170,7 @@
             {
               "id": "6d0f5c1e-0b7a-4c55-9f1e-01a0000000a2",
               "name": "issueType",
-              "value": "={{ $json.output.type }}",
+              "value": "={{ $json.output.type === 'Tâche' ? 'Task' : $json.output.type }}",
               "type": "string"
             },
             {
