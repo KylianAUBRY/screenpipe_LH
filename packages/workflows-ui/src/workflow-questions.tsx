@@ -51,6 +51,7 @@ const COPY = {
     savingStopsVoice: "Saving stops voice and keeps the answers shown here.",
     footer: "Saved answers refine future workflow updates.",
     save: "Save answers", saving: "Saving…",
+    choices: "Suggested answers", created: "", open: "",
   },
   creation: {
     section: "Questions and feedback",
@@ -75,15 +76,20 @@ const COPY = {
     savingStopsVoice: "Saving stops voice and keeps the answers shown here.",
     footer: "Your answers stay here if you leave the page.",
     save: "Save answers", saving: "Saving…",
+    choices: "Suggested answers",
+    created: "This automation is already created. Open it to turn it on or off.", open: "Open automation",
   },
 };
-export function WorkflowQuestions({ workflow, save, voice, active = true, createFlow }: {
+export function WorkflowQuestions({ workflow, save, voice, active = true, createFlow, findFlow, openFlow }: {
   workflow: WorkflowMap;
   save?: (correction: string) => Promise<WorkflowMap>;
   voice?: QuestionnaireVoice;
   active?: boolean;
   /** Present when the host can create an Automation Flow: every question becomes required. */
   createFlow?: (answers: WorkflowAnswer[]) => Promise<void>;
+  /** The Flow already created from this task, if any: then the action opens it. */
+  findFlow?: () => Promise<string | null>;
+  openFlow?: (flowId: string) => Promise<void>;
 }) {
   const t = createFlow ? COPY.creation : COPY.en;
   const copy = useRef(t); copy.current = t;
@@ -115,6 +121,17 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
   const [filling, setFilling] = useState(false);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
+  // The Flow already created from this task: the action then opens it.
+  const [existingFlow, setExistingFlow] = useState<string | null>(null);
+  // Looked up once per task: the host passes a new function on every render.
+  const findFlowRef = useRef(findFlow); findFlowRef.current = findFlow;
+  const canFindFlow = Boolean(findFlow);
+  useEffect(() => {
+    if (!canFindFlow || !findFlowRef.current) return;
+    let current = true;
+    findFlowRef.current().then(flowId => { if (current) setExistingFlow(flowId); }, () => {});
+    return () => { current = false; };
+  }, [canFindFlow, workflow.id]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const saving = useRef(false);
@@ -203,6 +220,13 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
     finally { saving.current = false; setBusy(false); }
   }
   /** Saves the answers first, so the Flow is never created from answers that were not kept. */
+  async function open() {
+    if (!existingFlow || !openFlow || saving.current) return;
+    setBusy(true); setError("");
+    try { await openFlow(existingFlow); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Could not open the automation. Try again."); }
+    finally { setBusy(false); }
+  }
   async function create() {
     if (!createFlow || !complete || saving.current) return;
     if (recording || filling) finishVoice.current?.();
@@ -234,11 +258,14 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
       {!recording && transcript && <button type="button" className={styles.textButton} disabled={filling || busy} onClick={() => filler.current?.enqueue(transcriptRef.current, true, true)}>{t.retryVoice}</button>}
     </div>}
     {/* Creation mode has one way to confirm: create the automation (it saves the answers first). */}
-    <form onSubmit={e => { e.preventDefault(); void (createFlow ? create() : submit()); }}>
+    <form onSubmit={e => { e.preventDefault(); void (createFlow ? (existingFlow && openFlow ? open() : create()) : submit()); }}>
       {fields.map((question, index) => <div key={question} className={styles.field}>
         <label htmlFor={`${id}-${index}`}><span className={styles.number}>{index < questions.length ? String(index + 1).padStart(2, "0") : ""}</span><span>{question === EXTRA ? t.extra : question}</span>{answers[question]?.trim() && <Check size={16} aria-label={t.answered} />}</label>
         <div className={styles.answer}>
           {question === EXTRA && <p className={styles.hint}>{t.extraHint}</p>}
+          {question !== EXTRA && (workflow.openQuestionChoices?.[question] ?? []).length > 0 && <div className={styles.choices} role="group" aria-label={`${t.choices}: ${question}`}>
+            {workflow.openQuestionChoices![question].map(choice => <button key={choice} type="button" aria-pressed={(answers[question] ?? "").trim() === choice} disabled={!save || busy} onClick={() => manual(question, choice)}>{choice}</button>)}
+          </div>}
           <textarea id={`${id}-${index}`} aria-label={question === EXTRA ? t.extra : question} rows={question === EXTRA ? 3 : 2} maxLength={4000} value={answers[question] ?? ""} placeholder={question === EXTRA ? t.extraPlaceholder : t.placeholder} disabled={!save || busy} onChange={e => manual(question, e.target.value)} />
           <div className={styles.fieldActions}>
             {question !== EXTRA && !createFlow && <label><input type="checkbox" checked={answers[question] === "Not sure"} disabled={!save || busy} onChange={e => manual(question, e.target.checked ? "Not sure" : "")} />Not sure</label>}
@@ -248,7 +275,7 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
         </div>
       </div>)}
       {error && <p className={styles.error} role="alert">{error}</p>}
-      {save && <div className={styles.actions}><span role="status">{notice || (recording || filling ? t.savingStopsVoice : t.footer)}</span>{createFlow ? <button type="submit" disabled={!complete || busy}>{creating ? "Creating…" : "Create automation"}</button> : saveButton}</div>}
+      {save && <div className={styles.actions}><span role="status">{notice || (recording || filling ? t.savingStopsVoice : createFlow && existingFlow ? t.created : t.footer)}</span>{createFlow ? existingFlow && openFlow ? <button type="submit" disabled={busy}>{t.open}</button> : <button type="submit" disabled={!complete || busy}>{creating ? "Creating…" : "Create automation"}</button> : saveButton}</div>}
     </form>
   </section>;
 }

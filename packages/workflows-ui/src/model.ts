@@ -168,6 +168,9 @@ export type WorkflowMap = {
   evidenceVersion?: number;
   captureSequence?: WorkflowEvidence[];
   openQuestions?: string[];
+  /** Suggested answers per open question (the question text is the key). The
+   * Task Page shows them as choices above the free-text answer, which stays. */
+  openQuestionChoices?: Record<string, string[]>;
   limitations?: string[];
   rank: number;
   analysisDays: number;

@@ -44,8 +44,48 @@ export const createAutomationFlow: NonNullable<WorkflowsPlatform["createAutomati
   } catch (error) {
     throw new Error(CREATION_ERROR[error instanceof FlowsApiError ? error.code : "unknown"], { cause: error });
   }
+  rememberFlow(taskId, flowId);
   await openFlowReview(flowId);
 };
+
+/** Which Flow was created from a Detected Task, kept on this device. */
+const flowOfTaskKey = (taskId: string) => `screenpipe:automation-flow-of-task:${taskId}`;
+
+function rememberFlow(taskId: string, flowId: string | null) {
+  try {
+    if (flowId) window.localStorage.setItem(flowOfTaskKey(taskId), flowId);
+    else window.localStorage.removeItem(flowOfTaskKey(taskId));
+  } catch {
+    // Storage off: the Task Page offers creation again, which reopens the same Flow.
+  }
+}
+
+/**
+ * The Flow created from this task, when it still exists (a demo reset deletes
+ * it): the Task Page then opens it instead of creating it.
+ */
+export const findAutomationFlow: NonNullable<WorkflowsPlatform["findAutomationFlow"]> = async taskId => {
+  let flowId: string | null = null;
+  try {
+    flowId = window.localStorage.getItem(flowOfTaskKey(taskId));
+  } catch {
+    return null;
+  }
+  if (!flowId) return null;
+  try {
+    await flowsApi.get(flowId);
+    return flowId;
+  } catch (error) {
+    if (error instanceof FlowsApiError && error.code === "not_found") {
+      rememberFlow(taskId, null);
+      return null;
+    }
+    // n8n unreachable or the like: the Flow is most likely still there.
+    return flowId;
+  }
+};
+
+export const openAutomationFlow: NonNullable<WorkflowsPlatform["openAutomationFlow"]> = flowId => openFlowReview(flowId);
 
 /**
  * The Review Screen link the `automation-flows` chat skill ends with

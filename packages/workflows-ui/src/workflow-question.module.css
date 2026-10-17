@@ -38,3 +38,9 @@
 .transcript { max-height: 144px; overflow: auto; white-space: pre-wrap; font-size: 14px; line-height: 1.6; }
 .textButton { font-size: 12px; text-decoration: underline; text-underline-offset: 3px; margin-top: 12px; }
 @media (max-width: 620px) { .heading { flex-wrap: wrap; } .voiceButton { min-height: 44px; } .answer { padding-left: 0; } .actions button { min-height: 44px; } }
+/* Suggested answers: one click fills the free-text answer, which stays editable. */
+.choices { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.choices button { padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: 13px; line-height: 1.4; text-align: left; }
+.choices button:hover:not(:disabled) { border-color: var(--ink); }
+.choices button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--panel); }
+.choices button:disabled { opacity: 0.5; }

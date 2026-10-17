@@ -16,8 +16,9 @@ import { ChatButton, FlowsErrorMessage, SectionLabel, StatusBadge, useFlowsLoad 
 import { FlowReview } from "./flow-review";
 import { lastRunLabel, STATUS_LABEL } from "./labels";
 
-/** What waits for the user first; dismissed Flows last. */
-const GROUP_ORDER: FlowStatus[] = ["needs_review", "draft", "active", "paused", "dismissed"];
+/** Not on yet first; dismissed Flows last. A Flow changed after it was on is Paused. */
+const GROUP_ORDER: FlowStatus[] = ["draft", "active", "paused", "dismissed"];
+const groupOf = (status: FlowStatus): FlowStatus => (status === "needs_review" ? "paused" : status);
 
 export function FlowsTab({
   flowId,
@@ -60,7 +61,7 @@ function FlowList({ onOpen, api }: { onOpen: (id: string) => void; api: FlowsApi
         </p>
       ) : (
         GROUP_ORDER.map((status) => {
-          const group = flows.data.filter((flow) => flow.status === status);
+          const group = flows.data.filter((flow) => groupOf(flow.status) === status);
           if (group.length === 0) return null;
           return (
             <section key={status} className="space-y-2" data-testid={`flows-group-${status}`}>

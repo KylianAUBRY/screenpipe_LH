@@ -37,6 +37,12 @@ export const CLARIFICATION_QUESTIONS = [
   "How do you choose the priority?",
 ];
 
+/** Suggested answers on the Task Page; the first of each matches the 3 recorded tickets. */
+export const QUESTION_CHOICES: Record<string, string[]> = {
+  [CLARIFICATION_QUESTIONS[0]]: ["Yes, as a Task with priority Low", "No, only bugs become tickets"],
+  [CLARIFICATION_QUESTIONS[1]]: ["Blocking = Highest, workaround = Medium, idea = Low", "Always Medium, I adjust by hand"],
+};
+
 type Capture = { image: string; at: string; app: "Gmail" | "Jira"; quote: string };
 /** Where the quote shows on screen: the window title (an opened email) or the frame text. */
 export type EvidenceCapture = Capture & { quoteIn: "window" | "text" };
@@ -185,6 +191,7 @@ export function buildDetectedTask(dataUrl: (image: string) => string, now: strin
     bottlenecks: [],
     evidence,
     openQuestions: CLARIFICATION_QUESTIONS,
+    openQuestionChoices: QUESTION_CHOICES,
     userCorrection: null,
     catalogStatus: "current",
     lastReviewedAt: now,

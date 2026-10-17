@@ -6,6 +6,24 @@ engine `/automation-flows/*` routes, the inline n8n graph with one sentence
 per node, the activation history, the Task Page questions. This branch is
 merged into `main` only once the front has been tested and approved.
 
+## Where the review happens (2026-10-17, round 3)
+
+- **Workflows → Task Page is the review.** The questions the AI could not
+  settle are answered there, each with suggested answers (choices from the
+  task, `openQuestionChoices`) above a free-text answer that stays. "Create
+  automation" is the only confirm action (also on Enter): it saves the
+  answers, creates the Flow switched off and opens its Review Screen. Once
+  the Flow exists, the Task Page says so and offers "Open automation"
+  (remembered per task on this device, checked against the Flow service).
+- **Automations → Flows is for looking and switching.** Summary, "Learned
+  from", the graph with its sentences, history; Dismiss, Open in n8n, Turn on /
+  Pause, Restore. No review notices (« needs review », « changed since you
+  opened it »), no Change it: a Flow changed elsewhere shows as Paused and
+  Turn on switches on the version n8n holds.
+- `main` is merged into this branch, never the other way, until tested.
+  Their round-two UI (Delete, Retry, Activity, health banner) is ported into
+  this layout in English as it lands.
+
 ## Language and design
 
 - Everything the user sees is in English: the Flows screens, the Task Page

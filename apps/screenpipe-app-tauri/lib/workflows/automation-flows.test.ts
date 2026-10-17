@@ -14,7 +14,7 @@ vi.mock("@/lib/utils/tauri", () => ({ commands: { showWindowActivated: mocks.sho
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { canCreateAutomationFlow, createAutomationFlow, flowReviewLink, openFlowReviewLink } from "./automation-flows";
+import { canCreateAutomationFlow, createAutomationFlow, findAutomationFlow, flowReviewLink, openAutomationFlow, openFlowReviewLink } from "./automation-flows";
 import { DEMO_TASK_ID, fixtureFlow } from "@/components/automation-flows/fixtures";
 import { mockAutomationFlowsResponse } from "@/components/automation-flows/mock";
 
@@ -73,6 +73,29 @@ describe("desktop createAutomationFlow", () => {
   it("explains a task that cannot become a Flow yet", async () => {
     await expect(createAutomationFlow("wf-other-task", answers)).rejects.toThrow("This task cannot become an automation yet.");
     expect(mocks.emit).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Flow created from a task", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("is unknown before creation, then found after it", async () => {
+    expect(await findAutomationFlow(DEMO_TASK_ID)).toBeNull();
+    await createAutomationFlow(DEMO_TASK_ID, answers);
+    expect(await findAutomationFlow(DEMO_TASK_ID)).toBe(fixtureFlow.id);
+    expect(await findAutomationFlow("wf-other-task")).toBeNull();
+  });
+
+  it("is forgotten once the Flow no longer exists (a demo reset deletes it)", async () => {
+    await createAutomationFlow(DEMO_TASK_ID, answers);
+    mocks.localFetch.mockImplementation(async () => Response.json({ error: "flow_not_found" }, { status: 404 }));
+    expect(await findAutomationFlow(DEMO_TASK_ID)).toBeNull();
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it("opens its Review Screen in Automations → Flows", async () => {
+    await openAutomationFlow(fixtureFlow.id);
+    expect(mocks.emit).toHaveBeenCalledWith("navigate", { url: reviewUrl });
   });
 });
 

@@ -5,18 +5,18 @@
 "use client";
 
 // Review Screen, top to bottom: a sticky header (name, status, last run,
-// Dismiss · Open in n8n · Turn on / Pause), the notices, what the Flow does,
-// the times the user did it by hand ("Learned from"), the n8n graph with one
-// sentence (and the fixed facts) per node, "Change it" (the Screenpipe chat,
-// ticket 08) and the history. Plan: .scratch/hackathon/flow-front-merge.md.
+// Dismiss · Open in n8n · Turn on / Pause), what went wrong with a click, what
+// the Flow does, the times the user did it by hand ("Learned from"), the n8n
+// graph with one sentence per node, and the history. A page to look at and
+// switch: the review (questions, choices) happens on the Task Page in
+// Workflows. Plan: .scratch/hackathon/flow-front-merge.md.
 
 import React from "react";
-import { ArrowLeft, ExternalLink, MessageSquare, Pause, Power, RotateCcw } from "lucide-react";
+import { ArrowLeft, ExternalLink, Pause, Power, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ActivationEvent, Flow, FlowsApi } from "./api";
 import {
-  ChatButton,
   FlowsErrorMessage,
   SectionLabel,
   StatusBadge,
@@ -133,24 +133,13 @@ function ReviewContent({
           {canActivate && (
             <Button size="sm" disabled={busy} onClick={() => void run("activate")}>
               <Power className="mr-1 h-4 w-4" aria-hidden />
-              {active ? "Turn on this version" : "Turn on"}
+              Turn on
             </Button>
           )}
         </div>
       </header>
 
       <FlowActivationNotices activation={activation} />
-      {flow.status === "needs_review" && (
-        <p role="status" className="border border-border bg-accent p-3 text-sm">
-          This Flow changed since it was last on: read it again before turning it
-          back on.
-        </p>
-      )}
-      {flow.reviewOutdated && (
-        <p role="status" className="border border-border bg-accent p-3 text-sm">
-          This Flow was changed directly in n8n since it was last reviewed.
-        </p>
-      )}
 
       <section className="space-y-2">
         <SectionLabel>What this Flow does</SectionLabel>
@@ -164,24 +153,6 @@ function ReviewContent({
           How it works <span className="font-mono">{steps.length}</span>
         </SectionLabel>
         <FlowGraph nodes={steps} edges={flow.edges} />
-      </section>
-
-      {/* The human fixes or improves it: the chat updates the n8n workflow,
-          which then waits for their review. */}
-      <section className="space-y-3 border border-border p-4" data-testid="flow-change">
-        <div className="space-y-1">
-          <h3 className="text-sm font-medium">Something wrong, or a better way?</h3>
-          <p className="text-sm text-muted-foreground">
-            Tell screenpipe what to change. The Flow pauses until you have read the
-            new version and turned it on again.
-          </p>
-        </div>
-        <ChatButton
-          open={() => api.requestChange(flow)}
-          icon={<MessageSquare className="mr-1 h-4 w-4" aria-hidden />}
-        >
-          Change it
-        </ChatButton>
       </section>
 
       <section className="space-y-2">

@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { describe, expect, it, vi } from "vitest";
 import { serializeWorkflowData, WorkflowsApp, type WorkflowsPlatform } from "@screenpipe/workflows-ui";
 import { createFixtureWorkflowsPlatform } from "@screenpipe/workflows-ui/fixture";
-import { buildDetectedTask, CLARIFICATION_QUESTIONS, DEMO_TASK_ID } from "@/lib/automation-flows/demo-task/detected-task";
+import { buildDetectedTask, CLARIFICATION_QUESTIONS, DEMO_TASK_ID, QUESTION_CHOICES } from "@/lib/automation-flows/demo-task/detected-task";
 import { upsertTask } from "@/lib/automation-flows/demo-task/catalog";
 import { readWorkflowAnswers } from "../../../../packages/workflows-ui/src/workflow-answers";
 
@@ -87,6 +87,37 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     expect(block.getByLabelText("Answered")).toBeVisible();
     // Not the optional wording of other tasks.
     expect(block.queryByText(/All optional|Help make this workflow accurate/)).toBeNull();
+  });
+
+  it("offers suggested answers that fill the free text, which stays editable", async () => {
+    await openTaskPage({ createAutomationFlow: vi.fn(async () => {}) });
+    const [first, second] = CLARIFICATION_QUESTIONS;
+    const choices = within(screen.getByRole("group", { name: `Suggested answers: ${first}` }));
+    const choice = choices.getByRole("button", { name: QUESTION_CHOICES[first][0] });
+    expect(choice).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(choice);
+    expect(screen.getByRole("textbox", { name: first })).toHaveValue(QUESTION_CHOICES[first][0]);
+    expect(choice).toHaveAttribute("aria-pressed", "true");
+
+    // The free text stays: an own answer simply unselects the choice.
+    answer(first, "Only when a customer asks for it.");
+    expect(choice).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(within(screen.getByRole("group", { name: `Suggested answers: ${second}` })).getByRole("button", { name: QUESTION_CHOICES[second][1] }));
+    expect(screen.getByRole("button", { name: CREATE })).toBeEnabled();
+  });
+
+  it("opens the automation instead of creating it once it exists", async () => {
+    const createAutomationFlow = vi.fn(async () => {});
+    const openAutomationFlow = vi.fn(async () => {});
+    await openTaskPage({ createAutomationFlow, findAutomationFlow: vi.fn(async () => "flow-1"), openAutomationFlow });
+
+    const open = await screen.findByRole("button", { name: "Open automation" });
+    expect(screen.getByText(/already created/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: CREATE })).toBeNull();
+    fireEvent.click(open);
+    await waitFor(() => expect(openAutomationFlow).toHaveBeenCalledWith("flow-1"));
+    expect(createAutomationFlow).not.toHaveBeenCalled();
   });
 
   it("creates the automation when the answers are confirmed with Enter, not only saves them", async () => {

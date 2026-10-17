@@ -154,7 +154,7 @@ describe("Flows list", () => {
     expect(api.openN8nConnection).toHaveBeenCalled();
   });
 
-  it("groups the Flows by status, what waits for the user first", async () => {
+  it("groups the Flows by status, a Flow changed after it was on with the Paused ones", async () => {
     const flows = [
       { ...summaryOf(fixtureFlow), id: "paused", name: "Paused Flow", status: "paused" as const },
       { ...summaryOf(fixtureFlow), id: "dismissed", name: "Dismissed Flow", status: "dismissed" as const },
@@ -166,14 +166,12 @@ describe("Flows list", () => {
     await screen.findByTestId("flow-row-draft");
 
     const groups = screen.getAllByTestId(/^flows-group-/).map((group) => group.getAttribute("data-testid"));
-    expect(groups).toEqual([
-      "flows-group-needs_review",
-      "flows-group-draft",
-      "flows-group-active",
-      "flows-group-paused",
-      "flows-group-dismissed",
-    ]);
+    expect(groups).toEqual(["flows-group-draft", "flows-group-active", "flows-group-paused", "flows-group-dismissed"]);
     expect(within(screen.getByTestId("flows-group-draft")).getByRole("heading").textContent).toBe("Not on yet 1");
+    const paused = screen.getByTestId("flows-group-paused");
+    expect(within(paused).getByRole("heading").textContent).toBe("Paused 2");
+    expect(within(paused).getByText("Changed Flow")).toBeTruthy();
+    expect(screen.queryByText(/Needs review/)).toBeNull();
   });
 
   it("restores a dismissed Flow from its row and reloads the list", async () => {
@@ -294,7 +292,7 @@ describe("Review Screen", () => {
     expect(within(alert).getByText(/Could not open this moment in the timeline/)).toBeTruthy();
   });
 
-  it("flags a Flow that needs review and lists its activation history", async () => {
+  it("shows a Flow changed by the chat as Paused, with its history and no re-reading notice", async () => {
     const changed: Flow = {
       ...fixtureFlow,
       status: "needs_review",
@@ -306,10 +304,12 @@ describe("Review Screen", () => {
     };
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => changed) })} />);
 
-    expect(await screen.findByText(/changed since it was last on/)).toBeTruthy();
-    expect(screen.getByTestId("flow-status").textContent).toBe("Needs review");
-    expect(screen.getByText(/^Turned on by you/)).toBeTruthy();
+    expect(await screen.findByText(/^Turned on by you/)).toBeTruthy();
+    expect(screen.getByTestId("flow-status").textContent).toBe("Paused");
     expect(screen.getByText(/^Paused for a change by the chat/)).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/changed since|read it again|Needs review/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Turn on" })).toBeTruthy();
   });
 
   it("goes back to the list", async () => {
@@ -397,34 +397,31 @@ describe("Review Screen", () => {
     expect(entries[0]).toMatch(/^Paused outside screenpipe/);
   });
 
-  it("reloads a Flow that changed since it was opened instead of activating it", async () => {
+  it("turns on what n8n holds when the Flow changed since the page loaded, in the same click", async () => {
     const changed: Flow = { ...fixtureFlow, versionId: "fixture-version-2" };
     const get = vi.fn().mockResolvedValueOnce(fixtureFlow).mockResolvedValue(changed);
-    const api = fakeApi({
-      get,
-      activate: vi.fn(async () => {
-        throw new FlowsApiError("version_changed");
-      }),
-    });
-    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+    const activate = vi
+      .fn()
+      .mockRejectedValueOnce(new FlowsApiError("version_changed"))
+      .mockResolvedValue({ ...changed, status: "active", reviewedVersionId: changed.versionId });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get, activate })} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
 
-    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText(/changed since you opened it/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
-    expect(api.activate).toHaveBeenLastCalledWith(fixtureFlow.id, "fixture-version-2");
+    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("On"));
+    expect(activate).toHaveBeenNthCalledWith(1, fixtureFlow.id, fixtureFlow.versionId);
+    expect(activate).toHaveBeenNthCalledWith(2, fixtureFlow.id, "fixture-version-2");
+    expect(screen.queryByText(/changed since/)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("offers to activate the version edited in n8n while the old one runs", async () => {
+  it("offers only Pause for a Flow that is on, even when n8n holds a newer draft", async () => {
     const edited: Flow = { ...activeFlow, versionId: "fixture-version-2", reviewOutdated: true };
-    const api = fakeApi({ get: vi.fn(async () => edited) });
-    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => edited) })} />);
 
-    expect(await screen.findByText(/changed directly in n8n/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Turn on this version" }));
-    expect(api.activate).toHaveBeenCalledWith(fixtureFlow.id, "fixture-version-2");
+    expect(await screen.findByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Turn on/ })).toBeNull();
+    expect(screen.queryByText(/changed directly in n8n/)).toBeNull();
   });
 
   it("never switches a Flow on or off without a click", async () => {
@@ -533,37 +530,16 @@ describe("Review Screen", () => {
     expect(api.openTimeline).toHaveBeenCalledWith({ frameId: 4242, timestamp: ticket.timestamp });
   });
 
-  it("opens the chat about this Flow to request a change", async () => {
-    const api = fakeApi({ get: vi.fn(async () => activeFlow) });
-    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+  it("is a page to look at and switch: no change request, no questions", async () => {
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => activeFlow) })} />);
+    await screen.findByRole("button", { name: "Pause" });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Change it" }));
-
-    expect(api.requestChange).toHaveBeenCalledTimes(1);
-    expect(api.requestChange).toHaveBeenCalledWith(
-      expect.objectContaining({ id: fixtureFlow.id, name: fixtureFlow.name }),
-    );
-    // Asking for a change switches nothing by itself.
-    expect(api.activate).not.toHaveBeenCalled();
-    expect(api.deactivate).not.toHaveBeenCalled();
-    expect(screen.getByTestId("flow-status").textContent).toBe("On");
+    expect(screen.queryByRole("button", { name: "Change it" })).toBeNull();
+    expect(screen.queryByText(/Something wrong/)).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("says when the chat cannot be opened", async () => {
-    const api = fakeApi({
-      requestChange: vi.fn(async () => {
-        throw new Error("chat did not become ready in home window");
-      }),
-    });
-    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Change it" }));
-
-    const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText(/Could not open the chat/)).toBeTruthy();
-  });
-
-  it("asks to review a Flow the chat changed until the user activates it again", async () => {
+  it("turns a Flow the chat changed back on with one click", async () => {
     const changedByChat: Flow = {
       ...fixtureFlow,
       status: "needs_review",
@@ -572,12 +548,7 @@ describe("Review Screen", () => {
       activationLog: [
         activation,
         { ...activation, at: "2026-10-17T09:30:00.000Z", event: "paused_for_edit", by: "chat" },
-        {
-          at: "2026-10-17T09:30:01.000Z",
-          event: "modified",
-          versionId: "fixture-version-2",
-          by: "chat",
-        },
+        { at: "2026-10-17T09:30:01.000Z", event: "modified", versionId: "fixture-version-2", by: "chat" },
       ],
     };
     const reactivated: Flow = {
@@ -589,22 +560,16 @@ describe("Review Screen", () => {
         { ...activation, at: "2026-10-17T09:35:00.000Z", versionId: "fixture-version-2" },
       ],
     };
-    const api = fakeApi({
-      get: vi.fn(async () => changedByChat),
-      activate: vi.fn(async () => reactivated),
-    });
+    const api = fakeApi({ get: vi.fn(async () => changedByChat), activate: vi.fn(async () => reactivated) });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    expect(await screen.findByText(/changed since it was last on/)).toBeTruthy();
-    expect(screen.getByTestId("flow-status").textContent).toBe("Needs review");
-    expect(screen.getByText(/^Paused for a change by the chat/)).toBeTruthy();
-    expect(screen.getByText(/^Changed by the chat/)).toBeTruthy();
+    expect(await screen.findByText(/^Changed by the chat/)).toBeTruthy();
+    expect(screen.getByTestId("flow-status").textContent).toBe("Paused");
 
     fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
 
     await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("On"));
     expect(api.activate).toHaveBeenCalledWith(fixtureFlow.id, "fixture-version-2");
-    expect(screen.queryByText(/changed since it was last on/)).toBeNull();
   });
 
   it("shows the n8n message when the Flow cannot be loaded", async () => {
@@ -636,7 +601,7 @@ describe("Design rules (docs/DESIGN.md)", () => {
     );
     await screen.findByRole("heading", { name: fixtureFlow.name });
     expect(forcedCasing(review.container)).toEqual([]);
-    for (const name of ["Pause", "Open in n8n", "View task", "Change it"]) {
+    for (const name of ["Pause", "Open in n8n", "View task"]) {
       expect(screen.getByRole("button", { name })).toBeTruthy();
     }
     expect(screen.getByRole("heading", { name: "What this Flow does" })).toBeTruthy();
@@ -730,7 +695,7 @@ describe("Freshness", () => {
     expect(screen.getByTestId("flow-status").textContent).toBe("On");
   });
 
-  it("activates only the version the user loaded, even after a background read brings another", async () => {
+  it("turns on the newest version after a background read brought it, without a notice", async () => {
     const edited: Flow = {
       ...fixtureFlow,
       versionId: "fixture-version-2",
@@ -743,27 +708,16 @@ describe("Freshness", () => {
       .mockResolvedValue({ ...edited, status: "active", reviewedVersionId: edited.versionId });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get, activate })} />);
     await screen.findByRole("heading", { name: fixtureFlow.name });
-    expect(screen.queryByText(/changed since you opened it/)).toBeNull();
 
     fireEvent.focus(window);
-
-    // The background read shows the new version and says it changed.
     expect(await screen.findByText("Summary changed in n8n.")).toBeTruthy();
-    expect(screen.getByText(/changed since you opened it/)).toBeTruthy();
+    expect(screen.queryByText(/changed since you opened it/)).toBeNull();
 
-    // Turn on still names the version the user loaded: the engine refuses it.
-    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
-    await waitFor(() => expect(activate).toHaveBeenCalledTimes(1));
-    expect(activate).toHaveBeenLastCalledWith(fixtureFlow.id, fixtureFlow.versionId);
-    await waitFor(() => expect(get).toHaveBeenCalledTimes(3));
-    expect(screen.getByTestId("flow-status").textContent).toBe("Not on yet");
-    expect(screen.getByText(/changed since you opened it/)).toBeTruthy();
-
-    // That reload is the user's: the next click activates what they now read.
+    // The engine refuses the version the page was opened on; the same click turns on the new one.
     fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
     await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("On"));
+    expect(activate).toHaveBeenNthCalledWith(1, fixtureFlow.id, fixtureFlow.versionId);
     expect(activate).toHaveBeenLastCalledWith(fixtureFlow.id, "fixture-version-2");
-    expect(screen.queryByText(/changed since you opened it/)).toBeNull();
   });
 
   it("keeps the Flow on screen when a background read fails", async () => {

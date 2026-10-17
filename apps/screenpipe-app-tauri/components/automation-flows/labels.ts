@@ -8,7 +8,8 @@ export const STATUS_LABEL: Record<FlowStatus, string> = {
   draft: "Not on yet",
   active: "On",
   paused: "Paused",
-  needs_review: "Needs review",
+  // Changed after it was on: it is off, and the Task Page is where it is reviewed.
+  needs_review: "Paused",
   dismissed: "Dismissed",
 };
 
