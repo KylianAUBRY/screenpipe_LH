@@ -282,11 +282,12 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     }
   });
 
-  test("is an Automation Flow: fixed id, switched off, tagged, visible to n8n MCP", () => {
+  test("is an Automation Flow: fixed id, switched off, tagged, not offered to n8n MCP", () => {
     expect(workflow.id).toBe("spNovaFlow000001");
     expect(workflow.active).toBe(false);
     expect(workflow.tags.map((t) => t.name)).toContain("screenpipe-flow");
-    expect(workflow.settings.availableInMCP).toBe(true);
+    // An n8n MCP client could otherwise run it outside the Review Screen.
+    expect(workflow.settings).not.toHaveProperty("availableInMCP");
     expect(workflow.settings.executionOrder).toBe("v1");
     const ids = workflow.nodes.map((n) => n.id);
     expect(new Set(ids).size).toBe(ids.length);

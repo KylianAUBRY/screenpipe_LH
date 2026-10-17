@@ -2246,6 +2246,50 @@ async fn chat_create_cannot_wire_the_users_n8n_credentials() {
 }
 
 #[tokio::test]
+async fn no_flow_is_offered_to_n8n_mcp_clients() {
+    // Ticket 22, item 8: `availableInMCP` would let any n8n MCP client run the
+    // workflow outside the Review Screen; the Flow service never sends it.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let mut workflow = chat_workflow();
+    workflow["settings"]["availableInMCP"] = json!(true);
+    let (status, flow) = chat_create(
+        &app,
+        json!({"workflow": workflow.clone(), "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{flow}");
+    let id = flow["id"].as_str().unwrap().to_string();
+    let (status, flow) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    app.create_from_task().await;
+
+    let sent: Vec<Value> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method.as_str() != "GET" && r.url.path().starts_with("/api/v1/workflows"))
+        .filter_map(|r| serde_json::from_slice(&r.body).ok())
+        .collect();
+    assert_eq!(sent.iter().filter(|body| body["nodes"].is_array()).count(), 3);
+    for body in &sent {
+        assert!(body["settings"].get("availableInMCP").is_none(), "{body}");
+    }
+    assert!(n8n
+        .workflows()
+        .iter()
+        .all(|w| w["settings"].get("availableInMCP").is_none()));
+}
+
+#[tokio::test]
 async fn chat_create_refuses_a_workflow_the_review_screen_cannot_explain() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;

@@ -256,8 +256,7 @@
     }
   },
   "settings": {
-    "executionOrder": "v1",
-    "availableInMCP": true
+    "executionOrder": "v1"
   },
   "staticData": {
     "node:Nouvel email support": { "lastMessageUid": 1 }

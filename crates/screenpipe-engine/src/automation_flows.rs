@@ -110,7 +110,8 @@ const SETTINGS_KEYS: &[&str] = &[
     "timeSavedMode",
     "timeSavedPerExecution",
     "redactionPolicy",
-    "availableInMCP",
+    // Not `availableInMCP`: an n8n MCP client could then run a Flow outside
+    // the Review Screen.
 ];
 
 /// Header that carries the [`FlowActivationKey`] on `POST /:id/activate`.
