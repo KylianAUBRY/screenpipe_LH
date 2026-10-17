@@ -4,6 +4,7 @@
 "use client";
 
 import { workflowReviewLink } from "@/lib/workflows/notification";
+import { automationFlowLink } from "@/lib/automation-flows/notification";
 import { CALENDAR_CONNECTIONS_URL, routeNotificationDeeplink } from "@/lib/notifications/actions";
 import { useEffect } from "react";
 import { useToast } from "@/components/ui/use-toast";
@@ -102,7 +103,7 @@ export function DeeplinkHandler() {
     // and the custom Tauri event from single-instance handoff.
     const processDeepLinkUrl = async (url: string) => {
       const parsedUrl = new URL(url);
-      if (workflowReviewLink(url)) {
+      if (workflowReviewLink(url) || automationFlowLink(url)) {
         await routeNotificationDeeplink(url);
         return;
       }

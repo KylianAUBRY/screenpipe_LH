@@ -11,12 +11,18 @@ import {
   artifactOpenRequestFromUrl,
   OPEN_BRAIN_ARTIFACT_EVENT,
 } from "@/lib/artifact-deeplink";
+import {
+  automationFlowHomeQuery,
+  automationFlowLink,
+  OPEN_AUTOMATION_FLOW_EVENT,
+} from "@/lib/automation-flows/notification";
 
 export const CALENDAR_CONNECTIONS_URL = "screenpipe://calendar-connections";
 
 const GENERIC_DEEPLINK_MOUNT_DELAY_MS = 150;
 const MEETING_DEEPLINK_RETRY_DELAYS_MS = [0, 250, 750, 1500] as const;
 const ARTIFACT_DEEPLINK_RETRY_DELAYS_MS = [0, 250, 750, 1500] as const;
+const AUTOMATION_FLOW_DEEPLINK_RETRY_DELAYS_MS = [0, 250, 750, 1500] as const;
 
 // A single action attached to a notification. Carried both by the transient
 // notification panel (toast) and — once persisted — by the notification
@@ -98,6 +104,11 @@ export function parseMeetingDeeplink(url: string): {
 export function windowForDeeplink(url: string) {
   if (url === CALENDAR_CONNECTIONS_URL) return { Home: { page: "connections&category=Calendar" } };
   if (workflowReviewLink(url)) return { Home: { page: "home" } };
+  const flowLink = automationFlowLink(url);
+  if (flowLink) {
+    // Rust builds `/home?section={page}`, so the rest of the query rides along.
+    return { Home: { page: automationFlowHomeQuery(flowLink.flowId).replace(/^section=/, "") } };
+  }
   if (artifactOpenRequestFromUrl(url, "notification")) {
     return { Home: { page: "brain" } };
   }
@@ -179,6 +190,18 @@ export async function routeNotificationDeeplink(
     for (const delayMs of [0, 250, 750, 1500]) {
       if (delayMs) await sleepMs(delayMs);
       await emitEvent("navigate", { url: `/home?${params}` });
+    }
+    return;
+  }
+  const flowLink = automationFlowLink(url);
+  if (flowLink) {
+    const shown = await showWindowActivated(windowForDeeplink(url));
+    if (shown?.status === "error") throw new Error("Could not open Automations");
+    // Repeated so a cold-started Home webview still lands on the Flow.
+    for (const delayMs of AUTOMATION_FLOW_DEEPLINK_RETRY_DELAYS_MS) {
+      if (delayMs) await sleepMs(delayMs);
+      await emitEvent("navigate", { url: `/home?${automationFlowHomeQuery(flowLink.flowId)}` });
+      await emitEvent(OPEN_AUTOMATION_FLOW_EVENT, { flowId: flowLink.flowId });
     }
     return;
   }

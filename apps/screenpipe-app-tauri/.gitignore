@@ -68,3 +68,6 @@ ffprobe*
 .e2e-gateway-requests.json
 
 /.macos-sidecars/
+
+# Automation Flows: local demo data (see lib/automation-flows/source.ts)
+/public/automation-flows.local.json

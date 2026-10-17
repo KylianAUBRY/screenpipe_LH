@@ -75,6 +75,21 @@ import { buildPipeStoreSubmissionMailto } from "@/lib/pipe-store-submission";
 import { useGT } from "gt-react";
 import { msg, useMessages } from "gt-react";
 import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
+import { RecommendationsView } from "@/components/automation-flows/recommendations-view";
+import { OPEN_AUTOMATION_FLOW_EVENT } from "@/lib/automation-flows/notification";
+
+type PipesTab = "discover" | "my-pipes" | "recommendations";
+const PIPES_TABS: readonly PipesTab[] = ["discover", "my-pipes", "recommendations"];
+
+/** `?tab=` (and `?flow=` for Recommendations) requested when the view mounts. */
+function pipesTabRequestFromUrl(): { tab: PipesTab | null; flowId: string | null } {
+  if (typeof window === "undefined") return { tab: null, flowId: null };
+  const params = new URLSearchParams(window.location.search);
+  const tab = params.get("tab");
+  const valid = tab && (PIPES_TABS as readonly string[]).includes(tab) ? (tab as PipesTab) : null;
+  return { tab: valid, flowId: valid === "recommendations" ? params.get("flow") : null };
+}
 
 
 // --- Types ---
@@ -350,36 +365,49 @@ export function PipeStoreView() {
       .catch(() => setInstalledCount(0));
   }, []);
 
-  const [activeTab, setActiveTab] = useState<"discover" | "my-pipes">("my-pipes");
+  const [urlRequest] = useState(pipesTabRequestFromUrl);
+  const [activeTab, setActiveTabState] = useState<PipesTab>(urlRequest.tab ?? "my-pipes");
+  // Automation Flow open in the Recommendations tab (review screen), or null for the list.
+  const [openFlowId, setOpenFlowId] = useState<string | null>(urlRequest.flowId);
+  // Set once a tab is chosen explicitly, so the new-user default never overrides it.
+  const tabChosen = useRef(urlRequest.tab !== null);
+  const setActiveTab = useCallback((tab: PipesTab) => {
+    tabChosen.current = true;
+    setActiveTabState(tab);
+  }, []);
 
   // listen for tab switch events from empty state button
   useEventListener("switch-pipes-tab", (e) => {
-    setActiveTab((e as CustomEvent<{ tab: "discover" | "my-pipes" }>).detail.tab);
+    setActiveTab((e as CustomEvent<{ tab: PipesTab }>).detail.tab);
   });
 
-  // Read ?tab= from URL after mount, then strip it so it doesn't persist
+  // A notification click opens a Flow review, even when this view is already mounted.
+  useTauriEvent<{ flowId: string }>(OPEN_AUTOMATION_FLOW_EVENT, (event) => {
+    setActiveTab("recommendations");
+    setOpenFlowId(event.payload.flowId);
+  });
+
+  // ?tab= and ?flow= were read into the initial state; strip them so they don't persist
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const tab = params.get("tab");
-    if (tab === "discover") setActiveTab("discover");
-    else if (tab === "my-pipes") setActiveTab("my-pipes");
-    if (tab) {
+    if (params.has("tab") || params.has("flow")) {
       params.delete("tab");
+      params.delete("flow");
       window.history.replaceState({}, "", `${window.location.pathname}?${params}`);
     }
   }, []);
 
   // Once we know installed count, switch new users to discover
   useEffect(() => {
-    if (installedCount !== null && installedCount === 0) {
-      const params = new URLSearchParams(window.location.search);
-      if (!params.get("tab")) setActiveTab("discover");
+    if (installedCount !== null && installedCount === 0 && !tabChosen.current) {
+      setActiveTabState("discover");
     }
   }, [installedCount]);
 
   const tabs = [
     { key: "my-pipes" as const, label: ui("My tasks") },
     { key: "discover" as const, label: ui("Discover") },
+    { key: "recommendations" as const, label: ui("Recommendations") },
   ];
 
   return (
@@ -387,7 +415,9 @@ export function PipeStoreView() {
       <p className="text-sm text-muted-foreground">
         {activeTab === "discover"
           ? ui("Browse, install, and review community automations")
-          : ui("Run tasks on a schedule, after meetings, or when events happen.")}
+          : activeTab === "recommendations"
+            ? ui("Automations screenpipe built from work you repeat. Nothing runs until you turn it on.")
+            : ui("Run tasks on a schedule, after meetings, or when events happen.")}
       </p>
 
       {/* Tab bar */}
@@ -417,6 +447,8 @@ export function PipeStoreView() {
       {/* Tab content */}
       {activeTab === "discover" ? (
         <DiscoverView onInstalled={() => setActiveTab("my-pipes")} />
+      ) : activeTab === "recommendations" ? (
+        <RecommendationsView openFlowId={openFlowId} onOpenFlow={setOpenFlowId} />
       ) : (
         <PipesSection />
       )}
