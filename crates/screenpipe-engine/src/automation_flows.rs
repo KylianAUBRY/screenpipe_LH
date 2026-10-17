@@ -317,6 +317,8 @@ struct FromTaskRequest {
 #[derive(Debug)]
 enum FlowError {
     NotConfigured,
+    /// n8n answered but refused the API key of the n8n connection (401/403).
+    Unauthorized(String),
     Unreachable(String),
     TaskNotFound,
     FlowNotFound,
@@ -342,6 +344,10 @@ impl IntoResponse for FlowError {
             FlowError::NotConfigured => (
                 StatusCode::PRECONDITION_FAILED,
                 json!({"error": "n8n_not_configured"}),
+            ),
+            FlowError::Unauthorized(detail) => (
+                StatusCode::PRECONDITION_FAILED,
+                json!({"error": "n8n_unauthorized", "detail": detail}),
             ),
             FlowError::Unreachable(detail) => (
                 StatusCode::BAD_GATEWAY,
@@ -438,6 +444,11 @@ impl N8nApi {
         })?;
         let status = response.status().as_u16();
         let value = response.json::<Value>().await.unwrap_or(Value::Null);
+        // A refused key fails every call the same way: report it as a setup
+        // problem of the n8n connection, not as n8n being down.
+        if matches!(status, 401 | 403) {
+            return Err(FlowError::Unauthorized(n8n_answer(status, &value)));
+        }
         Ok((status, value))
     }
 
@@ -454,6 +465,27 @@ impl N8nApi {
         } else {
             Err(upstream_error(status, &value))
         }
+    }
+
+    /// Every item of an n8n list endpoint, following its `nextCursor` (n8n
+    /// answers at most 250 per page).
+    async fn all_pages(&self, path: &str, query: &[(&str, &str)]) -> Result<Vec<Value>, FlowError> {
+        let mut items = Vec::new();
+        let mut cursor: Option<String> = None;
+        // Bounds a cursor that never ends: 40 pages of 250.
+        for _ in 0..40 {
+            let mut params = query.to_vec();
+            if let Some(cursor) = cursor.as_deref() {
+                params.push(("cursor", cursor));
+            }
+            let page = self.expect_ok(Method::GET, path, &params, None).await?;
+            items.extend(page["data"].as_array().into_iter().flatten().cloned());
+            match page["nextCursor"].as_str().filter(|next| !next.is_empty()) {
+                Some(next) if cursor.as_deref() != Some(next) => cursor = Some(next.to_string()),
+                _ => break,
+            }
+        }
+        Ok(items)
     }
 
     /// The workflow, or `None` when n8n does not have it (deleted or archived).
@@ -491,14 +523,11 @@ impl N8nApi {
     }
 
     async fn find_tag(&self) -> Result<Option<String>, FlowError> {
-        let tags = self
-            .expect_ok(Method::GET, "/tags", &[("limit", "250")], None)
-            .await?;
-        Ok(tags["data"].as_array().and_then(|tags| {
-            tags.iter()
-                .find(|tag| tag["name"] == FLOW_TAG)
-                .and_then(|tag| tag["id"].as_str().map(str::to_string))
-        }))
+        let tags = self.all_pages("/tags", &[("limit", "250")]).await?;
+        Ok(tags
+            .iter()
+            .find(|tag| tag["name"] == FLOW_TAG)
+            .and_then(|tag| tag["id"].as_str().map(str::to_string)))
     }
 
     /// Adds [`FLOW_TAG`] to the workflow's tags and returns it re-read.
@@ -914,16 +943,11 @@ async fn build_flow(api: &N8nApi, workflow: &Value, record: Option<&FlowRecord>)
 async fn list_flows(State(state): State<FlowsState>) -> Result<Json<Vec<FlowSummary>>, FlowError> {
     let api = N8nApi::from_connection(&state).await?;
     let store = FlowStore::load(&state.screenpipe_dir)?;
-    let page = api
-        .expect_ok(
-            Method::GET,
-            "/workflows",
-            &[("tags", FLOW_TAG), ("limit", "250")],
-            None,
-        )
+    let workflows = api
+        .all_pages("/workflows", &[("tags", FLOW_TAG), ("limit", "250")])
         .await?;
     let mut flows = Vec::new();
-    for workflow in page["data"].as_array().into_iter().flatten() {
+    for workflow in &workflows {
         if !has_flow_tag(workflow) || workflow["isArchived"] == true {
             continue;
         }
@@ -1177,8 +1201,8 @@ async fn create_flow(
 }
 
 /// Demo: imports the task's bundled n8n workflow switched off and tagged (or
-/// adopts the copy the import script already installed), and records its
-/// review material. Calling it again for the same task returns the same Flow
+/// adopts the copy the import script already installed, switching it off if
+/// it was left on), and records its review material. Calling it again for the same task returns the same Flow
 /// (re-imported only if it was deleted or archived in n8n).
 async fn create_from_task(
     State(state): State<FlowsState>,
@@ -1226,6 +1250,14 @@ async fn create_from_task(
         None => None,
     };
     let created = match preinstalled {
+        // Creation always hands over a switched-off Draft (story 12): a copy
+        // left on in the n8n editor is switched off before it is recorded.
+        // Nothing is logged: the user never activated it.
+        Some(workflow) if workflow["active"] == true => {
+            let id = workflow_id(&workflow)?;
+            let unpublished = api.switch(&id, "unpublish", None).await?;
+            api.workflow(&id).await?.unwrap_or(unpublished)
+        }
         Some(workflow) => workflow,
         None => {
             api.expect_ok(

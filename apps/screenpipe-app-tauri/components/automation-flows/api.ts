@@ -54,6 +54,8 @@ export type Flow = FlowSummary & {
 
 export type FlowsErrorCode =
   | "n8n_not_configured"
+  /** n8n answered but refused the API key of Connections → n8n. */
+  | "n8n_unauthorized"
   | "n8n_unreachable"
   | "not_found"
   /** Activation: the n8n workflow changed since the user loaded it. */
@@ -66,6 +68,7 @@ export type FlowsErrorCode =
 
 const SERVER_CODES: readonly FlowsErrorCode[] = [
   "n8n_not_configured",
+  "n8n_unauthorized",
   "n8n_unreachable",
   "version_changed",
   "activation_failed",
