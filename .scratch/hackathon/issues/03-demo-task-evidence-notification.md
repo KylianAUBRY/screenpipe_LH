@@ -36,9 +36,12 @@ once 02 exists, the demo Flow) so the demo can be replayed.
   `duplicate notification suppressed` and exits 1).
 - [x] The existing workflows UI tests still pass.
   `cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/workflows lib/workflows`:
-  479 passed, 14 failed. The 14 (`library.test.tsx`, `workflow-block-types.test.tsx`) fail identically
+  481 passed, 14 failed. The 14 (`library.test.tsx`, `workflow-block-types.test.tsx`) fail identically
   with this change reverted: `localStorage.clear` is undefined under Node v26 (environment, not this ticket).
-  `step-evidence.test.tsx` + `guide-images.test.ts`: 26/26 passed (includes the new embedded-image test).
+  Ticket tests: `bun x vitest run --config vitest.config.ts components/workflows/demo-task-evidence.test.tsx
+  components/workflows/step-evidence.test.tsx lib/workflows/guide-images.test.ts`: 28/28 passed.
+  `demo-task-evidence.test.tsx` (save path; the demo fixture opened through `WorkflowsApp`'s review request)
+  and the embedded-image case in `step-evidence.test.tsx` were red against the pre-ticket `screenshots.ts`.
   `bun test infra/automation-flows/demo`: 6/6 passed. `bun x tsc --noEmit` (app): no errors.
 - [x] Committed images show only the demo accounts (no unrelated windows) and stay small.
   9 WebP key frames, cropped to the browser viewport (no menu bar, tabs, toolbar or Dock), 1280 px wide,
