@@ -6,6 +6,7 @@
 // Run: bun test infra/automation-flows/workflows
 
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -197,9 +198,8 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
   });
 
   test("stops without a ticket when the AI answers none", () => {
-    const agent = onlyNode("@n8n/n8n-nodes-langchain.agent");
-    const gate = onlyNode("n8n-nodes-base.if");
-    expect(next(agent.name)).toEqual([gate.name]);
+    const gate = aiGate();
+    expect(gate.type).toBe("n8n-nodes-base.if");
 
     const passes = (type: string) => evaluateIf(gate, { $json: { output: aiAnswer({ type }) } });
     expect(passes("none")).toBe(false);
@@ -210,7 +210,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
   });
 
   test("a malformed or injected AI answer never reaches Jira, whatever the parser let through", () => {
-    const gate = onlyNode("n8n-nodes-base.if");
+    const gate = aiGate();
     const passes = (overrides: Record<string, unknown>) =>
       evaluateIf(gate, { $json: { output: { ...aiAnswer(), ...overrides } } });
 
@@ -248,12 +248,97 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(issue.fields.issuetype).toEqual({ name: "Bug" });
     expect(issue.fields.summary).toBe("NovaCRM - Export CSV des contacts filtrés vide");
     expect(issue.fields.priority).toEqual({ name: "Highest" });
-    expect(issue.fields.labels).toEqual(["back"]);
+    expect(issue.fields.labels).toEqual(["back", mailLabel(EMAIL_MESSAGE_ID)]);
     const quoted = plainTextBlock(issue.fields.description);
     expect(quoted).toContain(EMAIL.from);
     expect(quoted).toContain(EMAIL.subject);
     expect(quoted.endsWith(`\n\n${EMAIL.textPlain}`)).toBe(true);
     expect(issue.fields).not.toHaveProperty("assignee");
+  });
+
+  test("every ticket carries its email's own label: mail- and 8 hex characters of a hash of its Message-ID", () => {
+    const labelOf = (email: Email) =>
+      jiraRequestFor(aiAnswer(), email).fields.labels.filter((l: string) => l.startsWith("mail-"));
+    expect(labelOf(EMAIL)).toEqual([mailLabel(EMAIL_MESSAGE_ID)]);
+    // The same email read again (a retried Run, a restored inbox) gets the same label.
+    expect(labelOf({ ...EMAIL, subject: "Re: autre chose", date: "2026-10-18T09:00:00.000Z" })).toEqual([
+      mailLabel(EMAIL_MESSAGE_ID),
+    ]);
+    expect(labelOf({ ...EMAIL, metadata: { "message-id": ` ${EMAIL_MESSAGE_ID}\n` } })).toEqual([
+      mailLabel(EMAIL_MESSAGE_ID),
+    ]);
+    // Another email gets another label.
+    expect(labelOf({ ...EMAIL, metadata: { "message-id": "<autre@mail.example.com>" } })).toEqual([
+      mailLabel("<autre@mail.example.com>"),
+    ]);
+    expect(mailLabel("<autre@mail.example.com>")).not.toBe(mailLabel(EMAIL_MESSAGE_ID));
+    // Whatever the header holds, the label is 8 hex characters: nothing from
+    // the email reaches Jira's labels or the JQL search verbatim.
+    for (const id of ['" OR project = SECRET OR labels = "x', "x".repeat(10_000), "<é@ü.example>"]) {
+      expect(labelOf({ ...EMAIL, metadata: { "message-id": id } })[0], id).toMatch(/^mail-[0-9a-f]{8}$/);
+    }
+  });
+
+  test("an email without Message-ID gets a stable label from its sender, date and subject", () => {
+    const labelOf = (email: Email) =>
+      jiraRequestFor(aiAnswer(), email).fields.labels.filter((l: string) => l.startsWith("mail-"));
+    const { metadata: _, ...bare } = EMAIL;
+    const label = labelOf(bare);
+    expect(label).toHaveLength(1);
+    expect(label[0]).toMatch(/^mail-[0-9a-f]{8}$/);
+    for (const email of [{ ...bare, metadata: {} }, { ...bare, metadata: { "message-id": "  " } }]) {
+      expect(labelOf(email), JSON.stringify(email.metadata)).toEqual(label);
+    }
+    // Read again, the same email gets the same label, whatever its body.
+    expect(labelOf({ ...bare, textPlain: "autre corps", textHtml: "" })).toEqual(label);
+    // Another sender, date or subject is another email.
+    for (const other of [
+      { from: "Autre <autre@example.com>" },
+      { date: "2026-10-17T04:05:00.000Z" },
+      { subject: "Export des contacts vide dans NovaPay" },
+    ]) {
+      expect(labelOf({ ...bare, ...other }), JSON.stringify(other)).not.toEqual(label);
+    }
+  });
+
+  test("the same email handled twice gives one ticket: NOVA is searched for its label before any creation", () => {
+    const jira = fakeJira();
+    expect(runTicketBranch(aiAnswer(), EMAIL, jira)).not.toBeNull();
+    // A retried Run, or the email marked unread again: found, skipped, no error.
+    expect(runTicketBranch(aiAnswer(), EMAIL, jira)).toBeNull();
+    expect(runTicketBranch(aiAnswer({ priority: "Low" }), { ...EMAIL, subject: "Re: export" }, jira)).toBeNull();
+    expect(jira.issues).toHaveLength(1);
+    expect(jira.searches).toEqual(Array(3).fill(labelSearch(mailLabel(EMAIL_MESSAGE_ID))));
+
+    // Another email still gets its own ticket.
+    const other = { ...EMAIL, metadata: { "message-id": "<autre@mail.example.com>" } };
+    expect(runTicketBranch(aiAnswer(), other, jira)?.fields.labels).toEqual(["back", mailLabel("<autre@mail.example.com>")]);
+    expect(jira.issues).toHaveLength(2);
+  });
+
+  test("a ticket that already carries the email's label, whoever created it, means no new ticket", () => {
+    const existing = { fields: { project: { key: "NOVA" }, labels: ["front", mailLabel(EMAIL_MESSAGE_ID)] } };
+    const jira = fakeJira([existing]);
+    expect(runTicketBranch(aiAnswer(), EMAIL, jira)).toBeNull();
+    expect(jira.issues).toEqual([existing]);
+    // A NOVA ticket with only the AI's label (made before D20) blocks nothing.
+    const older = fakeJira([{ fields: { project: { key: "NOVA" }, labels: ["back"] } }]);
+    expect(runTicketBranch(aiAnswer(), EMAIL, older)).not.toBeNull();
+  });
+
+  test("when the search cannot answer, the Run fails instead of risking a duplicate", () => {
+    const search = workflow.nodes.find((n) => n.name === next(onlyNode("n8n-nodes-base.set").name)[0])!;
+    expect(search.type).toBe("n8n-nodes-base.httpRequest");
+    // An HTTP error stops the Run (n8n's default): no "continue", no "never error".
+    expect(search.onError ?? "stopWorkflow").toBe("stopWorkflow");
+    expect(search.parameters.options?.response?.response?.neverError ?? false).toBe(false);
+    expect(search.parameters.options?.response?.response?.fullResponse ?? false).toBe(false);
+    // An answer without its list of issues fails too, rather than reading as "none found".
+    for (const answer of [{}, { issues: null }, { issues: "NOVA-1" }, { errorMessages: ["JQL invalide"] }]) {
+      const jira = { ...fakeJira(), searchAnswer: answer };
+      expect(() => runTicketBranch(aiAnswer(), EMAIL, jira), JSON.stringify(answer)).toThrow();
+      expect(jira.issues).toEqual([]);
+    }
   });
 
   test("an email cannot add Jira markup: all of it stays in one {noformat} block it cannot close", () => {
@@ -332,17 +417,35 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(issue.fields.issuetype).toEqual({ name: "Tâche" });
     expect(issue.fields.summary).toBe("NovaCRM - Filtre Dernière relance");
     expect(issue.fields.priority).toEqual({ name: "Low" });
-    expect(issue.fields.labels).toEqual(["front"]);
+    expect(issue.fields.labels).toEqual(["front", mailLabel(EMAIL_MESSAGE_ID)]);
   });
 
   test("calls the Jira Cloud REST API with the stored Jira credential", () => {
-    const create = onlyNode("n8n-nodes-base.httpRequest");
-    expect(create.parameters.method).toBe("POST");
-    expect(create.parameters.url).toBe("https://kylianaubry.atlassian.net/rest/api/2/issue");
-    expect(create.parameters.authentication).toBe("predefinedCredentialType");
-    expect(create.parameters.nodeCredentialType).toBe("jiraSoftwareCloudApi");
-    expect(create.credentials?.jiraSoftwareCloudApi.id).toBe("spNovaJira000001");
+    const requests = workflow.nodes.filter((n) => n.type === "n8n-nodes-base.httpRequest");
+    expect(requests.map((n) => `${n.parameters.method} ${n.parameters.url}`).sort()).toEqual([
+      `GET ${JIRA_SEARCH_URL}`,
+      `POST ${JIRA_ISSUE_URL}`,
+    ]);
+    for (const request of requests) {
+      expect(request.parameters.authentication, request.name).toBe("predefinedCredentialType");
+      expect(request.parameters.nodeCredentialType, request.name).toBe("jiraSoftwareCloudApi");
+      expect(request.credentials?.jiraSoftwareCloudApi.id, request.name).toBe("spNovaJira000001");
+    }
+    const create = requests.find((n) => n.parameters.method === "POST")!;
     expect(next(create.name)).toEqual([]);
+  });
+
+  test("the chat skill's worked example quotes the Jira body as it is", () => {
+    // crates/screenpipe-core/assets/skills/automation-flows/SKILL.md tells the
+    // chat how to add a label; a stale quote would make it drop the email's label.
+    const skill = readFileSync(
+      join(import.meta.dir, "../../../crates/screenpipe-core/assets/skills/automation-flows/SKILL.md"),
+      "utf8",
+    );
+    const create = workflow.nodes.find((n) => n.parameters.url === JIRA_ISSUE_URL)!;
+    const labels = /labels: \[[^\]]*\]/.exec(create.parameters.jsonBody)![0];
+    expect(skill).toContain(`\`${labels}\``);
+    expect(skill).toContain(`« ${create.name} »`);
   });
 
   test("uses only node types and versions verified on the local n8n 2.42.2", () => {
@@ -389,6 +492,10 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     for (const word of ["email", "IA", "Jira", "NOVA"]) {
       expect(review.summary).toContain(word);
     }
+    // D20 in plain words: each ticket is labelled after its email, and an
+    // email handled again never makes a second ticket.
+    expect(review.summary).toMatch(/étiquette[^.]*email/);
+    expect(review.summary).toMatch(/doublon/);
     expect(review.summary.length).toBeLessThan(1200);
   });
 
@@ -423,21 +530,56 @@ function walk(value: unknown, visit: (key: string, value: unknown) => void) {
   }
 }
 
+type JiraIssue = { fields: Record<string, any> };
+
 /**
- * Follows the graph from the "ticket needed" branch to the Jira request and
- * returns the JSON body n8n would send for this AI answer and EMAIL.
+ * The NOVA project as the workflow sees it: issues it holds, JQL searches it
+ * got, and optionally a forced answer to every search (a broken Jira).
  */
-function jiraRequestFor(answer: ReturnType<typeof aiAnswer>, email: typeof EMAIL = EMAIL) {
+function fakeJira(issues: JiraIssue[] = []): {
+  issues: JiraIssue[];
+  searches: string[];
+  searchAnswer?: unknown;
+} {
+  return { issues, searches: [] };
+}
+type FakeJira = ReturnType<typeof fakeJira>;
+
+const JIRA_ISSUE_URL = "https://kylianaubry.atlassian.net/rest/api/2/issue";
+// Jira Cloud's JQL search; the older /rest/api/2/search is removed.
+const JIRA_SEARCH_URL = "https://kylianaubry.atlassian.net/rest/api/2/search/jql";
+
+/** The one JQL search the workflow may send: NOVA tickets carrying this label. */
+function labelSearch(label: string): string {
+  return `project = NOVA AND labels = "${label}"`;
+}
+
+/**
+ * Runs the graph from the AI step to its end, for this AI answer and email,
+ * against `jira`: every node on the way is evaluated, and every HTTP Request
+ * is answered by the fake Jira. Returns the issue the run created, or null
+ * when it created none.
+ */
+function runTicketBranch(
+  answer: ReturnType<typeof aiAnswer>,
+  email: Email = EMAIL,
+  jira: FakeJira = fakeJira(),
+): JiraIssue | null {
   const trigger = onlyNode("n8n-nodes-base.emailReadImap");
-  const gate = onlyNode("n8n-nodes-base.if");
-  const nodes = { [trigger.name]: email };
+  const agent = onlyNode("@n8n/n8n-nodes-langchain.agent");
+  const nodes: Record<string, any> = { [trigger.name]: email };
 
   let item: any = { output: answer };
-  let current = next(gate.name, 0);
-  let request: N8nNode | undefined;
-  while (current.length === 1) {
+  nodes[agent.name] = item;
+  let current = next(agent.name);
+  let created: JiraIssue | null = null;
+  while (current.length > 0) {
+    expect(current, "the ticket branch never fans out").toHaveLength(1);
     const node = workflow.nodes.find((n) => n.name === current[0])!;
-    if (node.type === "n8n-nodes-base.set") {
+    let output = 0;
+    if (node.type === "n8n-nodes-base.if") {
+      output = evaluateIf(node, { $json: item, nodes }) ? 0 : 1;
+    } else if (node.type === "n8n-nodes-base.set") {
       expect(node.parameters.includeOtherFields ?? false).toBe(false);
       const out: Record<string, unknown> = {};
       for (const a of node.parameters.assignments.assignments) {
@@ -445,18 +587,60 @@ function jiraRequestFor(answer: ReturnType<typeof aiAnswer>, email: typeof EMAIL
       }
       item = out;
     } else if (node.type === "n8n-nodes-base.httpRequest") {
-      request = node;
-      break;
+      item = answerHttpRequest(node, { $json: item, nodes }, jira, (issue) => {
+        expect(created, "a second Jira creation in one run").toBeNull();
+        created = issue;
+      });
     } else {
-      throw new Error(`unexpected step before the Jira request: ${node.type}`);
+      throw new Error(`unexpected step after the AI: ${node.type}`);
     }
-    current = next(node.name);
+    nodes[node.name] = item;
+    current = next(node.name, output);
   }
-  expect(request).toBeDefined();
-  expect(request!.parameters.sendBody).toBe(true);
-  expect(request!.parameters.specifyBody).toBe("json");
-  const body = evaluate(request!.parameters.jsonBody, { $json: item, nodes });
-  return (typeof body === "string" ? JSON.parse(body) : body) as { fields: Record<string, any> };
+  return created;
+}
+
+/** The fake Jira's answer to one HTTP Request node, as n8n would get it. */
+function answerHttpRequest(node: N8nNode, ctx: Ctx, jira: FakeJira, onCreate: (issue: JiraIssue) => void) {
+  const p = node.parameters;
+  expect(p.authentication).toBe("predefinedCredentialType");
+  expect(p.nodeCredentialType).toBe("jiraSoftwareCloudApi");
+  if ((p.method ?? "GET") === "GET" && p.url === JIRA_SEARCH_URL) {
+    expect(p.sendQuery).toBe(true);
+    expect(p.specifyQuery ?? "keypair").toBe("keypair");
+    const query = Object.fromEntries(
+      p.queryParameters.parameters.map((q: { name: string; value: string }) => [q.name, String(evaluate(q.value, ctx))]),
+    );
+    const jql = query.jql;
+    jira.searches.push(jql);
+    const label = /^project = NOVA AND labels = "(mail-[0-9a-f]{8})"$/.exec(jql)?.[1];
+    expect(label, `JQL sent to Jira: ${jql}`).toBeDefined();
+    if ("searchAnswer" in jira) return jira.searchAnswer;
+    const found = jira.issues.filter((i) => i.fields.labels?.includes(label));
+    const max = Number(query.maxResults ?? 50);
+    return { issues: found.slice(0, max).map((_, n) => ({ id: String(10001 + n) })), isLast: true };
+  }
+  if (p.method === "POST" && p.url === JIRA_ISSUE_URL) {
+    expect(p.sendBody).toBe(true);
+    expect(p.specifyBody).toBe("json");
+    const body = evaluate(p.jsonBody, ctx);
+    const issue = (typeof body === "string" ? JSON.parse(body) : body) as JiraIssue;
+    // The workflow looked for this email's label just before creating.
+    const ownLabel = issue.fields.labels?.find((l: string) => l.startsWith("mail-"));
+    expect(ownLabel, "the created ticket carries its email's label").toBeDefined();
+    expect(jira.searches.at(-1), "searched NOVA for the label before creating").toBe(labelSearch(ownLabel));
+    jira.issues.push(issue);
+    onCreate(issue);
+    return { id: String(10000 + jira.issues.length), key: `NOVA-${jira.issues.length}` };
+  }
+  throw new Error(`the fake Jira does not answer ${p.method ?? "GET"} ${p.url}`);
+}
+
+/** The JSON body n8n would send to create the issue, for this AI answer and email. */
+function jiraRequestFor(answer: ReturnType<typeof aiAnswer>, email: Email = EMAIL): JiraIssue {
+  const created = runTicketBranch(answer, email);
+  expect(created).not.toBeNull();
+  return created!;
 }
 
 /**
@@ -477,13 +661,31 @@ const SUMMARY_MAX = 80;
 /** Jira Cloud refuses a description over 32 767 characters; the workflow stays well below. */
 const DESCRIPTION_MAX = 20_000;
 
-const EMAIL = {
+type Email = {
+  from: string;
+  subject: string;
+  date: string;
+  textPlain: string;
+  textHtml: string;
+  /** Every header the IMAP "simple" item does not lift to the top, lower-cased. */
+  metadata?: Record<string, string>;
+};
+
+const EMAIL_MESSAGE_ID = "<CAexample.4f2a91@mail.example.com>";
+
+const EMAIL: Email = {
   from: "Arthur Test <arthur@example.com>",
   subject: "Export des contacts vide dans NovaCRM",
   date: "2026-10-17T04:04:00.000Z",
   textPlain: "Bonjour,\nL'export CSV des contacts filtrés ne contient que les en-têtes.\nMerci",
   textHtml: "<p>Bonjour</p>",
+  metadata: { "message-id": EMAIL_MESSAGE_ID },
 };
+
+/** The label D20 gives the ticket of an email with this Message-ID. */
+function mailLabel(messageId: string): string {
+  return "mail-" + createHash("sha256").update(messageId, "utf8").digest("hex").slice(0, 8);
+}
 
 const UNTRUSTED_OPEN = "<email_non_fiable>";
 const UNTRUSTED_CLOSE = "</email_non_fiable>";
@@ -515,6 +717,22 @@ function aiAnswer(overrides: Record<string, string> = {}) {
 
 type Ctx = { $json: any; nodes?: Record<string, any> };
 
+// n8n's expression engine adds `.hash(algorithm)` to strings (n8n-workflow
+// 2.42.2 extensions/string-extensions.js: md5 by default, sha256 as UTF-8
+// hex via jsSHA). Plain JS has no such method, so the evaluator lends it the
+// same behaviour for the hex algorithms the fixture may use.
+const N8N_HASHES: Record<string, string> = { md5: "md5", sha1: "sha1", sha256: "sha256", sha512: "sha512" };
+if (!("hash" in String.prototype)) {
+  Object.defineProperty(String.prototype, "hash", {
+    configurable: true,
+    value(this: string, algorithm = "md5") {
+      const name = N8N_HASHES[String(algorithm).toLowerCase()];
+      if (!name) throw new Error(`hash algorithm not supported by this test: ${algorithm}`);
+      return createHash(name).update(String(this), "utf8").digest("hex");
+    },
+  });
+}
+
 function evaluate(value: unknown, ctx: Ctx): unknown {
   if (typeof value !== "string" || !value.startsWith("=")) return value;
   const template = value.slice(1);
@@ -537,6 +755,7 @@ function evaluateIf(node: N8nNode, ctx: Ctx): boolean {
   expect(options.caseSensitive).toBe(true);
   expect(options.typeValidation).toBe("strict");
   const results = conditions.map((c: any) => {
+    if (c.operator.type === "number") return evaluateNumberCondition(c, ctx);
     const raw = evaluate(c.leftValue, ctx);
     if (raw !== undefined && raw !== null && typeof raw !== "string") {
       throw new Error(`Wrong type: '${raw}' is a ${typeof raw} but was expecting a string`);
@@ -554,6 +773,29 @@ function evaluateIf(node: N8nNode, ctx: Ctx): boolean {
     throw new Error(`operator not supported by this test: ${op}`);
   });
   return combinator === "or" ? results.some(Boolean) : results.every(Boolean);
+}
+
+// n8n 2.42.2, strict number comparison: null/undefined pass through (and
+// equal nothing), a numeric string is parsed, any other value fails the node
+// with "Wrong type" (filter-parameter.js, type-validation.js).
+function evaluateNumberCondition(c: any, ctx: Ctx): boolean {
+  const toNumber = (raw: unknown): number | null => {
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw === "number") return raw;
+    if (typeof raw === "string" && raw.trim() !== "" && Number.isFinite(Number(raw))) return Number(raw);
+    throw new Error(`Wrong type: '${raw}' is a ${typeof raw} but was expecting a number`);
+  };
+  const left = toNumber(evaluate(c.leftValue, ctx));
+  const right = toNumber(evaluate(c.rightValue, ctx));
+  if (c.operator.operation === "equals") return left === right;
+  throw new Error(`operator not supported by this test: number:${c.operator.operation}`);
+}
+
+/** The check right after the AI step: its "true" output leads to a ticket. */
+function aiGate(): N8nNode {
+  const after = next(onlyNode("@n8n/n8n-nodes-langchain.agent").name);
+  expect(after).toHaveLength(1);
+  return workflow.nodes.find((n) => n.name === after[0])!;
 }
 
 /** Names of the nodes fed by `from` on its main output `output`. */
