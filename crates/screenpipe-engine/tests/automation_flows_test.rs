@@ -3408,3 +3408,162 @@ async fn a_step_with_an_invented_or_switched_off_node_or_unknown_version_is_refu
     assert_eq!(n8n_writes(&server).await.len(), writes, "nothing changed");
     assert_eq!(n8n.workflows()[0]["nodes"].as_array().unwrap().len(), 1);
 }
+
+async fn finish(app: &App, id: &str, body: Value) -> (StatusCode, Value) {
+    app.call(
+        "POST",
+        &format!("/automation-flows/drafts/{id}/finish"),
+        Some(body),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn terminer_is_refused_while_anything_is_missing_and_lists_every_problem() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, state) = start_draft(&app, first_step()).await;
+    let id = state["id"].as_str().unwrap().to_string();
+    draft_step(&app, &id, json!({"workflow": second_step()})).await;
+
+    let (status, body) = finish(&app, &id, json!({})).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_workflow");
+    let detail = body["detail"].as_str().unwrap();
+    for problem in [
+        "« Envoyer » is connected to no other node",
+        "« Envoyer »: required parameter `sendTo` is empty",
+        "« Envoyer » has no one-sentence `notes`",
+        "`summary` is required",
+    ] {
+        assert!(detail.contains(problem), "{problem} not in {detail}");
+    }
+    // Still a hidden draft under construction.
+    assert_eq!(tag_names(&n8n.workflows()[0]), ["screenpipe-flow", BUILDING_TAG]);
+    assert_eq!(app.store()["flows"][&id]["building"], true);
+    let (_, list) = app.call("GET", "/automation-flows", None).await;
+    assert_eq!(list, json!([]));
+}
+
+#[tokio::test]
+async fn terminer_turns_a_complete_draft_into_a_switched_off_draft_to_review() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, state) = start_draft(&app, first_step()).await;
+    let id = state["id"].as_str().unwrap().to_string();
+    let (_, state) = draft_step(
+        &app,
+        &id,
+        json!({"workflow": chat_workflow(), "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+    assert_eq!(state["complete"], true, "{state}");
+    assert_eq!(state["problems"], json!([]));
+
+    let (status, flow) = finish(&app, &id, json!({})).await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["id"], id);
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(flow["summary"], "Chaque soir, un résumé.");
+    assert_eq!(flow["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(n8n.workflows()[0]["active"], false);
+    assert_eq!(tag_names(&n8n.workflows()[0]), ["screenpipe-flow"]);
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    assert_eq!(app.store()["flows"][&id]["building"], false);
+
+    // Now listed and reviewable like any Draft; the draft routes are closed.
+    let (_, list) = app.call("GET", "/automation-flows", None).await;
+    assert_eq!(list[0]["id"], id.as_str());
+    assert_eq!(list[0]["status"], "draft");
+    let (status, _) = app.call("GET", &format!("/automation-flows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = draft_step(&app, &id, json!({"workflow": chat_workflow()})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "flow_not_under_construction");
+}
+
+#[tokio::test]
+async fn terminer_wires_a_credential_the_user_created_since_the_last_step() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    n8n.hold_credentials(json!([]));
+    let mut workflow = chat_workflow();
+    workflow["nodes"][1] = second_step()["nodes"][1].clone();
+    let (_, state) = start_draft(&app, workflow).await;
+    let id = state["id"].as_str().unwrap().to_string();
+    assert!(missing(&state, "Préparer le résumé")[0].contains("`screenpipeApi` credential and n8n has none"));
+
+    // The user creates the connection in n8n, then the chat finishes.
+    n8n.hold_credentials(json!([{"id": "sp1", "name": "ScreenPipe API", "type": "screenpipeApi"}]));
+    let (status, flow) = finish(&app, &id, json!({"summary": "Chaque soir, un résumé."})).await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(
+        credentials_of(&n8n.workflows()[0], "Préparer le résumé"),
+        json!({"screenpipeApi": {"id": "sp1", "name": "ScreenPipe API"}})
+    );
+    assert_eq!(flow["summary"], "Chaque soir, un résumé.");
+}
+
+#[tokio::test]
+async fn a_draft_under_construction_can_never_be_activated_or_used_as_a_flow() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, state) = start_draft(&app, chat_workflow()).await;
+    let id = state["id"].as_str().unwrap().to_string();
+    let version = state["versionId"].as_str().unwrap().to_string();
+
+    // Even the user's click on the Review Screen cannot switch it on.
+    let (status, body) = app
+        .ui_call(
+            "POST",
+            &format!("/automation-flows/{id}/activate"),
+            Some(json!({"versionId": version})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "flow_under_construction");
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    assert_eq!(n8n.workflows()[0]["active"], false);
+
+    for (method, uri, body) in [
+        ("GET", format!("/automation-flows/{id}"), None),
+        ("GET", format!("/automation-flows/{id}/workflow"), None),
+        (
+            "PUT",
+            format!("/automation-flows/{id}"),
+            Some(json!({"workflow": chat_workflow()})),
+        ),
+    ] {
+        let (status, answer) = app.call(method, &uri, body).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {uri}: {answer}");
+        assert_eq!(answer["error"], "flow_under_construction");
+    }
+}
+
+#[tokio::test]
+async fn the_chat_deletes_a_draft_it_abandons() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, state) = start_draft(&app, first_step()).await;
+    let id = state["id"].as_str().unwrap().to_string();
+
+    let (status, answer) = app
+        .call("DELETE", &format!("/automation-flows/{id}"), None)
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(n8n.workflows().is_empty());
+    assert_eq!(app.store()["flows"], json!({}));
+    let (status, _) = app
+        .call("GET", &format!("/automation-flows/drafts/{id}"), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
