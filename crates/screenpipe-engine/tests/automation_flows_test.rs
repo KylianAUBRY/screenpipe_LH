@@ -346,8 +346,10 @@ impl Respond for FakeN8n {
                         }
                     }
                 }
-                // Newest first; n8n leaves the Run data out of lists.
+                // Newest first; n8n leaves the Run data out of lists unless
+                // asked (`includeData=true`).
                 let limit: usize = query("limit").and_then(|l| l.parse().ok()).unwrap_or(100);
+                let include_data = query("includeData").as_deref() == Some("true");
                 let data: Vec<Value> = state
                     .executions
                     .iter()
@@ -356,7 +358,7 @@ impl Respond for FakeN8n {
                     .take(limit)
                     .map(|e| {
                         let mut e = e.clone();
-                        if let Some(fields) = e.as_object_mut() {
+                        if let Some(fields) = e.as_object_mut().filter(|_| !include_data) {
                             fields.remove("data");
                         }
                         e
@@ -2607,6 +2609,384 @@ async fn chat_create_refuses_a_workflow_the_review_screen_cannot_explain() {
     // Nothing was created anywhere.
     assert!(n8n.workflows().is_empty());
     assert!(!app.dir.path().join("automation-flows.json").exists());
+}
+
+// ---------------------------------------------------------------------------
+// Activity (ticket 28, SPEC D18)
+// ---------------------------------------------------------------------------
+
+/// Where an email ends in the demo Flow.
+#[derive(Clone, Copy)]
+enum Ends {
+    /// The AI is sure; a ticket is created with this key.
+    Created(&'static str),
+    /// The AI is sure, but a ticket already carries the email's label.
+    AlreadyExists(&'static str),
+    /// The AI is sure no ticket is needed (« Ticket nécessaire », false).
+    Ignored,
+    /// The AI is unsure: « À trier à la main ».
+    Abstained,
+}
+
+struct Email {
+    from: &'static str,
+    subject: &'static str,
+    reason: &'static str,
+    ends: Ends,
+}
+
+fn email(from: &'static str, subject: &'static str, reason: &'static str, ends: Ends) -> Email {
+    Email {
+        from,
+        subject,
+        reason,
+        ends,
+    }
+}
+
+/// One step's task in n8n's `runData`: where its input came from and its
+/// outputs (output 0 is omitted from `source`, as n8n does).
+fn add_step(run_data: &mut serde_json::Map<String, Value>, name: &str, from: Option<(&str, usize)>, outputs: Vec<Vec<Value>>) {
+    let source = match from {
+        Some((node, 0)) => json!([{"previousNode": node}]),
+        Some((node, output)) => json!([{"previousNode": node, "previousNodeOutput": output}]),
+        None => json!([]),
+    };
+    run_data.insert(
+        name.to_string(),
+        json!([{"startTime": 0, "executionStatus": "success", "source": source, "data": {"main": outputs}}]),
+    );
+}
+
+/// The items of `here` (email indexes), each paired with its email's
+/// position in the previous step's output `upstream`, as n8n links them.
+fn paired(here: &[usize], upstream: &[usize], json: impl Fn(usize) -> Value) -> Vec<Value> {
+    here.iter()
+        .map(|i| {
+            let position = upstream.iter().position(|u| u == i).unwrap();
+            json!({"json": json(*i), "pairedItem": {"item": position}})
+        })
+        .collect()
+}
+
+/// A successful Run of the demo Flow as n8n stores it: the IMAP trigger
+/// emits `emails` (with their bodies), and each email goes down its branch.
+fn demo_run(id: &str, workflow_id: &str, started_at: &str, emails: &[Email]) -> Value {
+    let mut run_data = serde_json::Map::new();
+    let all: Vec<usize> = (0..emails.len()).collect();
+    let pick = |from: &[usize], keep: &dyn Fn(Ends) -> bool| -> Vec<usize> {
+        from.iter().copied().filter(|i| keep(emails[*i].ends)).collect()
+    };
+    let ai = |i: usize| {
+        let email = &emails[i];
+        json!({"output": {
+            "type": if matches!(email.ends, Ends::Ignored) { "none" } else { "Bug" },
+            "product": "NovaCRM", "summary": "Export vide", "priority": "High", "label": "back",
+            "confidence": if matches!(email.ends, Ends::Abstained) { "low" } else { "high" },
+            "reason": email.reason,
+        }})
+    };
+    let search = |i: usize| match emails[i].ends {
+        Ends::AlreadyExists(key) => json!({"issues": [{"id": "10012", "key": key}], "total": 1}),
+        _ => json!({"issues": [], "total": 0}),
+    };
+
+    let trigger: Vec<Value> = emails
+        .iter()
+        .map(|email| {
+            json!({"json": {
+                "from": email.from, "subject": email.subject, "date": started_at,
+                "textPlain": EMAIL_BODY, "textHtml": format!("<p>{EMAIL_BODY}</p>"),
+            }})
+        })
+        .collect();
+    add_step(&mut run_data, "Nouvel email support", None, vec![trigger]);
+    add_step(&mut run_data, "Analyser l'email (IA)", Some(("Nouvel email support", 0)), vec![paired(&all, &all, ai)]);
+    let sure = pick(&all, &|ends| !matches!(ends, Ends::Abstained));
+    let unsure = pick(&all, &|ends| matches!(ends, Ends::Abstained));
+    add_step(
+        &mut run_data,
+        "IA sûre d'elle",
+        Some(("Analyser l'email (IA)", 0)),
+        vec![paired(&sure, &all, ai), paired(&unsure, &all, ai)],
+    );
+    if !unsure.is_empty() {
+        // ScreenPipe's answer to `POST /abstentions` is the step's output.
+        let answer = |_| json!({"notified": true, "outcome": "abstained"});
+        add_step(&mut run_data, "À trier à la main", Some(("IA sûre d'elle", 1)), vec![paired(&unsure, &unsure, answer)]);
+    }
+    if sure.is_empty() {
+        return finished_run(id, workflow_id, started_at, run_data);
+    }
+    let needed = pick(&sure, &|ends| !matches!(ends, Ends::Ignored));
+    let ignored = pick(&sure, &|ends| matches!(ends, Ends::Ignored));
+    add_step(
+        &mut run_data,
+        "Ticket nécessaire",
+        Some(("IA sûre d'elle", 0)),
+        vec![paired(&needed, &sure, ai), paired(&ignored, &sure, ai)],
+    );
+    if needed.is_empty() {
+        return finished_run(id, workflow_id, started_at, run_data);
+    }
+    let ticket = |_| {
+        json!({"summary": "NovaCRM - Export vide", "mailLabel": "mail-1a2b3c4d",
+               "description": format!("Email reçu par la boîte support : {EMAIL_BODY}")})
+    };
+    add_step(&mut run_data, "Préparer le ticket", Some(("Ticket nécessaire", 0)), vec![paired(&needed, &needed, ticket)]);
+    add_step(&mut run_data, "Chercher un ticket existant", Some(("Préparer le ticket", 0)), vec![paired(&needed, &needed, search)]);
+    let create = pick(&needed, &|ends| matches!(ends, Ends::Created(_)));
+    let exists = pick(&needed, &|ends| matches!(ends, Ends::AlreadyExists(_)));
+    add_step(
+        &mut run_data,
+        "Aucun ticket pour cet email",
+        Some(("Chercher un ticket existant", 0)),
+        vec![paired(&create, &needed, search), paired(&exists, &needed, search)],
+    );
+    if !create.is_empty() {
+        let created = |i: usize| match emails[i].ends {
+            Ends::Created(key) => json!({"id": "10051", "key": key, "self": "https://jira.example/rest/api/2/issue/10051"}),
+            _ => unreachable!(),
+        };
+        add_step(&mut run_data, "Créer le ticket Jira", Some(("Aucun ticket pour cet email", 0)), vec![paired(&create, &create, created)]);
+    }
+    finished_run(id, workflow_id, started_at, run_data)
+}
+
+fn finished_run(id: &str, workflow_id: &str, started_at: &str, run_data: serde_json::Map<String, Value>) -> Value {
+    json!({
+        "id": id, "workflowId": workflow_id, "status": "success", "finished": true,
+        "mode": "trigger", "startedAt": started_at, "stoppedAt": started_at,
+        "data": {"resultData": {"runData": run_data}}
+    })
+}
+
+const BUG_FROM: &str = "Arthur Noteris <arthur@novacrm.example>";
+
+/// The four emails of the ticket's live check, in the inbox's order.
+fn four_emails() -> Vec<Email> {
+    vec![
+        email(BUG_FROM, "Export des contacts vide", "Défaut clair de NovaCRM.", Ends::Created("NOVA-51")),
+        email("Lea <lea@novapay.example>", "Idée : export PDF", "Idée d'amélioration de NovaPay.", Ends::AlreadyExists("NOVA-12")),
+        email("Google <no-reply@accounts.google.com>", "Alerte de sécurité", "Alerte automatique, pas une demande.", Ends::Ignored),
+        email("Paul <paul@client.example>", "Question rapide", "Je ne sais pas si c'est un bug.", Ends::Abstained),
+    ]
+}
+
+async fn activity(app: &App, id: &str) -> (StatusCode, Value) {
+    app.call("GET", &format!("/automation-flows/{id}/activity"), None).await
+}
+
+#[tokio::test]
+async fn activity_names_each_email_with_its_outcome_and_reason() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    n8n.add_execution(demo_run("301", &id, "2026-10-17T10:00:00.000Z", &four_emails()));
+
+    let (status, items) = activity(&app, &id).await;
+
+    assert_eq!(status, StatusCode::OK, "{items}");
+    let line = |i: usize| {
+        let item = &items[i];
+        (
+            item["from"].as_str().unwrap_or_default().to_string(),
+            item["subject"].as_str().unwrap_or_default().to_string(),
+            item["outcome"].as_str().unwrap_or_default().to_string(),
+            item["ticketKey"].as_str().map(str::to_string),
+            item["reason"].as_str().map(str::to_string),
+        )
+    };
+    let s = |text: &str| text.to_string();
+    assert_eq!(items.as_array().unwrap().len(), 4, "{items}");
+    assert_eq!(
+        line(0),
+        (s(BUG_FROM), s("Export des contacts vide"), s("ticket_created"), Some(s("NOVA-51")), Some(s("Défaut clair de NovaCRM.")))
+    );
+    assert_eq!(
+        line(1),
+        (s("Lea <lea@novapay.example>"), s("Idée : export PDF"), s("already_exists"), Some(s("NOVA-12")), Some(s("Idée d'amélioration de NovaPay.")))
+    );
+    assert_eq!(
+        line(2),
+        (s("Google <no-reply@accounts.google.com>"), s("Alerte de sécurité"), s("ignored"), None, Some(s("Alerte automatique, pas une demande.")))
+    );
+    assert_eq!(
+        line(3),
+        (s("Paul <paul@client.example>"), s("Question rapide"), s("abstained"), None, Some(s("Je ne sais pas si c'est un bug.")))
+    );
+    for item in items.as_array().unwrap() {
+        assert_eq!(item["runId"], "301");
+        // The local API shows times in the local time zone.
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(item["startedAt"].as_str().unwrap()).unwrap(),
+            chrono::DateTime::parse_from_rfc3339("2026-10-17T10:00:00.000Z").unwrap()
+        );
+        assert_eq!(item["failedStep"], Value::Null);
+    }
+    // Never the email body, not even through the ticket's description.
+    assert!(!items.to_string().contains(EMAIL_BODY), "{items}");
+}
+
+/// `run` stopped on « Créer le ticket Jira »: that step holds its error and
+/// no output, as n8n stores a failed step.
+fn failed_on_jira(mut run: Value) -> Value {
+    run["status"] = json!("error");
+    run["finished"] = json!(false);
+    let result = &mut run["data"]["resultData"];
+    result["runData"]["Créer le ticket Jira"] = json!([{
+        "startTime": 0, "executionStatus": "error",
+        "source": [{"previousNode": "Aucun ticket pour cet email"}],
+        "error": {"message": ERROR_MESSAGE},
+    }]);
+    result["lastNodeExecuted"] = json!("Créer le ticket Jira");
+    result["error"] = json!({"message": ERROR_MESSAGE, "node": {"name": "Créer le ticket Jira"}});
+    run
+}
+
+#[tokio::test]
+async fn a_failed_run_shows_its_emails_failed_on_the_step_without_the_error() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let emails = vec![
+        email(BUG_FROM, "Export des contacts vide", "Défaut clair.", Ends::Created("NOVA-51")),
+        email("Paul <paul@client.example>", "Question rapide", "Je ne sais pas.", Ends::Abstained),
+    ];
+    n8n.add_execution(failed_on_jira(demo_run("302", &id, "2026-10-17T10:00:00.000Z", &emails)));
+
+    let (status, items) = activity(&app, &id).await;
+
+    assert_eq!(status, StatusCode::OK, "{items}");
+    assert_eq!(items.as_array().unwrap().len(), 2, "{items}");
+    assert_eq!(items[0]["subject"], "Export des contacts vide");
+    assert_eq!(items[0]["outcome"], "failed");
+    assert_eq!(items[0]["failedStep"], "Créer le ticket Jira");
+    assert_eq!(items[0]["ticketKey"], Value::Null);
+    // Its other email was handled before the failure.
+    assert_eq!(items[1]["outcome"], "abstained");
+    assert_eq!(items[1]["failedStep"], Value::Null);
+    let whole = items.to_string();
+    for private in [EMAIL_BODY, "sk-live", "Bad request"] {
+        assert!(!whole.contains(private), "{private} leaked: {whole}");
+    }
+}
+
+#[tokio::test]
+async fn a_run_without_an_outcome_record_is_never_shown_as_a_success() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let mut run_data = serde_json::Map::new();
+    let trigger = vec![json!({"json": {"from": BUG_FROM, "subject": "Sans suite", "textPlain": EMAIL_BODY}})];
+    add_step(&mut run_data, "Nouvel email support", None, vec![trigger]);
+    // A step that ends the Run without saying what became of the email.
+    let note = vec![json!({"json": {"ok": true}, "pairedItem": {"item": 0}})];
+    add_step(&mut run_data, "Noter", Some(("Nouvel email support", 0)), vec![note]);
+    // Newest first, as n8n lists them.
+    n8n.add_execution(finished_run("312", &id, "2026-10-17T12:00:00.000Z", run_data));
+    // n8n kept no data (too large to show): nothing to read.
+    n8n.add_execution(json!({
+        "id": "311", "workflowId": id, "status": "success", "finished": true,
+        "startedAt": "2026-10-17T11:00:00.000Z", "dataTooLargeToDisplay": true,
+    }));
+    n8n.add_execution(json!({
+        "id": "310", "workflowId": id, "status": "crashed", "finished": false,
+        "startedAt": "2026-10-17T10:00:00.000Z",
+    }));
+
+    let (status, items) = activity(&app, &id).await;
+
+    assert_eq!(status, StatusCode::OK, "{items}");
+    let outcomes: Vec<(&str, &str)> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| (item["runId"].as_str().unwrap(), item["outcome"].as_str().unwrap()))
+        .collect();
+    assert_eq!(outcomes, vec![("312", "unknown"), ("311", "unknown"), ("310", "failed")]);
+    assert_eq!(items[0]["subject"], "Sans suite");
+}
+
+#[tokio::test]
+async fn activity_is_newest_first_and_limited_in_size() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let six = || {
+        (0..6)
+            .map(|_| email(BUG_FROM, "Export vide", "Défaut clair.", Ends::Created("NOVA-51")))
+            .collect::<Vec<_>>()
+    };
+    // Twelve Runs of six emails, the newest (id 412) first as n8n lists them.
+    for run in (401..=412).rev() {
+        let at = format!("2026-10-17T{:02}:00:00.000Z", run - 400);
+        n8n.add_execution(demo_run(&run.to_string(), &id, &at, &six()));
+    }
+
+    let (status, items) = activity(&app, &id).await;
+
+    assert_eq!(status, StatusCode::OK, "{items}");
+    let items = items.as_array().unwrap();
+    assert_eq!(items.len(), 50);
+    assert_eq!(items[0]["runId"], "412");
+    assert_eq!(items[6]["runId"], "411");
+    // n8n is asked for the last Runs only, with their data.
+    let asked: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path() == "/api/v1/executions")
+        .filter_map(|r| r.url.query().map(str::to_string))
+        .filter(|q| q.contains("includeData=true"))
+        .collect();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(asked[0].contains("limit=10"), "{asked:?}");
+}
+
+#[tokio::test]
+async fn the_ais_reason_is_one_short_line() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let long: &'static str = Box::leak(format!("Ligne 1\nligne 2 {}", "x".repeat(600)).into_boxed_str());
+    let subject: &'static str = Box::leak(format!("Sujet\r\n{}", "y".repeat(600)).into_boxed_str());
+    n8n.add_execution(demo_run("501", &id, "2026-10-17T10:00:00.000Z", &[email(BUG_FROM, subject, long, Ends::Ignored)]));
+
+    let (_, items) = activity(&app, &id).await;
+
+    let reason = items[0]["reason"].as_str().unwrap();
+    assert!(reason.starts_with("Ligne 1 ligne 2"), "{reason}");
+    assert!(reason.chars().count() <= 241, "{} chars", reason.chars().count());
+    let subject = items[0]["subject"].as_str().unwrap();
+    assert!(!subject.contains('\n') && !subject.contains('\r'), "{subject}");
+    assert!(subject.chars().count() <= 161, "{} chars", subject.chars().count());
+}
+
+#[tokio::test]
+async fn activity_of_an_unknown_flow_is_404() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    n8n.add_workflow(json!({
+        "id": "other", "name": "Perso", "active": true, "versionId": "v",
+        "tags": [], "nodes": [], "connections": {}
+    }));
+    for id in ["other", "unknown", "..%2Fcredentials"] {
+        let (status, _) = activity(&app, id).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{id}");
+    }
 }
 
 // ---------------------------------------------------------------------------
