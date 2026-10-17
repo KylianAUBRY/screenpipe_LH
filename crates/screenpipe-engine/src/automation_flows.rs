@@ -50,6 +50,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
+mod activity;
 mod failures;
 pub use failures::{FailureReports, ERROR_WORKFLOW_TAG};
 
@@ -252,6 +253,7 @@ where
         .route("/:id/activate", post(activate_flow))
         .route("/:id/deactivate", post(deactivate_flow))
         .route("/:id/failures", post(failures::report_failure))
+        .route("/:id/activity", get(activity::flow_activity))
         .layer(middleware::from_fn(require_json))
         .with_state(state)
 }

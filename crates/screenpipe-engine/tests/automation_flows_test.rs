@@ -385,13 +385,25 @@ impl Respond for FakeN8n {
                         }
                     }
                 }
+                // Like n8n: at most `limit` (default 100), run data only
+                // with `includeData=true`.
+                let limit = query("limit")
+                    .and_then(|limit| limit.parse().ok())
+                    .unwrap_or(100);
+                let include_data = query("includeData").as_deref() == Some("true");
                 let data: Vec<Value> = state
                     .executions
                     .iter()
                     .filter(|e| e["workflowId"].as_str().map(str::to_string) == workflow_id)
                     .filter(|e| status.as_ref().is_none_or(|s| e["status"] == s.as_str()))
-                    .take(1)
+                    .take(limit)
                     .cloned()
+                    .map(|mut execution| {
+                        if !include_data {
+                            execution.as_object_mut().unwrap().remove("data");
+                        }
+                        execution
+                    })
                     .collect();
                 json_response(200, json!({"data": data, "nextCursor": null}))
             }
@@ -3506,4 +3518,318 @@ async fn only_a_run_of_that_flow_is_notified() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{uri} {execution}: {body}");
     }
     assert!(notifications(&app).await.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Flow Activity on the Review Screen (D18, ticket 13)
+// ---------------------------------------------------------------------------
+
+/// The AI's answer for an email, as the demo Flow's agent returns it.
+fn ai_answer(kind: &str, confidence: &str, reason: &str) -> Value {
+    json!({
+        "type": kind, "product": "NovaCRM", "summary": "Export CSV vide",
+        "priority": "High", "label": "back", "confidence": confidence, "reason": reason
+    })
+}
+
+/// A finished run of the demo Flow as n8n keeps it (`includeData=true`):
+/// the email the trigger read, the AI's answer, then each later step that
+/// ran with the item it output on each of its branches (`null`: none).
+fn demo_run(
+    id: &str,
+    workflow_id: &str,
+    started_at: &str,
+    (sender, subject): (&str, &str),
+    answer: Value,
+    steps: &[(&str, Value)],
+) -> Value {
+    let item = |json: Value| json!([{"json": json}]);
+    let mut run_data = json!({
+        "Nouvel email support": [{"startTime": 1, "data": {"main": [item(json!({
+            "from": sender, "subject": subject, "textPlain": "Bonjour…"
+        }))]}}],
+        "Analyser l'email (IA)": [{"startTime": 2, "data": {"main": [item(json!({"output": answer}))]}}]
+    });
+    for (n, (name, branches)) in steps.iter().enumerate() {
+        let main: Vec<Value> = branches
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|branch| {
+                if branch.is_null() {
+                    json!([])
+                } else {
+                    item(branch.clone())
+                }
+            })
+            .collect();
+        run_data[*name] = json!([{"startTime": 3 + n, "data": {"main": main}}]);
+    }
+    let last = steps
+        .last()
+        .map(|(name, _)| *name)
+        .unwrap_or("Analyser l'email (IA)");
+    json!({
+        "id": id, "workflowId": workflow_id, "status": "success", "finished": true,
+        "startedAt": started_at, "stoppedAt": started_at,
+        "data": {"resultData": {"runData": run_data, "lastNodeExecuted": last}}
+    })
+}
+
+async fn activity(app: &App, id: &str) -> (StatusCode, Value) {
+    app.call("GET", &format!("/automation-flows/{id}/activity"), None)
+        .await
+}
+
+fn same_instant(actual: &Value, expected: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(actual.as_str().unwrap()).unwrap()
+        == chrono::DateTime::parse_from_rfc3339(expected).unwrap()
+}
+
+#[tokio::test]
+async fn activity_shows_the_ticket_an_email_became_with_the_ais_reason() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    let answer = ai_answer(
+        "Bug",
+        "high",
+        "L'export renvoie un fichier vide : c'est un défaut.",
+    );
+    n8n.add_execution(demo_run(
+        "exec-ticket",
+        &id,
+        "2026-10-17T09:00:00.000Z",
+        (
+            "Arthur Noteris <arthur@novadesk.fr>",
+            "Export des contacts vide dans NovaCRM",
+        ),
+        answer.clone(),
+        &[
+            ("Confiance suffisante", json!([{"output": answer}, null])),
+            ("Ticket nécessaire", json!([{"output": answer}, null])),
+            (
+                "Créer le ticket Jira",
+                json!([{
+                    "id": "10042", "key": "NOVA-28",
+                    "self": "https://novadesk.atlassian.net/rest/api/3/issue/10042"
+                }]),
+            ),
+        ],
+    ));
+
+    let (status, runs) = activity(&app, &id).await;
+
+    assert_eq!(status, StatusCode::OK, "{runs}");
+    let runs = runs.as_array().unwrap();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let run = &runs[0];
+    assert_eq!(run["executionId"], "exec-ticket");
+    assert_eq!(run["outcome"], "ticket");
+    assert_eq!(run["ticket"], "NOVA-28");
+    assert_eq!(
+        run["reason"],
+        "L'export renvoie un fichier vide : c'est un défaut."
+    );
+    assert_eq!(
+        run["email"],
+        json!({
+            "sender": "Arthur Noteris <arthur@novadesk.fr>",
+            "subject": "Export des contacts vide dans NovaCRM"
+        })
+    );
+    assert!(same_instant(&run["startedAt"], "2026-10-17T09:00:00.000Z"));
+}
+
+#[tokio::test]
+async fn activity_shows_an_email_the_ai_was_unsure_about_as_abstained() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    let answer = ai_answer(
+        "none",
+        "low",
+        "Question d'usage ou défaut : je ne sais pas.",
+    );
+    n8n.add_execution(demo_run(
+        "exec-unsure",
+        &id,
+        "2026-10-17T09:00:00.000Z",
+        (
+            "Loris Omont <loris@novadesk.fr>",
+            "Les relances, c'est normal ?",
+        ),
+        answer.clone(),
+        &[
+            ("Confiance suffisante", json!([null, {"output": answer}])),
+            (
+                "À trier à la main",
+                json!([{"success": true, "message": "Notification sent successfully"}]),
+            ),
+        ],
+    ));
+
+    let (status, runs) = activity(&app, &id).await;
+
+    assert_eq!(status, StatusCode::OK, "{runs}");
+    assert_eq!(runs[0]["outcome"], "abstained");
+    assert_eq!(
+        runs[0]["reason"],
+        "Question d'usage ou défaut : je ne sais pas."
+    );
+    assert_eq!(runs[0]["ticket"], Value::Null);
+    assert_eq!(runs[0]["email"]["subject"], "Les relances, c'est normal ?");
+}
+
+#[tokio::test]
+async fn activity_shows_an_email_that_needed_no_ticket_as_ignored() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    let answer = ai_answer(
+        "none",
+        "high",
+        "Alerte de sécurité Google, pas une demande client.",
+    );
+    n8n.add_execution(demo_run(
+        "exec-ignored",
+        &id,
+        "2026-10-17T09:00:00.000Z",
+        (
+            "Google <no-reply@accounts.google.com>",
+            "Alerte de sécurité",
+        ),
+        answer.clone(),
+        &[
+            ("Confiance suffisante", json!([{"output": answer}, null])),
+            ("Ticket nécessaire", json!([null, {"output": answer}])),
+        ],
+    ));
+
+    let (status, runs) = activity(&app, &id).await;
+
+    assert_eq!(status, StatusCode::OK, "{runs}");
+    assert_eq!(runs[0]["outcome"], "ignored");
+    assert_eq!(
+        runs[0]["reason"],
+        "Alerte de sécurité Google, pas une demande client."
+    );
+    assert_eq!(runs[0]["ticket"], Value::Null);
+}
+
+#[tokio::test]
+async fn activity_lists_handled_emails_newest_first_with_the_failed_ones_and_why() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    let answer = ai_answer("Bug", "high", "Un défaut de NovaPay.");
+    n8n.add_execution(failed_run("exec-failed", &id));
+    n8n.add_execution(demo_run(
+        "exec-ticket",
+        &id,
+        "2026-10-17T10:00:00.000Z",
+        (
+            "Loris Omont <loris@novadesk.fr>",
+            "NovaPay refuse les centimes",
+        ),
+        answer.clone(),
+        &[(
+            "Créer le ticket Jira",
+            json!([{"id": "1", "key": "NOVA-29", "self": "https://x.atlassian.net/rest/api/3/issue/1"}]),
+        )],
+    ));
+    // An email still being processed is not handled yet.
+    n8n.add_execution(json!({
+        "id": "exec-running", "workflowId": id, "status": "running",
+        "startedAt": "2026-10-17T11:00:00.000Z", "stoppedAt": null
+    }));
+    // Another Flow's run is not this Flow's activity.
+    n8n.add_execution(failed_run("exec-other", "someOtherWorkflow"));
+
+    let (status, runs) = activity(&app, &id).await;
+
+    assert_eq!(status, StatusCode::OK, "{runs}");
+    let ids: Vec<&str> = runs
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|run| run["executionId"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["exec-ticket", "exec-failed"]);
+    let failed = &runs[1];
+    assert_eq!(failed["outcome"], "failed");
+    assert_eq!(
+        failed["reason"],
+        "Échec à l'étape « Créer le ticket Jira » : 503 Service Unavailable"
+    );
+    assert_eq!(
+        failed["email"],
+        json!({
+            "sender": "Claire Martin <claire.martin@client.fr>",
+            "subject": "Export PDF vide depuis la mise à jour"
+        })
+    );
+    assert_eq!(failed["ticket"], Value::Null);
+}
+
+#[tokio::test]
+async fn activity_shows_the_ticket_an_email_already_had_when_creation_was_skipped() {
+    // D20: a retried email whose ticket exists (found by its `mail-` label)
+    // is not created twice; the run still ends with that ticket.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    let answer = ai_answer("Bug", "high", "Un défaut de NovaCRM.");
+    n8n.add_execution(demo_run(
+        "exec-retried",
+        &id,
+        "2026-10-17T09:00:00.000Z",
+        ("Arthur Noteris <arthur@novadesk.fr>", "Export vide"),
+        answer.clone(),
+        &[
+            ("Confiance suffisante", json!([{"output": answer}, null])),
+            ("Ticket nécessaire", json!([{"output": answer}, null])),
+            (
+                "Ticket déjà créé ?",
+                json!([{"issues": [{"id": "10042", "key": "NOVA-28"}], "isLast": true}]),
+            ),
+        ],
+    ));
+
+    let (status, runs) = activity(&app, &id).await;
+
+    assert_eq!(status, StatusCode::OK, "{runs}");
+    assert_eq!(runs[0]["outcome"], "ticket");
+    assert_eq!(runs[0]["ticket"], "NOVA-28");
+}
+
+#[tokio::test]
+async fn activity_of_a_flow_without_an_ai_answer_says_its_runs_went_through() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(json!({
+        "id": "exec-plain", "workflowId": id, "status": "success", "finished": true,
+        "startedAt": "2026-10-17T09:00:00.000Z", "stoppedAt": "2026-10-17T09:00:01.000Z",
+        "data": {"resultData": {"runData": {
+            "Chaque matin": [{"startTime": 1, "data": {"main": [[{"json": {"timestamp": "2026-10-17T09:00:00"}}]]}}],
+            "Envoyer le résumé": [{"startTime": 2, "data": {"main": [[{"json": {"ok": true}}]]}}]
+        }, "lastNodeExecuted": "Envoyer le résumé"}}
+    }));
+
+    let (status, runs) = activity(&app, &id).await;
+
+    assert_eq!(status, StatusCode::OK, "{runs}");
+    assert_eq!(runs[0]["outcome"], "done");
+    assert_eq!(runs[0]["reason"], Value::Null);
+    assert_eq!(runs[0]["email"], Value::Null);
+
+    let (status, _) = activity(&app, "wf404").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
