@@ -10,7 +10,7 @@ AI's reason in the output. It does not fire again before the cooldown ends.
 
 **Blocked by:** 07.
 
-**Status:** code done (branch `hackathon/ticket-11`); manual check pending human
+**Status:** done (live-verified on the demo machine 2026-10-17)
 
 - [x] Package tests against a fake ScreenPipe API and a fake AI answer: fires only when the condition is met; respects the cooldown; an AI error does not fire.
   `test/screenpipe-ai-trigger.node.test.ts` runs `poll` against `fakeScreenpipe`, which also serves
@@ -21,7 +21,7 @@ AI's reason in the output. It does not fire again before the cooldown ends.
   non-boolean `met`, no `choices` → nothing, a warning without the key, no cooldown; ScreenPipe HTTP
   error or down → `NodeApiError`, AI not called; editor test mode (below).
   `cd packages/n8n-nodes-screenpipe && bun test`: 27 pass. `bunx tsc --noEmit -p tsconfig.json`: clean.
-- [ ] Manual check in the local n8n with a simple condition. **Pending human** (steps below).
+- [x] Manual check in the local n8n with a simple condition. « L'application TextEdit est ouverte et visible à l'écran » fired with `met: true` and a reason quoting the captured TextEdit window (see `.scratch/hackathon/evidence/LIVE-CHECKS.md`).
   Done by the agent: `bun run install-n8n` built and installed the package; n8n 2.42.2 lists
   `CUSTOM.screenPipeAiTrigger` ("ScreenPipe AI Trigger", group trigger, `polling: true`, properties
   `pollTimes` (added by n8n), `conditionPrompt`, `lookbackMinutes`, `cooldownMinutes`), icon resolved.

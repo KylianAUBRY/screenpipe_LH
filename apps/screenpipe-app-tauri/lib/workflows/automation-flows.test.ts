@@ -12,7 +12,9 @@ vi.mock("@tauri-apps/api/event", () => ({ emit: mocks.emit }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@/lib/utils/tauri", () => ({ commands: { showWindowActivated: mocks.showWindowActivated } }));
 
-import { createAutomationFlow, flowReviewLink, openFlowReviewLink } from "./automation-flows";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { canCreateAutomationFlow, createAutomationFlow, flowReviewLink, openFlowReviewLink } from "./automation-flows";
 import { DEMO_TASK_ID, fixtureFlow } from "@/components/automation-flows/fixtures";
 import { mockAutomationFlowsResponse } from "@/components/automation-flows/mock";
 
@@ -70,6 +72,22 @@ describe("desktop createAutomationFlow", () => {
   it("explains a task that cannot become a Flow yet", async () => {
     await expect(createAutomationFlow("wf-other-task", answers)).rejects.toThrow("Cette tâche ne peut pas encore devenir une automatisation.");
     expect(mocks.emit).not.toHaveBeenCalled();
+  });
+});
+
+describe("desktop canCreateAutomationFlow", () => {
+  it("offers creation only for the tasks the Flow service can create", () => {
+    expect(canCreateAutomationFlow(DEMO_TASK_ID)).toBe(true);
+    expect(canCreateAutomationFlow("wf-other-task")).toBe(false);
+  });
+
+  it("matches the Detected Tasks the engine's Flow service bundles", () => {
+    // `create_from_task` answers 404 for any task missing from DEMO_TASKS.
+    const engine = readFileSync(path.resolve(__dirname, "../../../../crates/screenpipe-engine/src/automation_flows.rs"), "utf8");
+    const start = engine.indexOf("const DEMO_TASKS");
+    const ids = [...engine.slice(start, engine.indexOf("];", start)).matchAll(/\bid:\s*"([^"]+)"/g)].map(match => match[1]);
+    expect(ids).toEqual([DEMO_TASK_ID]);
+    for (const id of ids) expect(canCreateAutomationFlow(id)).toBe(true);
   });
 });
 

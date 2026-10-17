@@ -81,7 +81,7 @@ type Flow = FlowSummary & {
   edges: { from: string; to: string }[];   // from n8n `connections`, by node id
   versionId: string;
   reviewedVersionId: string | null;
-  reviewOutdated: boolean;    // active and versionId !== reviewedVersionId (edited in n8n)
+  reviewOutdated: boolean;    // active and versionId !== activeVersionId (edited in n8n after publishing, D7)
   activationLog: { at: string; event: "activated" | "deactivated" | "paused_for_edit" | "modified"; versionId: string; by: "user" | "chat" }[];
 };
 ```
@@ -115,8 +115,10 @@ embeds and hands it to its webview only through the Tauri command
 `get_flow_activation_key`; never in an environment variable (Pi inherits
 them), a file or a log. An engine without it (CLI) refuses every activation.
 
-Fixture: `crates/screenpipe-engine/assets/automation-flows/` holds the n8n
-workflow JSON (with node `notes`) and its review JSON (summary). The workflow
+Fixture: `infra/automation-flows/workflows/` holds the n8n workflow JSON
+(with node `notes`) and its review JSON (summary); the engine embeds both at
+build time (`include_str!` in `automation_flows.rs`), and
+`infra/automation-flows/import-workflow.sh` imports the same file. The workflow
 JSON is exported from the demo n8n instance after its credentials are bound
 once, so it carries that instance's credential ids (ids are not secrets).
 
