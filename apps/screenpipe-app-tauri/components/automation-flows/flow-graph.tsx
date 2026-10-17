@@ -138,7 +138,7 @@ export function FlowGraph({ nodes, edges }: { nodes: FlowNode[]; edges: Flow["ed
   const { stepNodes, links } = useMemo(() => toGraph(nodes, edges), [nodes, edges]);
 
   return (
-    <div className="h-[380px] border border-border">
+    <div className="h-[420px] border border-border">
       <ReactFlow
         aria-label="Graphe du Flow"
         nodes={stepNodes}
