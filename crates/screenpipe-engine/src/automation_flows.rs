@@ -723,6 +723,15 @@ fn review_graph(workflow: &Value) -> (Vec<FlowNode>, Vec<FlowEdge>) {
     (nodes, edges)
 }
 
+/// The version n8n runs (its published one), for the activation history.
+fn running_version(workflow: &Value) -> String {
+    workflow["activeVersionId"]
+        .as_str()
+        .or(workflow["versionId"].as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
 fn flow_summary(
     workflow: &Value,
     record: Option<&FlowRecord>,
@@ -897,11 +906,7 @@ async fn deactivate_flow(
             build_flow(&api, &workflow, store.flows.get(&id)).await,
         ));
     }
-    let running = workflow["activeVersionId"]
-        .as_str()
-        .or(workflow["versionId"].as_str())
-        .unwrap_or_default()
-        .to_string();
+    let running = running_version(&workflow);
 
     let unpublished = api.switch(&id, "unpublish", None).await?;
     store.record_mut(&id).log("deactivated", running, "user");
@@ -935,11 +940,7 @@ async fn update_flow(
     }
 
     if current["active"] == true {
-        let running = current["activeVersionId"]
-            .as_str()
-            .or(current["versionId"].as_str())
-            .unwrap_or_default()
-            .to_string();
+        let running = running_version(&current);
         api.switch(&id, "unpublish", None).await?;
         // Saved at once: the Flow is off even if the update below fails.
         store
