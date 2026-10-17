@@ -8,7 +8,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const localFetch = vi.hoisted(() => vi.fn());
 const showChatWithPrefill = vi.hoisted(() => vi.fn(async (_prefill: Record<string, unknown>) => {}));
+const getFlowActivationKey = vi.hoisted(() => vi.fn(async (): Promise<string> => "ui-key"));
 vi.mock("@/lib/api", () => ({ localFetch }));
+vi.mock("@/lib/utils/tauri", () => ({ commands: { getFlowActivationKey } }));
 vi.mock("@/lib/chat-utils", () => ({ showChatWithPrefill }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
@@ -16,16 +18,25 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 import { flowsApi, FlowsApiError } from "../api";
 import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "../fixtures";
 import { mockAutomationFlowsResponse, resetAutomationFlowsMock } from "../mock";
+import { createBrowserIpcMock } from "@/lib/dev/browser-tauri-mock";
 
 const ENGINE = "http://localhost:3030";
 
 /** Route the client through the browser mock, as `bun run dev:web` does. */
 function useBrowserMock() {
+  const invoke = createBrowserIpcMock({ mode: "mock", apiPort: 3030 });
+  getFlowActivationKey.mockImplementation(async () => invoke("get_flow_activation_key") as string);
   localFetch.mockImplementation(async (path: string, init?: RequestInit) => {
     const response = mockAutomationFlowsResponse(new URL(path, ENGINE), init);
     if (!response) throw new Error(`not a Flows route: ${path}`);
     return response;
   });
+}
+
+const ACTIVATION_HEADER = "x-screenpipe-flow-activation";
+
+function sentHeaders(init: RequestInit): Headers {
+  return new Headers(init.headers);
 }
 
 function respond(status: number, body: unknown) {
@@ -34,6 +45,8 @@ function respond(status: number, body: unknown) {
 
 beforeEach(() => {
   localFetch.mockReset();
+  getFlowActivationKey.mockReset();
+  getFlowActivationKey.mockResolvedValue("ui-key");
   showChatWithPrefill.mockClear();
   resetAutomationFlowsMock();
   window.history.replaceState({}, "", "/home?section=pipes");
@@ -59,19 +72,39 @@ describe("flowsApi", () => {
     expect(JSON.parse(init.body)).toEqual({ taskId: DEMO_TASK_ID, answers: { q1: "oui" } });
   });
 
-  it("activates the reviewed version and deactivates", async () => {
+  it("activates the reviewed version with the UI credential and deactivates", async () => {
     respond(200, fixtureFlow);
     await flowsApi.activate("wf/1", "version-7");
     let [path, init] = localFetch.mock.lastCall!;
     expect(path).toBe("/automation-flows/wf%2F1/activate");
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body)).toEqual({ versionId: "version-7" });
+    // The credential only the desktop app hands to its webview (ticket 14).
+    expect(sentHeaders(init).get(ACTIVATION_HEADER)).toBe("ui-key");
+    expect(sentHeaders(init).get("content-type")).toBe("application/json");
 
     respond(200, fixtureFlow);
     await flowsApi.deactivate("wf/1");
     [path, init] = localFetch.mock.lastCall!;
     expect(path).toBe("/automation-flows/wf%2F1/deactivate");
     expect(init.method).toBe("POST");
+    // Switching off needs no credential, only a JSON request.
+    expect(sentHeaders(init).get("content-type")).toBe("application/json");
+    expect(sentHeaders(init).has(ACTIVATION_HEADER)).toBe(false);
+  });
+
+  it("outside the desktop app, activates without a credential and reports the refusal", async () => {
+    getFlowActivationKey.mockRejectedValue(new Error("not in Tauri"));
+    respond(403, {
+      error: "activation_requires_user",
+      detail: "Only the user can activate a Flow, from its Review Screen in ScreenPipe.",
+    });
+    const error = await flowsApi.activate("wf1", "version-7").catch((e) => e);
+
+    const [, init] = localFetch.mock.lastCall!;
+    expect(sentHeaders(init).has(ACTIVATION_HEADER)).toBe(false);
+    expect(error).toBeInstanceOf(FlowsApiError);
+    expect(error.code).toBe("activation_requires_user");
   });
 
   it.each([
@@ -147,6 +180,23 @@ describe("browser mock", () => {
     await expect(flowsApi.activate(fixtureFlow.id, "stale-version")).rejects.toMatchObject({
       code: "version_changed",
     });
+  });
+
+  it("refuses, like the engine, an activation without the UI credential or the version", async () => {
+    useBrowserMock();
+    const activate = (headers: Record<string, string>, body: unknown) =>
+      localFetch(`/automation-flows/${fixtureFlow.id}/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
+    const ui = { [ACTIVATION_HEADER]: await getFlowActivationKey() };
+
+    // What the chat agent could send with the local API key.
+    expect((await activate({}, { versionId: fixtureFlow.versionId })).status).toBe(403);
+    expect((await activate(ui, {})).status).toBe(400);
+    expect((await flowsApi.get(fixtureFlow.id)).activationLog).toEqual([]);
+    expect((await activate(ui, { versionId: fixtureFlow.versionId })).status).toBe(200);
   });
 
   it("lets a chat change switch the fixture Flow off and leave it needing review", async () => {

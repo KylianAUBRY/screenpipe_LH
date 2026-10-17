@@ -20,6 +20,7 @@ const CREATION_ERROR: Record<FlowsErrorCode, string> = {
   // Activation-only codes; creation never returns them.
   version_changed: CREATION_FAILED,
   activation_failed: CREATION_FAILED,
+  activation_requires_user: CREATION_FAILED,
   unknown: CREATION_FAILED,
 };
 
