@@ -9,7 +9,7 @@ HTTP Request that fetched the page instead of opening a window. User rule: the
 AI never invents a node, and never leaves one incomplete for lack of a
 connection or a parameter. SPEC D22.
 
-**Status:** see « Tests run » and « Live check ».
+**Status:** done, live-verified on this Mac (app rebuilt from `83aed53e5`).
 
 ## What ScreenPipe refuses now
 
@@ -67,6 +67,18 @@ above.
   before n8n sees it; the only ScreenPipe API credential is wired).
 - `cargo test -p screenpipe-core --lib automation_flows_skill` → 2 passed;
   `bun test` in `packages/n8n-nodes-screenpipe` → 47; workflow tests → 20.
+
+## Live check (2026-10-17, this Mac)
+
+`POST /automation-flows` on the running app:
+
+- the original Parrot Flow (schedule → Execute Command) → `400`: « Ouvrir un
+  terminal avec parrot.live »: `n8n-nodes-base.executeCommand` is switched
+  off in this n8n; no node here can do that;
+- schedule + Slack, unconnected, empty, no Slack credential → `400` naming
+  both unconnected nodes, `select` and `text` empty, and the missing
+  `slackApi` credential;
+- n8n holds 4 workflows before and after: nothing was created.
 
 ## Known limits
 
