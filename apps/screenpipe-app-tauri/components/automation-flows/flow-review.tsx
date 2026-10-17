@@ -4,8 +4,8 @@
 
 "use client";
 
-// Review Screen: what the Flow does, the n8n graph with one sentence (and the
-// fixed facts) per node, links to the graph in n8n, back to the Task Page and
+// Review Screen: what the Flow does, the n8n graph with one sentence per
+// node, links to the graph in n8n, back to the Task Page and
 // to the moment in the timeline where the task was seen, status, last run,
 // activation history, Activate / Deactivate, and "Demander une modification"
 // (the Screenpipe chat, ticket 08).

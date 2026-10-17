@@ -999,9 +999,9 @@ async fn review_nodes_come_from_n8n_notes_without_sticky_notes() {
 }
 
 #[tokio::test]
-async fn each_step_lists_the_facts_the_ai_did_not_write() {
-    // Ticket 22, item 5: the credentials a node uses, and where an HTTP
-    // Request goes, read from the workflow itself.
+async fn no_step_shows_n8n_credentials_or_called_hosts() {
+    // Flows round two, ticket 01: the Review Screen shows only each step's
+    // sentence; credential names and called hosts stay in n8n.
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;
     app.configure_n8n(&server.uri());
@@ -1009,43 +1009,40 @@ async fn each_step_lists_the_facts_the_ai_did_not_write() {
     let id = created["id"].as_str().unwrap().to_string();
     n8n.edit_workflow(&id, |workflow| {
         workflow["nodes"].as_array_mut().unwrap().push(json!({
-            "id": "computed-http", "name": "Appeler le webhook", "type": "n8n-nodes-base.httpRequest",
+            "id": "fixed-http", "name": "Appeler le webhook", "type": "n8n-nodes-base.httpRequest",
             "typeVersion": 4.5, "position": [1300, 0], "notes": "Le webhook est appelé.",
-            "parameters": {"url": "={{ $json.webhookUrl }}"}
+            "parameters": {"method": "POST", "url": "https://hooks.example.org/x"}
         }));
     });
+    let (chat_status, chat_flow) = chat_create(
+        &app,
+        json!({"workflow": chat_workflow(), "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+    assert_eq!(chat_status, StatusCode::CREATED, "{chat_flow}");
 
     let (status, flow) = app
         .call("GET", &format!("/automation-flows/{id}"), None)
         .await;
 
     assert_eq!(status, StatusCode::OK, "{flow}");
-    let facts = |name: &str| {
-        flow["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|n| n["name"] == name)
-            .unwrap_or_else(|| panic!("node {name}"))["facts"]
-            .clone()
-    };
-    assert_eq!(
-        facts("Créer le ticket Jira"),
-        json!([
-            "Identifiant n8n : NovaDesk Jira",
-            "POST kylianaubry.atlassian.net"
-        ])
-    );
-    assert_eq!(
-        facts("Nouvel email support"),
-        json!(["Identifiant n8n : NovaDesk Gmail (IMAP)"])
-    );
-    assert_eq!(facts("Ticket nécessaire"), json!([]));
-    // n8n's default method; a URL built at run time has no host to show.
-    assert_eq!(
-        facts("Appeler le webhook"),
-        json!(["GET (adresse calculée à l'exécution)"])
-    );
+    for flow in [&created, &flow, &chat_flow] {
+        let nodes = flow["nodes"].as_array().unwrap();
+        assert!(!nodes.is_empty());
+        for node in nodes {
+            assert!(node.get("facts").is_none(), "{node}");
+        }
+    }
+    let shown = flow.to_string();
+    for hidden in [
+        "Identifiant n8n",
+        "NovaDesk Jira",
+        "NovaDesk Gmail (IMAP)",
+        "kylianaubry.atlassian.net",
+        "hooks.example.org",
+    ] {
+        assert!(!shown.contains(hidden), "{hidden} shown in {shown}");
+    }
 }
 
 /// The demo Detected Task as the catalog holds it: two repetitions, the

@@ -13,7 +13,7 @@ import type { Catalog } from "../../../apps/screenpipe-app-tauri/lib/automation-
 import { DEMO_TASK_ID } from "../../../apps/screenpipe-app-tauri/lib/automation-flows/demo-task/detected-task";
 
 // The task itself and how it is installed are shared with the app's
-// « Trouver une automatisation » button.
+// demo shortcut ⌃⌥⌘D.
 export { upsertTask, type Catalog } from "../../../apps/screenpipe-app-tauri/lib/automation-flows/demo-task/catalog";
 
 /** `<app local data>/workflows`; the default is the installed macOS app (`screenpi.pe`). */
