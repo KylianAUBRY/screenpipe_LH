@@ -275,6 +275,8 @@ function aiAnswer(overrides: Record<string, string> = {}) {
 }
 
 // --- Minimal n8n expression evaluation (plain JS inside {{ }}) ---
+// Only evaluates expressions from the committed fixture above, never external
+// input. Keep the fixture's expressions plain JS so this stays faithful to n8n.
 
 type Ctx = { $json: any; nodes?: Record<string, any> };
 
