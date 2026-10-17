@@ -34,6 +34,18 @@ describe("desktop createAutomationFlow", () => {
     expect(mocks.emit).toHaveBeenCalledWith("navigate", { url: reviewUrl });
   });
 
+  it("switches an Automations view that is already open to the Flow's Review Screen", async () => {
+    const switched = vi.fn();
+    const listen = (event: Event) => switched((event as CustomEvent).detail);
+    window.addEventListener("switch-pipes-tab", listen);
+    try {
+      await createAutomationFlow(DEMO_TASK_ID, answers);
+    } finally {
+      window.removeEventListener("switch-pipes-tab", listen);
+    }
+    expect(switched).toHaveBeenCalledWith({ tab: "flows", flow: fixtureFlow.id });
+  });
+
   it("opens the same Flow when the action is clicked again", async () => {
     await createAutomationFlow(DEMO_TASK_ID, answers);
     await createAutomationFlow(DEMO_TASK_ID, answers);

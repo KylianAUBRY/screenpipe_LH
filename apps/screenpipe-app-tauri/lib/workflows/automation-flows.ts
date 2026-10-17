@@ -29,7 +29,9 @@ export const createAutomationFlow: NonNullable<WorkflowsPlatform["createAutomati
 
 async function openFlowReview(flowId: string): Promise<void> {
   const url = `/home?section=pipes&tab=flows&flow=${encodeURIComponent(flowId)}`;
-  // The Automations view reads ?tab=flows&flow= when it mounts.
+  // The Automations view reads ?tab=flows&flow= when it mounts; one that is
+  // already mounted (kept hidden behind Workflows) follows `switch-pipes-tab`.
   window.history.replaceState(window.history.state, "", url);
   await emit("navigate", { url });
+  window.dispatchEvent(new CustomEvent("switch-pipes-tab", { detail: { tab: "flows", flow: flowId } }));
 }
