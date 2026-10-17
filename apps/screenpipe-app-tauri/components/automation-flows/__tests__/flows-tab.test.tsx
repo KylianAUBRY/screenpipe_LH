@@ -82,6 +82,27 @@ describe("Flows list", () => {
     expect(onSelectFlow).toHaveBeenCalledWith(fixtureFlow.id);
   });
 
+  it("shows red, still active, a Flow whose last run failed (D16)", async () => {
+    const failed = {
+      id: "wf-failed",
+      name: "Support NovaDesk",
+      status: "active" as const,
+      lastExecution: { status: "error" as const, startedAt: "2026-10-17T09:00:00.000Z" },
+    };
+    const succeeded = { ...failed, id: "wf-ok", lastExecution: { ...failed.lastExecution, status: "success" as const } };
+    render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ list: vi.fn(async () => [failed, succeeded]) })} />);
+
+    const row = await screen.findByTestId("flow-row-wf-failed");
+    expect(within(row).getByText("Active")).toBeTruthy();
+    expect(within(row).getByTestId("flow-status-marker").className).toMatch(/\bbg-red-600\b/);
+    const lastRun = within(row).getByText(/Dernière exécution : .*en erreur/);
+    expect(lastRun.className).toMatch(/\btext-red-600\b/);
+
+    const ok = screen.getByTestId("flow-row-wf-ok");
+    expect(within(ok).getByTestId("flow-status-marker").className).not.toMatch(/red/);
+    expect(within(ok).getByText(/Dernière exécution/).className).not.toMatch(/red/);
+  });
+
   it("says when there is no Flow yet", async () => {
     render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ list: vi.fn(async () => []) })} />);
     expect(await screen.findByText(/Aucun Flow pour l'instant/)).toBeTruthy();

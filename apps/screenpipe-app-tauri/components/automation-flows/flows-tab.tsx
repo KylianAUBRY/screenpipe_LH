@@ -14,6 +14,7 @@ import { flowsApi, type FlowsApi, type FlowSummary } from "./api";
 import { ChatButton, FlowsErrorMessage, StatusBadge, useFlowsLoad } from "./common";
 import { FlowReview } from "./flow-review";
 import { lastRunLabel } from "./labels";
+import { cn } from "@/lib/utils";
 
 export function FlowsTab({
   flowId,
@@ -66,6 +67,8 @@ function FlowList({ onOpen, api }: { onOpen: (id: string) => void; api: FlowsApi
 }
 
 function FlowRow({ flow, onOpen }: { flow: FlowSummary; onOpen: () => void }) {
+  // A failed last run shows red; the Flow is never paused for it (D16).
+  const failed = flow.lastExecution?.status === "error";
   return (
     <li>
       <button
@@ -76,11 +79,15 @@ function FlowRow({ flow, onOpen }: { flow: FlowSummary; onOpen: () => void }) {
       >
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{flow.name}</div>
-          <div className="text-xs text-muted-foreground">
+          <div className={cn("text-xs", failed ? "text-red-600 dark:text-red-400" : "text-muted-foreground")}>
             Dernière exécution : {lastRunLabel(flow.lastExecution)}
           </div>
         </div>
-        <StatusBadge status={flow.status} running={flow.lastExecution?.status === "running"} />
+        <StatusBadge
+          status={flow.status}
+          running={flow.lastExecution?.status === "running"}
+          failed={failed}
+        />
         <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden />
       </button>
     </li>
