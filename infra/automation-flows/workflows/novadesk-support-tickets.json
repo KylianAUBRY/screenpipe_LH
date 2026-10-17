@@ -1,0 +1,212 @@
+{
+  "id": "spNovaFlow000001",
+  "name": "NovaDesk : emails support → tickets Jira",
+  "active": false,
+  "nodes": [
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000001",
+      "name": "Nouvel email support",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.2,
+      "position": [0, 0],
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "read",
+        "format": "simple",
+        "options": {
+          "customEmailConfig": "[\"UNSEEN\"]"
+        }
+      },
+      "credentials": {
+        "imap": { "id": "spNovaImap000001", "name": "NovaDesk Gmail (IMAP)" }
+      },
+      "notes": "Dès qu'un email non lu arrive dans la boîte servicedesk.novadesk@gmail.com, n8n le lit puis le marque comme lu pour ne jamais le traiter deux fois.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000002",
+      "name": "Analyser l'email (IA)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [260, 0],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Email reçu sur la boîte support NovaDesk.\nDe : {{ $json.from }}\nObjet : {{ $json.subject }}\nDate : {{ $json.date }}\n\n{{ $json.textPlain || $json.textHtml }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Tu es l'assistant du support NovaDesk. Pour chaque email reçu sur la boîte support, tu décides s'il faut créer un ticket Jira dans le projet NOVA, en suivant les conventions de l'équipe :\n- type : « Bug » pour un défaut signalé dans un produit (quelque chose ne fonctionne pas comme prévu) ; « Tâche » pour une idée d'amélioration ou une demande de nouvelle fonctionnalité ; « none » pour tout le reste (alerte de sécurité, notification automatique, newsletter, publicité, email sans rapport avec un produit NovaDesk).\n- product : le nom du produit concerné tel qu'écrit dans l'email (par exemple NovaCRM ou NovaPay).\n- summary : un résumé court et factuel du problème ou de l'idée, en français, sans le nom du produit, sur une ligne de moins de 80 caractères.\n- priority : « Highest » si le problème bloque l'utilisateur sans contournement possible, « Medium » si un contournement existe, « Low » pour une idée d'amélioration ; « High » ou « Lowest » seulement si l'email le justifie clairement.\n- label : « back » si le problème vient du serveur, des données, des exports, des calculs ou des paiements ; « front » s'il concerne l'interface, l'affichage, les filtres ou l'ergonomie.\nSi type vaut « none », remplis quand même les autres champs avec des valeurs neutres (product « - », summary « - », priority « Low », label « back »).\nN'invente aucune information absente de l'email."
+        }
+      },
+      "notes": "Une IA lit l'email et décide s'il faut un ticket (Bug, Tâche ou rien), puis propose le produit, un résumé court, la priorité et l'étiquette back ou front.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000003",
+      "name": "Modèle IA ScreenPipe",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [180, 220],
+      "parameters": {
+        "model": { "__rl": true, "mode": "id", "value": "auto" },
+        "responsesApiEnabled": false,
+        "options": {}
+      },
+      "credentials": {
+        "openAiApi": { "id": "spProxyOpenAI001", "name": "ScreenPipe AI proxy" }
+      },
+      "notes": "Le modèle d'IA est celui de votre abonnement ScreenPipe, appelé via le proxy local de ScreenPipe.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000004",
+      "name": "Format de la réponse",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [400, 220],
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"type\": {\n      \"type\": \"string\",\n      \"enum\": [\"Bug\", \"Tâche\", \"none\"],\n      \"description\": \"Bug pour un défaut, Tâche pour une idée d'amélioration, none si aucun ticket n'est nécessaire\"\n    },\n    \"product\": {\n      \"type\": \"string\",\n      \"description\": \"Produit concerné, par exemple NovaCRM ou NovaPay\"\n    },\n    \"summary\": {\n      \"type\": \"string\",\n      \"description\": \"Résumé court du problème ou de l'idée, sans le nom du produit\"\n    },\n    \"priority\": {\n      \"type\": \"string\",\n      \"enum\": [\"Highest\", \"High\", \"Medium\", \"Low\", \"Lowest\"],\n      \"description\": \"Priorité Jira\"\n    },\n    \"label\": {\n      \"type\": \"string\",\n      \"enum\": [\"back\", \"front\"],\n      \"description\": \"back pour le serveur et les données, front pour l'interface\"\n    }\n  },\n  \"required\": [\"type\", \"product\", \"summary\", \"priority\", \"label\"],\n  \"additionalProperties\": false\n}"
+      },
+      "notes": "La réponse de l'IA est limitée à cinq champs fixes (type, produit, résumé, priorité, étiquette) pour que la suite du flux reste déterministe.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000005",
+      "name": "Ticket nécessaire",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [620, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6d0f5c1e-0b7a-4c55-9f1e-01a0000000c1",
+              "leftValue": "={{ $json.output.type }}",
+              "rightValue": "none",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "notes": "Si l'IA a répondu qu'aucun ticket n'est nécessaire (par exemple pour une alerte de sécurité), le flux s'arrête ici sans rien créer.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000006",
+      "name": "Préparer le ticket",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [860, 0],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6d0f5c1e-0b7a-4c55-9f1e-01a0000000a1",
+              "name": "summary",
+              "value": "={{ $json.output.product }} - {{ $json.output.summary }}",
+              "type": "string"
+            },
+            {
+              "id": "6d0f5c1e-0b7a-4c55-9f1e-01a0000000a2",
+              "name": "issueType",
+              "value": "={{ $json.output.type }}",
+              "type": "string"
+            },
+            {
+              "id": "6d0f5c1e-0b7a-4c55-9f1e-01a0000000a3",
+              "name": "priority",
+              "value": "={{ $json.output.priority }}",
+              "type": "string"
+            },
+            {
+              "id": "6d0f5c1e-0b7a-4c55-9f1e-01a0000000a4",
+              "name": "label",
+              "value": "={{ $json.output.label }}",
+              "type": "string"
+            },
+            {
+              "id": "6d0f5c1e-0b7a-4c55-9f1e-01a0000000a5",
+              "name": "description",
+              "value": "=Email reçu de {{ $('Nouvel email support').item.json.from }} le {{ $('Nouvel email support').item.json.date }}\nObjet : {{ $('Nouvel email support').item.json.subject }}\n\n{quote}\n{{ ($('Nouvel email support').item.json.textPlain || $('Nouvel email support').item.json.textHtml || '').trim() }}\n{quote}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      },
+      "notes": "Le titre du ticket est construit sans IA au format « Produit - résumé », et l'email d'origine est cité tel quel dans la description.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000007",
+      "name": "Créer le ticket Jira",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [1100, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://kylianaubry.atlassian.net/rest/api/2/issue",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraSoftwareCloudApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { project: { key: 'NOVA' }, issuetype: { name: $json.issueType }, summary: $json.summary, description: $json.description, priority: { name: $json.priority }, labels: [ $json.label ] } }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "jiraSoftwareCloudApi": { "id": "spNovaJira000001", "name": "NovaDesk Jira" }
+      },
+      "notes": "Le ticket est créé dans le projet Jira NOVA avec le type, la priorité et l'étiquette choisis, sans personne assignée.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000008",
+      "name": "À propos de ce flux",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-40, -260],
+      "parameters": {
+        "content": "## Automation Flow ScreenPipe\nCréé depuis la tâche détectée `wf-novadesk-support-tickets` : chaque email de bug ou d'idée reçu par le support devient un ticket dans le projet Jira NOVA.\n\nRelisez-le et activez-le depuis ScreenPipe (Automatisations → Flows). Une modification faite ici le marque « à revoir » dans ScreenPipe.",
+        "height": 200,
+        "width": 560,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Nouvel email support": {
+      "main": [[{ "node": "Analyser l'email (IA)", "type": "main", "index": 0 }]]
+    },
+    "Modèle IA ScreenPipe": {
+      "ai_languageModel": [[{ "node": "Analyser l'email (IA)", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Format de la réponse": {
+      "ai_outputParser": [[{ "node": "Analyser l'email (IA)", "type": "ai_outputParser", "index": 0 }]]
+    },
+    "Analyser l'email (IA)": {
+      "main": [[{ "node": "Ticket nécessaire", "type": "main", "index": 0 }]]
+    },
+    "Ticket nécessaire": {
+      "main": [[{ "node": "Préparer le ticket", "type": "main", "index": 0 }], []]
+    },
+    "Préparer le ticket": {
+      "main": [[{ "node": "Créer le ticket Jira", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "tags": [{ "name": "screenpipe-flow" }],
+  "pinData": {}
+}
