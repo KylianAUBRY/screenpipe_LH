@@ -19,7 +19,9 @@
 //! imports switched off, from a Detected Task (`POST /from-task`) or from the
 //! chat (`POST /`, the `automation-flows` skill). A chat modification (`PUT /:id`, from the
 //! `automation-flows` skill) switches an active Flow off before updating it
-//! and never switches it on: the Flow then needs review.
+//! and never switches it on: the Flow then needs review. Switching a Flow off
+//! waits for the execution n8n is running ([`RunningWait`]), so the email it
+//! processes is never lost. The chat never wires n8n credentials.
 
 use crate::atomic_file;
 use crate::routes::workflows::{read_catalog, workflow_id as task_id_of, WorkflowCatalogSource};
@@ -1075,17 +1077,18 @@ async fn source_moment(state: &FlowsState, task_id: &str) -> Option<SourceMoment
         .as_array()?
         .iter()
         .find(|task| task_id_of(task) == task_id)?;
-    let stages = task["stages"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let stages = task["stages"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     let frames = stages
         .iter()
         .flat_map(screenpipe_core::workflows::stage_screenshots);
-    let evidence = task["evidence"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .chain(stages.iter().flat_map(|stage| {
-            stage["evidence"].as_array().into_iter().flatten()
-        }));
+    let evidence = task["evidence"].as_array().into_iter().flatten().chain(
+        stages
+            .iter()
+            .flat_map(|stage| stage["evidence"].as_array().into_iter().flatten()),
+    );
     frames
         .chain(evidence)
         .filter_map(|moment| {
@@ -1131,8 +1134,7 @@ async fn build_flow(
         // in its editor creates a newer draft `versionId` (SPEC D7); and a
         // version published in n8n (editor, CLI) was never the user's click.
         review_outdated: head.status == "active"
-            && (running != Some(version_id.as_str())
-                || running != reviewed_version_id.as_deref()),
+            && (running != Some(version_id.as_str()) || running != reviewed_version_id.as_deref()),
         id: head.id,
         name: head.name,
         status: head.status,

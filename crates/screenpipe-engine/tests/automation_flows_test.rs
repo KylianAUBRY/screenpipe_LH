@@ -849,7 +849,10 @@ async fn create_never_takes_over_a_flow_the_user_already_has() {
         [event("activated", "imported-version", "user")]
     );
     assert!(!flow["summary"].as_str().unwrap().is_empty());
-    assert!(n8n_writes(&server).await.is_empty(), "nothing switched or imported");
+    assert!(
+        n8n_writes(&server).await.is_empty(),
+        "nothing switched or imported"
+    );
     assert_eq!(n8n.workflows()[0]["active"], true);
     let store = app.store();
     assert_eq!(store["flows"]["spNovaFlow000001"]["sourceTaskId"], TASK_ID);
@@ -1029,9 +1032,7 @@ async fn each_step_lists_the_facts_the_ai_did_not_write() {
 /// first capture of each either embedded pixels (negative frame id) or a
 /// recorder frame.
 fn detected_task(first_frame: i64) -> Value {
-    let screenshot = |frame_id: i64, timestamp: &str| {
-        json!({"frameId": frame_id, "timestamp": timestamp, "app": "Gmail", "dataUrl": ""})
-    };
+    let screenshot = |frame_id: i64, timestamp: &str| json!({"frameId": frame_id, "timestamp": timestamp, "app": "Gmail", "dataUrl": ""});
     json!({
         "id": TASK_ID,
         "title": "Transformer les e-mails de bug en tickets Jira",
@@ -1772,7 +1773,11 @@ async fn state_changing_routes_take_only_json_requests() {
                 "/automation-flows/from-task",
                 json!({"taskId": TASK_ID, "answers": {}}),
             ),
-            ("PUT", flow_uri.as_str(), json!({"workflow": chat_workflow()})),
+            (
+                "PUT",
+                flow_uri.as_str(),
+                json!({"workflow": chat_workflow()}),
+            ),
             ("POST", activate.as_str(), json!({"versionId": "version-1"})),
             ("POST", deactivate.as_str(), json!({})),
         ] {
@@ -2369,7 +2374,10 @@ async fn chat_create_imports_switched_off_and_tagged_and_stores_the_summary() {
         ]
     );
     assert_eq!(flow["edges"], json!([{"from": "n1", "to": "n2"}]));
-    assert_eq!(app.store()["flows"][id]["summary"], "Chaque soir, un résumé.");
+    assert_eq!(
+        app.store()["flows"][id]["summary"],
+        "Chaque soir, un résumé."
+    );
 
     // It is listed as a Draft, like any Flow.
     let (_, list) = app.call("GET", "/automation-flows", None).await;
@@ -2441,7 +2449,10 @@ async fn no_flow_is_offered_to_n8n_mcp_clients() {
         .filter(|r| r.method.as_str() != "GET" && r.url.path().starts_with("/api/v1/workflows"))
         .filter_map(|r| serde_json::from_slice(&r.body).ok())
         .collect();
-    assert_eq!(sent.iter().filter(|body| body["nodes"].is_array()).count(), 3);
+    assert_eq!(
+        sent.iter().filter(|body| body["nodes"].is_array()).count(),
+        3
+    );
     for body in &sent {
         assert!(body["settings"].get("availableInMCP").is_none(), "{body}");
     }
