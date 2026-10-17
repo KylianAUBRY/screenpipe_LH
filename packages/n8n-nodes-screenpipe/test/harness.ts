@@ -7,13 +7,21 @@
 // semantics (qs, json, returnFullResponse, ignoreHttpStatusErrors) follow
 // @n8n/backend-network's axios request.
 
-import type { IDataObject, IExecuteFunctions, IHttpRequestOptions, INodeExecutionData } from "n8n-workflow";
+import type {
+  IDataObject,
+  IExecuteFunctions,
+  IHttpRequestOptions,
+  INodeExecutionData,
+  IPollFunctions,
+} from "n8n-workflow";
 
 export type RecordedRequest = {
   method: string;
   path: string;
   query: Record<string, string>;
   authorization: string | null;
+  /** Parsed JSON body (raw text if not JSON); absent when the request had none. */
+  body?: unknown;
 };
 
 type Reply = { status?: number; body: unknown };
@@ -24,13 +32,15 @@ export function fakeScreenpipe(routes: Record<string, Reply | ((req: RecordedReq
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
-    fetch(req) {
+    async fetch(req) {
       const url = new URL(req.url);
+      const text = await req.text();
       const recorded: RecordedRequest = {
         method: req.method,
         path: url.pathname,
         query: Object.fromEntries(url.searchParams),
         authorization: req.headers.get("authorization"),
+        ...(text ? { body: parseJson(text) } : {}),
       };
       requests.push(recorded);
       const route = routes[url.pathname];
@@ -85,6 +95,61 @@ export function executeContext(options: ContextOptions): IExecuteFunctions {
   return context as unknown as IExecuteFunctions;
 }
 
+type PollOptions = {
+  parameters: Record<string, unknown>;
+  credentials: { baseUrl: string; apiKey: string };
+  /** "trigger" = the active workflow polling; "manual" = "Fetch Test Event" in the editor. */
+  mode?: "trigger" | "manual";
+};
+
+/**
+ * Minimal `this` for `INodeType.poll`. Call `poll` several times on the same
+ * context to model successive polls: the node's static data persists between
+ * them, as n8n saves it after each emitted run. Warnings logged by the node
+ * are collected in `warnings`.
+ */
+export function pollContext(options: PollOptions): IPollFunctions & { warnings: string[] } {
+  const staticData: IDataObject = {};
+  const warnings: string[] = [];
+  const node = {
+    id: "00000000-0000-0000-0000-000000000002",
+    name: "ScreenPipe Trigger",
+    type: "CUSTOM.screenPipeTrigger",
+    typeVersion: 1,
+    position: [0, 0] as [number, number],
+    parameters: options.parameters as IDataObject,
+  };
+  const context = {
+    warnings,
+    getMode: () => options.mode ?? "trigger",
+    getNode: () => node,
+    getNodeParameter(name: string, fallback?: unknown) {
+      const value = options.parameters[name];
+      if (value === undefined) {
+        if (arguments.length >= 2) return fallback;
+        throw new Error(`Could not get parameter "${name}"`);
+      }
+      return value;
+    },
+    async getCredentials(type: string) {
+      if (type !== "screenpipeApi") throw new Error(`unexpected credential type ${type}`);
+      return { ...options.credentials };
+    },
+    getWorkflowStaticData(type: string) {
+      if (type !== "node") throw new Error(`unexpected static data type ${type}`);
+      return staticData;
+    },
+    logger: {
+      warn: (message: string) => warnings.push(message),
+      error: (message: string) => warnings.push(message),
+      info: () => {},
+      debug: () => {},
+    },
+    helpers: { httpRequest },
+  };
+  return context as unknown as IPollFunctions & { warnings: string[] };
+}
+
 async function httpRequest(request: IHttpRequestOptions) {
   const url = new URL(request.url, request.baseURL);
   for (const [key, value] of Object.entries(request.qs ?? {})) {
@@ -92,12 +157,13 @@ async function httpRequest(request: IHttpRequestOptions) {
   }
   const headers = new Headers(request.headers as Record<string, string> | undefined);
   if (request.json && !headers.has("accept")) headers.set("accept", "application/json");
-  const response = await fetch(url, { method: request.method ?? "GET", headers });
-  const text = await response.text();
-  let body: unknown = text;
-  try {
-    body = JSON.parse(text);
-  } catch {}
+  let sent: string | undefined;
+  if (request.body !== undefined) {
+    sent = typeof request.body === "string" ? request.body : JSON.stringify(request.body);
+    if (!headers.has("content-type")) headers.set("content-type", "application/json");
+  }
+  const response = await fetch(url, { method: request.method ?? "GET", headers, body: sent });
+  const body = parseJson(await response.text());
   if (!request.ignoreHttpStatusErrors && (response.status < 200 || response.status >= 300)) {
     throw Object.assign(new Error(`Request failed with status code ${response.status}`), {
       response: { status: response.status, data: body },
@@ -107,4 +173,12 @@ async function httpRequest(request: IHttpRequestOptions) {
     return { body, headers: Object.fromEntries(response.headers), statusCode: response.status, statusMessage: response.statusText };
   }
   return body;
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }

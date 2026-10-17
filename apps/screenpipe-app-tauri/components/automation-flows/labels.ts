@@ -37,7 +37,12 @@ export function lastRunLabel(execution: LastExecution | null): string {
 
 export function activationLabel(entry: ActivationEvent): string {
   const by = entry.by === "chat" ? "par le chat" : "par vous";
-  return `${EVENT_LABEL[entry.event]} ${by} · ${formatDate(entry.at)}`;
+  return `${EVENT_LABEL[entry.event]} ${by} · ${formatDate(entry.at)} · version ${shortVersion(entry.versionId)}`;
+}
+
+/** n8n version ids are UUIDs: the first 8 characters tell them apart. */
+export function shortVersion(versionId: string): string {
+  return versionId.slice(0, 8);
 }
 
 /** `n8n-nodes-base.emailReadImap` → `emailReadImap`. */

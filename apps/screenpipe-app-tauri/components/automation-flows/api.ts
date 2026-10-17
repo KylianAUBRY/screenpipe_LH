@@ -56,7 +56,18 @@ export type FlowsErrorCode =
   | "n8n_not_configured"
   | "n8n_unreachable"
   | "not_found"
+  /** Activation: the n8n workflow changed since the user loaded it. */
+  | "version_changed"
+  /** Activation/deactivation: n8n answered but refused (detail says why). */
+  | "activation_failed"
   | "unknown";
+
+const SERVER_CODES: readonly FlowsErrorCode[] = [
+  "n8n_not_configured",
+  "n8n_unreachable",
+  "version_changed",
+  "activation_failed",
+];
 
 export class FlowsApiError extends Error {
   constructor(
@@ -80,8 +91,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const error = typeof body?.error === "string" ? body.error : undefined;
   const code: FlowsErrorCode =
-    error === "n8n_not_configured" || error === "n8n_unreachable"
-      ? error
+    error && SERVER_CODES.includes(error as FlowsErrorCode)
+      ? (error as FlowsErrorCode)
       : response.status === 404
         ? "not_found"
         : "unknown";
@@ -99,6 +110,22 @@ export const flowsApi = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ taskId, answers }),
+    }),
+
+  /**
+   * Activation: switches the n8n workflow on at `versionId`, the version the
+   * user reviewed. Only ever called from the user's click on "Activer".
+   */
+  activate: (id: string, versionId: string) =>
+    request<Flow>(`/automation-flows/${encodeURIComponent(id)}/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ versionId }),
+    }),
+
+  deactivate: (id: string) =>
+    request<Flow>(`/automation-flows/${encodeURIComponent(id)}/deactivate`, {
+      method: "POST",
     }),
 
   /** "Voir le graphe": the workflow in the n8n editor. */

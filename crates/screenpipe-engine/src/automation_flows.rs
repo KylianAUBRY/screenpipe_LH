@@ -12,6 +12,11 @@
 //! the last reviewed version and the activation log. These routes are the only
 //! code that talks to the n8n public API; its URL and key come from the n8n
 //! connection.
+//!
+//! Activation is the only way a Flow is switched on: `POST /:id/activate`,
+//! called from the Review Screen's button, publishes exactly the version the
+//! user reviewed (n8n 2.x `publish`/`unpublish`, SPEC D7). Creation always
+//! imports switched off.
 
 use crate::atomic_file;
 use axum::{
@@ -133,6 +138,8 @@ where
         .route("/", get(list_flows))
         .route("/from-task", post(create_from_task))
         .route("/:id", get(get_flow))
+        .route("/:id/activate", post(activate_flow))
+        .route("/:id/deactivate", post(deactivate_flow))
         .with_state(state)
 }
 
@@ -190,6 +197,14 @@ struct FlowEdge {
     to: String,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivateRequest {
+    /// The n8n version the user reviewed on the Review Screen.
+    #[serde(default)]
+    version_id: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FromTaskRequest {
@@ -208,6 +223,10 @@ enum FlowError {
     Unreachable(String),
     TaskNotFound,
     FlowNotFound,
+    /// The n8n workflow is no longer the version the user reviewed.
+    VersionChanged,
+    /// n8n answered but refused to switch the workflow on or off.
+    ActivationFailed(String),
     Internal(String),
 }
 
@@ -224,6 +243,13 @@ impl IntoResponse for FlowError {
             ),
             FlowError::TaskNotFound => (StatusCode::NOT_FOUND, json!({"error": "task_not_found"})),
             FlowError::FlowNotFound => (StatusCode::NOT_FOUND, json!({"error": "flow_not_found"})),
+            FlowError::VersionChanged => {
+                (StatusCode::CONFLICT, json!({"error": "version_changed"}))
+            }
+            FlowError::ActivationFailed(detail) => (
+                StatusCode::BAD_GATEWAY,
+                json!({"error": "activation_failed", "detail": detail}),
+            ),
             FlowError::Internal(detail) => {
                 tracing::error!("automation flows: {detail}");
                 (
@@ -398,15 +424,43 @@ impl N8nApi {
         })
     }
 
+    /// Switches a workflow on (`publish`) or off (`unpublish`), n8n 2.x
+    /// (SPEC D7). n8n's refusal is reported with its message.
+    async fn switch(
+        &self,
+        workflow_id: &str,
+        action: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, FlowError> {
+        let (status, value) = self
+            .send(
+                Method::POST,
+                &format!("/workflows/{workflow_id}/{action}"),
+                &[],
+                body,
+            )
+            .await?;
+        match status {
+            200..=299 => Ok(value),
+            404 => Err(FlowError::FlowNotFound),
+            _ => Err(FlowError::ActivationFailed(n8n_answer(status, &value))),
+        }
+    }
+
     fn editor_url(&self, workflow_id: &str) -> String {
         format!("{}/workflow/{workflow_id}", self.base)
     }
 }
 
 fn upstream_error(status: u16, body: &Value) -> FlowError {
+    FlowError::Unreachable(n8n_answer(status, body))
+}
+
+/// "n8n answered 400: <n8n's message>", for the user.
+fn n8n_answer(status: u16, body: &Value) -> String {
     match body["message"].as_str() {
-        Some(message) => FlowError::Unreachable(format!("n8n answered {status}: {message}")),
-        None => FlowError::Unreachable(format!("n8n answered {status}")),
+        Some(message) => format!("n8n answered {status}: {message}"),
+        None => format!("n8n answered {status}"),
     }
 }
 
@@ -494,6 +548,18 @@ struct ActivationEvent {
     by: String,
 }
 
+impl FlowRecord {
+    /// Appends a user action to the activation history.
+    fn log(&mut self, event: &str, version_id: String) {
+        self.activation_log.push(ActivationEvent {
+            at: chrono::Utc::now().to_rfc3339(),
+            event: event.to_string(),
+            version_id,
+            by: "user".to_string(),
+        });
+    }
+}
+
 impl FlowStore {
     fn load(dir: &FsPath) -> Result<Self, FlowError> {
         match std::fs::read(dir.join(STORE_FILE)) {
@@ -504,6 +570,21 @@ impl FlowStore {
                 "cannot read {STORE_FILE}: {e}"
             ))),
         }
+    }
+
+    /// The record of Flow `id`, created empty for a tagged workflow that was
+    /// not created through ScreenPipe.
+    fn record_mut(&mut self, id: &str) -> &mut FlowRecord {
+        self.flows
+            .entry(id.to_string())
+            .or_insert_with(|| FlowRecord {
+                source_task_id: None,
+                summary: String::new(),
+                answers: Value::Null,
+                reviewed_version_id: None,
+                activation_log: Vec::new(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            })
     }
 
     fn save(&self, dir: &FsPath) -> Result<(), FlowError> {
@@ -675,18 +756,102 @@ async fn get_flow(
     State(state): State<FlowsState>,
     Path(id): Path<String>,
 ) -> Result<Json<Flow>, FlowError> {
-    if !valid_workflow_id(&id) {
+    let (api, store, workflow) = load_flow(&state, &id).await?;
+    Ok(Json(
+        build_flow(&api, &workflow, store.flows.get(&id)).await,
+    ))
+}
+
+/// The n8n workflow of Flow `id` (tagged, or known to the local store), with
+/// the n8n client and the local store it was read with.
+async fn load_flow(state: &FlowsState, id: &str) -> Result<(N8nApi, FlowStore, Value), FlowError> {
+    if !valid_workflow_id(id) {
         return Err(FlowError::FlowNotFound);
     }
-    let api = N8nApi::from_connection(&state).await?;
+    let api = N8nApi::from_connection(state).await?;
     let store = FlowStore::load(&state.screenpipe_dir)?;
-    let record = store.flows.get(&id);
+    let known = store.flows.contains_key(id);
     let workflow = api
-        .workflow(&id)
+        .workflow(id)
         .await?
-        .filter(|workflow| has_flow_tag(workflow) || record.is_some())
+        .filter(|workflow| has_flow_tag(workflow) || known)
         .ok_or(FlowError::FlowNotFound)?;
-    Ok(Json(build_flow(&api, &workflow, record).await))
+    Ok((api, store, workflow))
+}
+
+/// Activation: publishes in n8n exactly the version the user reviewed, records
+/// it as the reviewed version and logs it. Only the Review Screen's
+/// "Activer" button calls this route; nothing in the engine calls it.
+async fn activate_flow(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+    body: Option<Json<ActivateRequest>>,
+) -> Result<Json<Flow>, FlowError> {
+    let request = body.map(|Json(request)| request).unwrap_or_default();
+    let _guard = state.write_lock.lock().await;
+    let (api, mut store, workflow) = load_flow(&state, &id).await?;
+    let version = workflow["versionId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    if request
+        .version_id
+        .as_deref()
+        .is_some_and(|reviewed| reviewed != version)
+    {
+        return Err(FlowError::VersionChanged);
+    }
+    // Already running the reviewed version (e.g. a double click).
+    if workflow["active"] == true && workflow["activeVersionId"].as_str() == Some(&version) {
+        return Ok(Json(
+            build_flow(&api, &workflow, store.flows.get(&id)).await,
+        ));
+    }
+
+    let published = api
+        .switch(&id, "publish", Some(&json!({"versionId": version})))
+        .await?;
+    let published_version = published["activeVersionId"]
+        .as_str()
+        .unwrap_or(&version)
+        .to_string();
+    let record = store.record_mut(&id);
+    record.reviewed_version_id = Some(published_version.clone());
+    record.log("activated", published_version);
+    store.save(&state.screenpipe_dir)?;
+
+    let workflow = api.workflow(&id).await?.unwrap_or(published);
+    Ok(Json(
+        build_flow(&api, &workflow, store.flows.get(&id)).await,
+    ))
+}
+
+/// Switches the n8n workflow off and logs which version stopped running.
+async fn deactivate_flow(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+) -> Result<Json<Flow>, FlowError> {
+    let _guard = state.write_lock.lock().await;
+    let (api, mut store, workflow) = load_flow(&state, &id).await?;
+    if workflow["active"] != true {
+        return Ok(Json(
+            build_flow(&api, &workflow, store.flows.get(&id)).await,
+        ));
+    }
+    let running = workflow["activeVersionId"]
+        .as_str()
+        .or(workflow["versionId"].as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let unpublished = api.switch(&id, "unpublish", None).await?;
+    store.record_mut(&id).log("deactivated", running);
+    store.save(&state.screenpipe_dir)?;
+
+    let workflow = api.workflow(&id).await?.unwrap_or(unpublished);
+    Ok(Json(
+        build_flow(&api, &workflow, store.flows.get(&id)).await,
+    ))
 }
 
 /// Demo: imports the task's bundled n8n workflow switched off and tagged (or

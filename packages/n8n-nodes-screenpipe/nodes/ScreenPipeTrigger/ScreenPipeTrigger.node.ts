@@ -34,7 +34,8 @@ export class ScreenPipeTrigger implements INodeType {
   description: INodeTypeDescription = {
     displayName: "ScreenPipe Trigger",
     name: "screenPipeTrigger",
-    icon: "file:screenpipe.png",
+    // Same icon as the ScreenPipe node (n8n resolves it next to the built file).
+    icon: "file:../ScreenPipe/screenpipe.png",
     group: ["trigger"],
     version: 1,
     subtitle: '={{ $parameter["event"] }}',

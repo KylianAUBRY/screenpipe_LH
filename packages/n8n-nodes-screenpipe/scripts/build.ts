@@ -35,7 +35,6 @@ run(["bunx", "tsc", "-p", "tsconfig.json"]);
 for (const dir of ["nodes/ScreenPipe", "credentials"]) {
   cpSync(join(pkgDir, dir, "screenpipe.png"), join(dist, dir, "screenpipe.png"));
 }
-cpSync(join(pkgDir, "nodes/ScreenPipe/screenpipe.png"), join(dist, "nodes/ScreenPipeTrigger/screenpipe.png"));
 console.log(`built ${dist}`);
 if (!install) process.exit(0);
 

@@ -33,6 +33,9 @@ struct N8nState {
     tags: Vec<Value>,
     executions: Vec<Value>,
     next_id: u32,
+    /// When set, publishing answers 400 with this message (e.g. a trigger
+    /// whose credentials n8n cannot use).
+    refuse_publish: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -143,6 +146,34 @@ impl Respond for FakeN8n {
                     Some(workflow) => {
                         workflow["tags"] = json!(wanted);
                         json_response(200, json!(wanted))
+                    }
+                    None => json_response(404, json!({"message": "Not Found"})),
+                }
+            }
+            // n8n 2.x: switch on = publish a version, switch off = unpublish.
+            ("POST", ["workflows", id, "publish"]) => {
+                if let Some(message) = &state.refuse_publish {
+                    return json_response(400, json!({"message": message}));
+                }
+                match state.workflows.iter_mut().find(|w| w["id"] == *id) {
+                    Some(workflow) => {
+                        let version = body["versionId"]
+                            .as_str()
+                            .map(|v| json!(v))
+                            .unwrap_or_else(|| workflow["versionId"].clone());
+                        workflow["active"] = json!(true);
+                        workflow["activeVersionId"] = version;
+                        json_response(200, workflow.clone())
+                    }
+                    None => json_response(404, json!({"message": "Not Found"})),
+                }
+            }
+            ("POST", ["workflows", id, "unpublish"]) => {
+                match state.workflows.iter_mut().find(|w| w["id"] == *id) {
+                    Some(workflow) => {
+                        workflow["active"] = json!(false);
+                        workflow["activeVersionId"] = Value::Null;
+                        json_response(200, workflow.clone())
                     }
                     None => json_response(404, json!({"message": "Not Found"})),
                 }
@@ -287,6 +318,24 @@ async fn workflow_posts(server: &MockServer) -> Vec<Value> {
         .into_iter()
         .filter(|r| r.method.as_str() == "POST" && r.url.path() == "/api/v1/workflows")
         .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect()
+}
+
+/// Bodies of the POST requests the fake n8n received on paths ending with
+/// `suffix` (e.g. "/publish").
+async fn posts_ending_with(server: &MockServer, suffix: &str) -> Vec<(String, Value)> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method.as_str() == "POST" && r.url.path().ends_with(suffix))
+        .map(|r| {
+            (
+                r.url.path().to_string(),
+                serde_json::from_slice(&r.body).unwrap_or(Value::Null),
+            )
+        })
         .collect()
 }
 
@@ -639,4 +688,318 @@ async fn review_is_outdated_while_n8n_runs_an_older_version_than_its_draft() {
     n8n.edit_workflow(&id, |w| w["activeVersionId"] = json!("version-2"));
     let (_, flow) = app.call("GET", &uri, None).await;
     assert_eq!(flow["reviewOutdated"], false);
+}
+
+// ---------------------------------------------------------------------------
+// Activation (ticket 04)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn activate_publishes_the_reviewed_version_and_logs_it() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+
+    let (status, flow) = app
+        .call(
+            "POST",
+            &format!("/automation-flows/{id}/activate"),
+            Some(json!({"versionId": "version-1"})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    // n8n publishes exactly the version the user reviewed.
+    let publishes = posts_ending_with(&server, "/publish").await;
+    assert_eq!(
+        publishes,
+        vec![(
+            format!("/api/v1/workflows/{id}/publish"),
+            json!({"versionId": "version-1"})
+        )]
+    );
+    assert_eq!(n8n.workflows()[0]["active"], true);
+
+    // The Flow is Active, its reviewed version recorded, the event logged.
+    assert_eq!(flow["status"], "active");
+    assert_eq!(flow["reviewedVersionId"], "version-1");
+    assert_eq!(flow["reviewOutdated"], false);
+    let log = flow["activationLog"].as_array().unwrap();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0]["event"], "activated");
+    assert_eq!(log[0]["versionId"], "version-1");
+    assert_eq!(log[0]["by"], "user");
+    assert!(chrono::DateTime::parse_from_rfc3339(log[0]["at"].as_str().unwrap()).is_ok());
+
+    // It survives a reload: the record lives in the local store.
+    let (_, reloaded) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    assert_eq!(reloaded["reviewedVersionId"], "version-1");
+    assert_eq!(reloaded["activationLog"], flow["activationLog"]);
+    assert_eq!(app.store()["flows"][&id]["reviewedVersionId"], "version-1");
+}
+
+#[tokio::test]
+async fn deactivate_unpublishes_and_logs_then_the_status_follows_the_versions() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let activate = format!("/automation-flows/{id}/activate");
+    let deactivate = format!("/automation-flows/{id}/deactivate");
+    let (_, flow) = app
+        .call("POST", &activate, Some(json!({"versionId": "version-1"})))
+        .await;
+    assert_eq!(flow["status"], "active");
+
+    // Deactivate: n8n unpublishes, the Flow is Paused, the event is logged.
+    let (status, flow) = app.call("POST", &deactivate, None).await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(
+        posts_ending_with(&server, "/unpublish").await,
+        vec![(format!("/api/v1/workflows/{id}/unpublish"), Value::Null)]
+    );
+    assert_eq!(n8n.workflows()[0]["active"], false);
+    assert_eq!(flow["status"], "paused");
+    let events: Vec<(&str, &str, &str)> = flow["activationLog"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["event"].as_str().unwrap(),
+                e["versionId"].as_str().unwrap(),
+                e["by"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        events,
+        vec![
+            ("activated", "version-1", "user"),
+            ("deactivated", "version-1", "user")
+        ]
+    );
+
+    // Edited in n8n while switched off: Needs Review until activated again.
+    n8n.edit_workflow(&id, |w| w["versionId"] = json!("version-2"));
+    let (_, flow) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    assert_eq!(flow["status"], "needs_review");
+    let (_, flow) = app
+        .call("POST", &activate, Some(json!({"versionId": "version-2"})))
+        .await;
+    assert_eq!(flow["status"], "active");
+    assert_eq!(flow["reviewedVersionId"], "version-2");
+    assert_eq!(flow["activationLog"].as_array().unwrap().len(), 3);
+    assert_eq!(flow["activationLog"][2]["versionId"], "version-2");
+}
+
+#[tokio::test]
+async fn activation_is_refused_without_publishing_or_logging() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let activate = format!("/automation-flows/{id}/activate");
+
+    // The workflow changed in n8n after the user opened the Review Screen.
+    n8n.edit_workflow(&id, |w| w["versionId"] = json!("version-2"));
+    let (status, body) = app
+        .call("POST", &activate, Some(json!({"versionId": "version-1"})))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "version_changed");
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+
+    // n8n refuses to publish: its reason reaches the user.
+    n8n.0.lock().unwrap().refuse_publish = Some("IMAP credentials are invalid".into());
+    let (status, body) = app
+        .call("POST", &activate, Some(json!({"versionId": "version-2"})))
+        .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["error"], "activation_failed");
+    assert!(body["detail"]
+        .as_str()
+        .unwrap()
+        .contains("IMAP credentials are invalid"));
+
+    // Still a Draft with an empty history.
+    let (_, flow) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(flow["activationLog"], json!([]));
+    assert_eq!(n8n.workflows()[0]["active"], false);
+}
+
+#[tokio::test]
+async fn repeated_clicks_switch_once_and_log_once() {
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let activate = format!("/automation-flows/{id}/activate");
+    let deactivate = format!("/automation-flows/{id}/deactivate");
+    let reviewed = Some(json!({"versionId": "version-1"}));
+
+    // Deactivating a Draft changes nothing.
+    let (status, flow) = app.call("POST", &deactivate, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(flow["activationLog"], json!([]));
+
+    for _ in 0..2 {
+        let (status, flow) = app.call("POST", &activate, reviewed.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(flow["status"], "active");
+    }
+    for _ in 0..2 {
+        let (status, flow) = app.call("POST", &deactivate, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(flow["status"], "paused");
+    }
+
+    assert_eq!(posts_ending_with(&server, "/publish").await.len(), 1);
+    assert_eq!(posts_ending_with(&server, "/unpublish").await.len(), 1);
+    let (_, flow) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    let events: Vec<&str> = flow["activationLog"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(events, vec!["activated", "deactivated"]);
+}
+
+#[tokio::test]
+async fn activating_the_version_edited_in_n8n_clears_the_flag() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let activate = format!("/automation-flows/{id}/activate");
+    app.call("POST", &activate, Some(json!({"versionId": "version-1"})))
+        .await;
+
+    // Edited in the n8n editor: n8n keeps running version-1.
+    n8n.edit_workflow(&id, |w| w["versionId"] = json!("version-2"));
+    let (_, flow) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    assert_eq!(flow["status"], "active");
+    assert_eq!(flow["reviewOutdated"], true);
+
+    // The user reads version-2 and activates it.
+    let (status, flow) = app
+        .call("POST", &activate, Some(json!({"versionId": "version-2"})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["reviewOutdated"], false);
+    assert_eq!(flow["reviewedVersionId"], "version-2");
+    assert_eq!(n8n.workflows()[0]["activeVersionId"], "version-2");
+    let publishes = posts_ending_with(&server, "/publish").await;
+    assert_eq!(publishes.len(), 2);
+    assert_eq!(publishes[1].1, json!({"versionId": "version-2"}));
+}
+
+#[tokio::test]
+async fn nothing_but_the_activate_route_switches_a_flow_on() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    app.create_from_task().await;
+    app.call("GET", "/automation-flows", None).await;
+    app.call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    app.call("POST", &format!("/automation-flows/{id}/deactivate"), None)
+        .await;
+
+    let switched_on: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.url.path().to_string())
+        .filter(|path| path.ends_with("/publish") || path.ends_with("/activate"))
+        .collect();
+    assert!(switched_on.is_empty(), "{switched_on:?}");
+    assert_eq!(n8n.workflows()[0]["active"], false);
+}
+
+#[tokio::test]
+async fn activation_routes_report_setup_and_unknown_flows() {
+    let app = App::new().await;
+    for uri in [
+        "/automation-flows/wf1/activate",
+        "/automation-flows/wf1/deactivate",
+    ] {
+        let (status, body) = app.call("POST", uri, None).await;
+        assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{uri}");
+        assert_eq!(body["error"], "n8n_not_configured");
+    }
+
+    app.configure_n8n(&closed_port_url());
+    let (status, body) = app
+        .call("POST", "/automation-flows/wf1/activate", None)
+        .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["error"], "n8n_unreachable");
+
+    let (server, _n8n) = start_fake_n8n().await;
+    app.configure_n8n(&server.uri());
+    for uri in [
+        "/automation-flows/wf404/activate",
+        "/automation-flows/wf404/deactivate",
+        "/automation-flows/..%2Fcredentials/activate",
+    ] {
+        let (status, body) = app.call("POST", uri, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        assert_eq!(body["error"], "flow_not_found");
+    }
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+}
+
+#[tokio::test]
+async fn review_screen_shows_the_last_execution() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let uri = format!("/automation-flows/{id}");
+    assert_eq!(created["lastExecution"], Value::Null);
+
+    for (n8n_status, expected) in [
+        ("success", "success"),
+        ("waiting", "running"),
+        ("crashed", "error"),
+    ] {
+        n8n.0.lock().unwrap().executions = vec![json!({
+            "id": "1", "workflowId": id, "status": n8n_status,
+            "startedAt": "2026-10-17T09:00:00.000Z"
+        })];
+        let (_, flow) = app.call("GET", &uri, None).await;
+        assert_eq!(flow["lastExecution"]["status"], expected, "{n8n_status}");
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(
+                flow["lastExecution"]["startedAt"].as_str().unwrap()
+            )
+            .unwrap(),
+            chrono::DateTime::parse_from_rfc3339("2026-10-17T09:00:00.000Z").unwrap()
+        );
+    }
 }

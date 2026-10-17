@@ -10,11 +10,15 @@ import type { WorkflowsPlatform } from "@screenpipe/workflows-ui";
 import { flowsApi, FlowsApiError, type FlowsErrorCode } from "@/components/automation-flows/api";
 
 // Shown on the Task Page, under the action; the answers stay on screen.
+const CREATION_FAILED = "Impossible de créer l'automatisation. Vos réponses sont conservées. Réessayez.";
 const CREATION_ERROR: Record<FlowsErrorCode, string> = {
   n8n_not_configured: "n8n n'est pas configuré. Renseignez l'URL de l'API n8n et une clé API dans Connexions → n8n, puis réessayez.",
   n8n_unreachable: "Impossible de joindre n8n. Vérifiez qu'il tourne, puis réessayez.",
   not_found: "Cette tâche ne peut pas encore devenir une automatisation.",
-  unknown: "Impossible de créer l'automatisation. Vos réponses sont conservées. Réessayez.",
+  // Activation-only codes; creation never returns them.
+  version_changed: CREATION_FAILED,
+  activation_failed: CREATION_FAILED,
+  unknown: CREATION_FAILED,
 };
 
 export const createAutomationFlow: NonNullable<WorkflowsPlatform["createAutomationFlow"]> = async (taskId, answers) => {
