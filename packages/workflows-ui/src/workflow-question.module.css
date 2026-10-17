@@ -44,3 +44,5 @@
 .choices button:hover:not(:disabled) { border-color: var(--ink); }
 .choices button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--panel); }
 .choices button:disabled { opacity: 0.5; }
+/* Native controls (textarea scrollbars, checkboxes) follow the app theme. */
+:global(.dark) .questions { color-scheme: dark; }
