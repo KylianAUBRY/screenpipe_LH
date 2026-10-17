@@ -70,6 +70,51 @@ describe("flow review screen", () => {
     expect(useAutomationFlowStore.getState().flows[flow.id]?.status).toBe("waiting");
   });
 
+  it("Not now moves the Flow to Dismissed and goes back to the list", () => {
+    const onBack = vi.fn();
+    render(<FlowReview flow={flow} onBack={onBack} />);
+
+    fireEvent.click(screen.getByTestId("flow-not-now"));
+    expect(useAutomationFlowStore.getState().flows[flow.id]?.status).toBe("dismissed");
+    expect(onBack).toHaveBeenCalled();
+  });
+
+  it("a dismissed Flow offers RESTORE instead of TURN ON", () => {
+    useAutomationFlowStore.getState().setStatus(flow.id, "dismissed");
+    render(<FlowReview flow={flow} onBack={() => {}} />);
+
+    expect(screen.getByTestId("flow-status").textContent).toContain("Dismissed");
+    expect(screen.queryByTestId("flow-turn-on")).toBeNull();
+    expect(screen.queryByTestId("flow-not-now")).toBeNull();
+    fireEvent.click(screen.getByTestId("flow-restore"));
+    expect(useAutomationFlowStore.getState().flows[flow.id]?.status).toBe("waiting");
+    expect(screen.getByTestId("flow-turn-on")).toBeTruthy();
+  });
+
+  it("Change answers pauses a running Flow and brings the questions back", async () => {
+    const deactivate = vi.fn().mockResolvedValue(undefined);
+    setFlowBackend({ activate: vi.fn().mockResolvedValue(undefined), deactivate });
+    const store = useAutomationFlowStore.getState();
+    store.setAnswer(flow.id, "pick-option", { choiceId: "option-a" });
+    store.setAnswer(flow.id, "explain", { custom: "Because of Z" });
+    store.setStatus(flow.id, "running");
+    render(<FlowReview flow={flow} onBack={() => {}} />);
+
+    const answers = screen.getByTestId("flow-answers").textContent;
+    expect(answers).toContain("Option A applies");
+    expect(answers).toContain("Your answer: “Because of Z”");
+    expect(screen.queryByTestId("flow-questions")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("flow-change-answers"));
+    await waitFor(() => expect(screen.getByTestId("flow-questions")).toBeTruthy());
+    expect(deactivate).toHaveBeenCalledWith(flow);
+    expect(useAutomationFlowStore.getState().flows[flow.id]?.status).toBe("paused");
+    expect(screen.getByTestId("flow-status").textContent).toContain("Paused");
+    // Turning it on again stays an explicit action.
+    expect((screen.getByTestId("flow-turn-on") as HTMLButtonElement).disabled).toBe(false);
+    expect(useAutomationFlowStore.getState().flows[flow.id]?.status).not.toBe("running");
+  });
+
   it("always shows the rules in the Flow's blocks, with the ones learned from the answers", () => {
     useAutomationFlowStore.getState().setAnswer(flow.id, "pick-option", { choiceId: "option-b" });
     render(<FlowReview flow={flow} onBack={() => {}} />);

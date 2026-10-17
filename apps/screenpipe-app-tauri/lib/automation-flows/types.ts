@@ -82,4 +82,5 @@ export type AutomationFlow = {
 
 export type FlowAnswer = { choiceId: string } | { custom: string };
 
-export type FlowStatus = "waiting" | "running" | "paused";
+/** "dismissed": the user said "Not now"; it stays listed and can be restored. */
+export type FlowStatus = "waiting" | "running" | "paused" | "dismissed";

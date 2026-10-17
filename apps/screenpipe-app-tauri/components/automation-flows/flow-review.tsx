@@ -10,7 +10,9 @@ import {
   ExternalLink,
   Loader2,
   Pause,
+  Pencil,
   Power,
+  RotateCcw,
   Workflow,
 } from "lucide-react";
 import { useGT } from "gt-react";
@@ -28,6 +30,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { flowBackend, openFlowInN8n } from "@/lib/automation-flows/backend";
 import {
+  answerText,
   canTurnOn,
   hasCustomAnswer,
   pendingQuestions,
@@ -49,7 +52,11 @@ export function FlowStatusSquare({ status }: { status: FlowStatus }) {
       aria-hidden
       className={cn(
         "h-2 w-2 shrink-0 border",
-        status === "running" ? "border-foreground bg-foreground" : "border-muted-foreground/50 bg-transparent",
+        status === "running"
+          ? "border-foreground bg-foreground"
+          : status === "dismissed"
+            ? "border-dashed border-muted-foreground/40 bg-transparent"
+            : "border-muted-foreground/50 bg-transparent",
       )}
     />
   );
@@ -67,14 +74,23 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
   const pending = pendingQuestions(flow, answers);
   const ready = canTurnOn(flow, answers);
   const running = status === "running";
+  const dismissed = status === "dismissed";
   const groups = ruleGroups(flow, answers);
   const score = replayScore(flow, answers);
   const unit = flow.unit || ui("cases");
 
-  const statusLabel = running ? ui("On") : status === "paused" ? ui("Paused") : ui("Not on yet");
+  const statusLabel = running
+    ? ui("On")
+    : status === "paused"
+      ? ui("Paused")
+      : dismissed
+        ? ui("Dismissed")
+        : ui("Not on yet");
   const statusDetail = running
     ? ui("Watching for new {unit}", { unit })
-    : pending.length === 1
+    : dismissed
+      ? ui("Restore it to review it again")
+      : pending.length === 1
       ? ui("1 question to answer")
       : pending.length
         ? ui("{count} questions to answer", { count: pending.length })
@@ -104,6 +120,13 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
     } finally {
       setBusy(false);
     }
+  };
+
+  // "Not now" keeps the proposal, moved to the Dismissed group of the list.
+  const dismiss = () => {
+    setStatus(flow.id, "dismissed");
+    toast({ title: ui("Moved to Dismissed"), description: ui("You can restore it from the list.") });
+    onBack();
   };
 
   return (
@@ -147,11 +170,32 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
           </div>
         </div>
         <div className="flex flex-shrink-0 items-center gap-2">
+          {!running && !dismissed && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className={cn(HERO_BUTTON, "text-muted-foreground")}
+              onClick={dismiss}
+              data-testid="flow-not-now"
+            >
+              NOT NOW
+            </Button>
+          )}
           <Button size="sm" variant="outline" className={HERO_BUTTON} onClick={() => setGraphOpen(true)}>
             <Workflow className="h-4 w-4 mr-1.5" />
             VIEW GRAPH
           </Button>
-          {running ? (
+          {dismissed ? (
+            <Button
+              size="sm"
+              className={HERO_BUTTON}
+              onClick={() => setStatus(flow.id, "waiting")}
+              data-testid="flow-restore"
+            >
+              <RotateCcw className="h-4 w-4 mr-1.5" />
+              RESTORE
+            </Button>
+          ) : running ? (
             <Button
               size="sm"
               variant="outline"
@@ -194,12 +238,44 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
       {flow.evidence?.length ? <FlowEvidence evidence={flow.evidence} unit={unit} /> : null}
 
       {running ? (
-        <div className="space-y-3">
-          <h4 className={SECTION_LABEL}>{ui("Activity")}</h4>
-          <div className="rounded-lg border border-border px-4 py-8 text-center text-sm text-muted-foreground">
-            {ui("Nothing yet. New {unit} it handles will show up here.", { unit })}
+        <>
+          <div className="space-y-3">
+            <h4 className={SECTION_LABEL}>{ui("Activity")}</h4>
+            <div className="rounded-lg border border-border px-4 py-8 text-center text-sm text-muted-foreground">
+              {ui("Nothing yet. New {unit} it handles will show up here.", { unit })}
+            </div>
           </div>
-        </div>
+
+          {flow.questions.length > 0 && (
+            <section className="space-y-3" data-testid="flow-answers">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h4 className={SECTION_LABEL}>{ui("Your answers")}</h4>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-3 text-xs font-semibold rounded-md normal-case tracking-wide"
+                  disabled={busy}
+                  onClick={() => void switchFlow(false)}
+                  data-testid="flow-change-answers"
+                >
+                  <Pencil className="h-3.5 w-3.5 mr-1.5" />
+                  CHANGE ANSWERS
+                </Button>
+              </div>
+              <ul className="divide-y divide-border rounded-lg border border-border">
+                {flow.questions.map((question) => (
+                  <li key={question.id} className="flex items-start gap-3 px-4 py-3 text-sm">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                    <span className="min-w-0 break-words">{answerText(question, answers[question.id])}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-muted-foreground">
+                {ui("Changing them pauses the automation until you turn it on again.")}
+              </p>
+            </section>
+          )}
+        </>
       ) : (
         <>
           <section

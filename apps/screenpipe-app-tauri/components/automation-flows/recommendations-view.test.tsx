@@ -98,6 +98,19 @@ describe("recommendations tab", () => {
     expect(screen.getByTestId(ROW)).toBeTruthy();
   });
 
+  it("lists a dismissed Flow under Dismissed, and RESTORE brings it back", () => {
+    useAutomationFlowStore.getState().setStatus(EXAMPLE_FLOW.id, "dismissed");
+    render(<Harness />);
+
+    expect(screen.getByText("Dismissed")).toBeTruthy();
+    expect(screen.queryByText("Waiting for you")).toBeNull();
+    expect(screen.getByTestId(ROW).textContent).toContain("not now");
+
+    fireEvent.click(screen.getByTestId(`flow-restore-${EXAMPLE_FLOW.id}`));
+    expect(screen.getByText("Waiting for you")).toBeTruthy();
+    expect(screen.queryByText("Dismissed")).toBeNull();
+  });
+
   it("moves a running Flow to the Running group", () => {
     useAutomationFlowStore.getState().setStatus(EXAMPLE_FLOW.id, "running");
     render(<Harness />);

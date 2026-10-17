@@ -40,6 +40,7 @@ export function RecommendationsView({
   const { toast } = useToast();
   const flowStates = useAutomationFlowStore((store) => store.flows);
   const resetFlows = useAutomationFlowStore((store) => store.reset);
+  const setStatus = useAutomationFlowStore((store) => store.setStatus);
   const { flows: catalog, loaded } = useAutomationFlows();
   // Browser dev loop only: the in-page copy of the notification panel.
   const [preview, setPreview] = useState<PreviewNotification | null>(null);
@@ -53,12 +54,14 @@ export function RecommendationsView({
     { status: "waiting", label: ui("Waiting for you") },
     { status: "running", label: ui("Running") },
     { status: "paused", label: ui("Paused") },
+    { status: "dismissed", label: ui("Dismissed") },
   ];
 
   const rowStatus = (flow: AutomationFlow) => {
     const { status, answers } = stateOf(flow);
     if (status === "running") return ui("on");
     if (status === "paused") return ui("paused");
+    if (status === "dismissed") return ui("not now");
     const count = pendingQuestions(flow, answers).length;
     if (count === 1) return ui("1 question to answer");
     return count ? ui("{count} questions to answer", { count }) : ui("ready to turn on");
@@ -108,32 +111,59 @@ export function RecommendationsView({
                 {label} <span className="ml-1 font-mono tracking-normal">{flows.length}</span>
               </h4>
               <div className="divide-y divide-border rounded-lg border border-border">
-                {flows.map((flow) => (
-                  <button
-                    key={flow.id}
-                    type="button"
-                    data-testid={`flow-row-${flow.id}`}
-                    onClick={() => onOpenFlow(flow.id)}
-                    className="flex w-full items-center gap-4 px-4 py-3.5 text-left transition-colors duration-150 hover:bg-accent/40"
-                  >
-                    <FlowStatusSquare status={stateOf(flow).status} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{flow.title}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{flow.learnedFrom}</span>
-                    </span>
-                    <span className="hidden whitespace-nowrap font-mono text-xs text-muted-foreground sm:block">
-                      {rowStatus(flow)}
-                    </span>
-                    <span
-                      className={cn(
-                        buttonVariants({ size: "sm", variant: status === "waiting" ? "default" : "outline" }),
-                        "h-7 px-3 text-xs font-semibold rounded-md normal-case tracking-wide pointer-events-none",
-                      )}
+                {flows.map((flow) =>
+                  status === "dismissed" ? (
+                    // Dismissed proposals stay listed, dimmed, with a way back.
+                    <div
+                      key={flow.id}
+                      data-testid={`flow-row-${flow.id}`}
+                      className="flex w-full items-center gap-4 px-4 py-3.5"
                     >
-                      {status === "waiting" ? "REVIEW" : "OPEN"}
-                    </span>
-                  </button>
-                ))}
+                      <FlowStatusSquare status="dismissed" />
+                      <span className="min-w-0 flex-1 opacity-60">
+                        <span className="block truncate text-sm font-medium">{flow.title}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{flow.learnedFrom}</span>
+                      </span>
+                      <span className="hidden whitespace-nowrap font-mono text-xs text-muted-foreground sm:block">
+                        {rowStatus(flow)}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-3 text-xs font-semibold rounded-md normal-case tracking-wide"
+                        onClick={() => setStatus(flow.id, "waiting")}
+                        data-testid={`flow-restore-${flow.id}`}
+                      >
+                        RESTORE
+                      </Button>
+                    </div>
+                  ) : (
+                    <button
+                      key={flow.id}
+                      type="button"
+                      data-testid={`flow-row-${flow.id}`}
+                      onClick={() => onOpenFlow(flow.id)}
+                      className="flex w-full items-center gap-4 px-4 py-3.5 text-left transition-colors duration-150 hover:bg-accent/40"
+                    >
+                      <FlowStatusSquare status={stateOf(flow).status} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{flow.title}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{flow.learnedFrom}</span>
+                      </span>
+                      <span className="hidden whitespace-nowrap font-mono text-xs text-muted-foreground sm:block">
+                        {rowStatus(flow)}
+                      </span>
+                      <span
+                        className={cn(
+                          buttonVariants({ size: "sm", variant: status === "waiting" ? "default" : "outline" }),
+                          "h-7 px-3 text-xs font-semibold rounded-md normal-case tracking-wide pointer-events-none",
+                        )}
+                      >
+                        {status === "waiting" ? "REVIEW" : "OPEN"}
+                      </span>
+                    </button>
+                  ),
+                )}
               </div>
             </section>
           );
