@@ -1478,6 +1478,16 @@ impl SCServer {
             crate::mcp_servers_api::router(mcp_store, self.mcp_session_access.clone()),
         );
 
+        // Automation Flows (hackathon): n8n workflows tagged `screenpipe-flow`
+        // plus their local review record. The only code that talks to n8n.
+        let router = router.nest(
+            "/automation-flows",
+            crate::automation_flows::router(
+                self.screenpipe_dir.clone(),
+                self.secret_store.clone(),
+            ),
+        );
+
         // Power management routes (if power manager is available)
         let router = if let Some(ref pm) = self.power_manager {
             let power_routes = Router::new()

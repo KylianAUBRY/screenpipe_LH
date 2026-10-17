@@ -1,0 +1,3 @@
+{
+  "summary": "Chaque nouvel email de la boîte support est lu une seule fois. Une IA décide s'il s'agit d'un bug, d'une idée d'amélioration ou de rien, en s'inspirant de la façon dont vous avez traité des emails similaires dans ScreenPipe. Quand un ticket est justifié, le titre « Produit - résumé » et la description (l'email cité) sont construits sans IA, puis le ticket est créé dans le projet Jira NOVA avec le bon type, la bonne priorité et l'étiquette back ou front. Les autres emails, comme les alertes de sécurité, ne créent rien."
+}
