@@ -16,7 +16,7 @@ static DEF: IntegrationDef = IntegrationDef {
     name: "n8n",
     icon: "n8n",
     category: Category::Productivity,
-    description: "Send data to n8n workflows. POST JSON to /connections/n8n/proxy; the webhook target stays server-side. The API URL and API key let ScreenPipe manage Automation Flows in n8n.",
+    description: "Send data to n8n workflows. POST JSON to /connections/n8n/proxy; the webhook target stays server-side. The API URL and API key let Screenpipe manage Automation Flows in n8n.",
     fields: &[
         FieldDef {
             key: "webhook_url",
@@ -148,6 +148,13 @@ mod tests {
         );
         assert_eq!(safe.get("api_url").unwrap(), "http://localhost:5678");
         assert!(!safe.contains_key("api_key"));
+    }
+
+    #[test]
+    fn description_spells_the_brand_screenpipe() {
+        // Shown in Connections → n8n (docs/DESIGN.md: "Screenpipe").
+        assert!(DEF.description.contains("let Screenpipe manage Automation Flows"));
+        assert!(!DEF.description.contains("ScreenPipe"));
     }
 
     #[test]

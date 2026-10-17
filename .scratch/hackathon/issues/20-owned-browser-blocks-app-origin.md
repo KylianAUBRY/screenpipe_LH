@@ -18,7 +18,7 @@ error for them (the agent gets a clear message), and `on_navigation` returns
 
 **Blocked by:** None.
 
-**Status:** done (branch `hackathon/ticket-20`); live check in the real app pending (orchestrator)
+**Status:** done (live: `tauri://localhost/home` refused with the app-itself message, `https://example.com` still opens; see `.scratch/hackathon/evidence/LIVE-CHECKS.md`)
 
 - [x] Tests (src-tauri, `bun run test:tauri owned_browser`): every app-origin form above is refused by URL normalization and by the navigation check, case and trailing-slash variants included; `https://example.com`, `localhost:8080`, `about:blank` still pass.
 - [x] Nothing else in the owned browser changes (existing owned_browser tests pass).

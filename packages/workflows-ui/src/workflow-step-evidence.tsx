@@ -14,9 +14,13 @@ import styles from "./workflow-step-evidence.module.css";
 const when = (value: string) => Number.isFinite(Date.parse(value))
   ? new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Date unavailable";
 
-export function WorkflowStepEvidence({ workflow, stage, platform }: {
+export function WorkflowStepEvidence({ workflow, stage, platform, timelineLabel }: {
   workflow: WorkflowMap; stage: WorkflowStage; platform: WorkflowsPlatform;
+  /** Visible text of the button that opens a capture in the Timeline (the
+   * Automation Flow Task Page says « Voir dans la timeline »); icon only when absent. */
+  timelineLabel?: string;
 }) {
+  const label = platform.openCapturedMoment ? timelineLabel : undefined;
   const [reduced, setReduced] = useState<Set<number>>(() => new Set());
   const [previewHeight, setPreviewHeight] = useState(0);
   const [selected, setSelected] = useState<WorkflowScreenshot | null>(null);
@@ -62,7 +66,7 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
     {!playing && screenshots.map((capture, index) => {
       const expanded = !reduced.has(capture.frameId);
       const suffix = screenshots.length > 1 ? ` ${index + 1}` : "";
-      return <EvidenceFigure key={`${capture.frameId}:${capture.timestamp}`} capture={capture} stage={stage} platform={platform} suffix={suffix} expanded={expanded} opening={opening}
+      return <EvidenceFigure key={`${capture.frameId}:${capture.timestamp}`} capture={capture} stage={stage} platform={platform} suffix={suffix} expanded={expanded} opening={opening} label={label}
         toggle={() => setReduced(previous => { const next = new Set(previous); if (expanded) next.add(capture.frameId); else next.delete(capture.frameId); return next; })}
         replay={!isEmbeddedScreenshot(capture) && (canReplay || !!platform.openCapturedMoment) ? () => void openRecording(capture) : undefined}
         resolved={capture === preview.image} />;
@@ -72,15 +76,25 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
       <WorkflowReplay workflow={replay} loadRecording={platform.loadWorkflowRecording} releaseRecording={platform.releaseWorkflowRecording} openCapturedMoment={platform.openCapturedMoment} />
     </div>}
     <div className={styles.links}>
-      {!screenshots.length && (canReplay || (screenshot && platform.openCapturedMoment)) && !playing && <button className={styles.recording} title="Open recording" type="button" disabled={opening} onClick={() => void openRecording()} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording for ${stage.name}`}>{opening ? <Loader2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}</button>}
+      {!screenshots.length && (canReplay || (screenshot && platform.openCapturedMoment)) && !playing && <RecordingButton label={label} opening={opening} onClick={() => void openRecording()}
+        name={label ? `${label} : ${stage.name}` : `${platform.openCapturedMoment ? "Open" : "View"} recording for ${stage.name}`} />}
       {openError && <span role="alert">Could not open this capture. Try again.</span>}
     </div>
   </section>;
 }
 
-function EvidenceFigure({ capture, stage, platform, suffix, expanded, opening, toggle, replay, resolved }: {
+/** Opens or plays a capture; with a `label`, it opens the Timeline and says so in words. */
+function RecordingButton({ label, name, opening, onClick }: {
+  label?: string; name: string; opening: boolean; onClick: () => void;
+}) {
+  return <button className={label ? `${styles.recording} ${styles.labelled}` : styles.recording} title={label ? undefined : "Open recording"} type="button" disabled={opening} onClick={onClick} aria-label={name}>
+    {opening ? <Loader2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}{label}
+  </button>;
+}
+
+function EvidenceFigure({ capture, stage, platform, suffix, expanded, opening, label, toggle, replay, resolved }: {
   capture: WorkflowScreenshot; stage: WorkflowStage; platform: WorkflowsPlatform; suffix: string;
-  expanded: boolean; opening: boolean; toggle: () => void; replay?: () => void; resolved: boolean;
+  expanded: boolean; opening: boolean; label?: string; toggle: () => void; replay?: () => void; resolved: boolean;
 }) {
   const load = resolved || isEmbeddedScreenshot(capture) ? undefined : platform.loadWorkflowScreenshot;
   const preview = useSourceScreenshot(stage, !load, load, capture);
@@ -99,7 +113,8 @@ function EvidenceFigure({ capture, stage, platform, suffix, expanded, opening, t
       {(failed || preview.status === "error") && load && <button onClick={() => { setFailed(false); preview.retry(); }}>Retry screenshot</button>}
     </div>}
     <figcaption><span>{!capture.visualVerified ? "Source screenshot · " : ""}{capture.app} · {when(capture.timestamp)}</span>
-      {replay && <button className={styles.recording} title="Open recording" type="button" disabled={opening} onClick={replay} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording${suffix} for ${stage.name}`}>{opening ? <Loader2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}</button>}
+      {replay && <RecordingButton label={label} opening={opening} onClick={replay}
+        name={label ? `${label}${suffix} : ${stage.name}` : `${platform.openCapturedMoment ? "Open" : "View"} recording${suffix} for ${stage.name}`} />}
     </figcaption>
   </figure>;
 }

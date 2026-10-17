@@ -75,7 +75,7 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
   it("shows the question block in French, like the rest of the demo flow", async () => {
     await openTaskPage({ createAutomationFlow: vi.fn(async () => {}), canCreateAutomationFlow: id => id === DEMO_TASK_ID });
     const block = within(screen.getByRole("region", { name: "Questions et remarques" }));
-    expect(block.getByRole("heading", { name: "Aidez ScreenPipe à bien comprendre cette tâche" })).toBeVisible();
+    expect(block.getByRole("heading", { name: "Aidez Screenpipe à bien comprendre cette tâche" })).toBeVisible();
     expect(block.getByRole("button", { name: "Répondre à voix haute" })).toBeVisible();
     expect(block.getByRole("textbox", { name: "Autre chose à savoir ?" })).toHaveAttribute("placeholder", "Autre remarque…");
     expect(block.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] })).toHaveAttribute("placeholder", "Votre réponse…");

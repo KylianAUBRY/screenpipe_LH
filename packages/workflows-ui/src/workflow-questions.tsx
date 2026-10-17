@@ -54,7 +54,7 @@ const COPY = {
   },
   fr: {
     section: "Questions et remarques",
-    title: "Aidez ScreenPipe à bien comprendre cette tâche",
+    title: "Aidez Screenpipe à bien comprendre cette tâche",
     unavailable: "Les réponses ne sont pas disponibles dans cette vue.",
     hint: "Répondez à chaque question pour créer l'automatisation, par écrit ou à voix haute.",
     progress: (answered: number, total: number) => `Réponses : ${answered} sur ${total} · Obligatoires pour créer l'automatisation`,

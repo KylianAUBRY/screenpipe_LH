@@ -31,14 +31,11 @@ export type FlowNode = {
   type: string;
   position: [number, number];
   sentence: string | null;
-  /** What the AI did not write, read from the node: its n8n credentials and, for an HTTP Request, method and host. */
+  /**
+   * What the AI did not write (ticket 22): the n8n credentials the node
+   * uses, and for an HTTP Request node its method and URL host.
+   */
   facts: string[];
-};
-
-/** A captured moment, for « Voir dans la timeline »; `frameId` is null for embedded evidence. */
-export type SourceMoment = {
-  frameId: number | null;
-  timestamp: string;
 };
 
 export type ActivationEvent = {
@@ -49,10 +46,16 @@ export type ActivationEvent = {
   by: "user" | "chat" | "api";
 };
 
+/** A recorded moment: a recorder frame, or a time alone (`frameId: null`). */
+export type SourceMoment = { frameId: number | null; timestamp: string };
+
 export type Flow = FlowSummary & {
   n8nUrl: string;
   sourceTaskId: string | null;
-  /** Where the source Detected Task was first seen; null for a Flow from the chat. */
+  /**
+   * Where the Detected Task was seen (ticket 22): its first evidence moment,
+   * for « Voir dans la timeline ». `null` for a Flow created from the chat.
+   */
   sourceMoment: SourceMoment | null;
   summary: string;
   nodes: FlowNode[];
@@ -204,6 +207,15 @@ export const flowsApi = {
     await routeNotificationDeeplink(
       `screenpipe://workflows?workflow=${encodeURIComponent(taskId)}`,
     );
+  },
+
+  /**
+   * "Voir dans la timeline": the moment the Flow's task was seen, through
+   * the same Timeline handoff as the Task Page evidence.
+   */
+  async openTimeline(moment: SourceMoment) {
+    const { openTimelineMoment } = await import("@/lib/workflows/timeline");
+    await openTimelineMoment(moment.frameId, moment.timestamp);
   },
 
   /** Where the n8n API URL and key are entered. */
