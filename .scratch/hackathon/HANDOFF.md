@@ -108,7 +108,7 @@ minutes).
 
 ## Open decisions
 
-- **Failure handling decided, not yet ticketed:** SPEC.md D16–D20 (failure notification, Retry of a Failed Run, AI Abstention + Activity list, health check at app start and every 15 min, idempotent Retry via a `mail-<hash>` Jira label). Turn them into tickets with `/to-tickets` before building.
+- **Failure handling (SPEC.md D16–D20) is ticketed on branch `hackathon/failure-handling`:** tickets 24 (Failed Run notification) and 25 (idempotent ticket creation) can start now; 26 (Retry) needs 24+25; 27 (Abstention) and 29 (health check) need 24; 28 (Activity) needs 27. Not built yet.
 - **Teammate divergence (settled 2026-10-17):** `main` had another Review
   Screen ("Recommendations" tab, questions on the Review Screen, notification
   opens the Review Screen, demo backend) by a teammate, plus the « Find an
