@@ -66,6 +66,18 @@ tool returned the real NOVA-25 screen captures.
 | Pipe `repeated-workflow-detector` runs (`POST /pipes/…/run`) | fired: `executionId: 171, status: completed` |
 | Flow fires (throwaway Flow created through the Flow service, running every minute) | fired on each run: `status: success` |
 
+## Notification → Task Page (acceptance item 1)
+
+`bun infra/automation-flows/demo/demo.ts` → the app's notification panel shows
+« Tu as transformé 3 e-mails de bug en tickets Jira NOVA. Réponds à 2
+questions pour l'automatiser. »; pressing its action button (« Voir la
+tâche ») in the native app opened the Workflows view on the Task Page
+« Transformer les e-mails de bug en tickets Jira »: the 3 repetitions
+(NOVA-25 Bug, NOVA-26 Bug, NOVA-27 Tâche) with Gmail/Jira captures at 4:05–4:15,
+then « 0 of 2 answered · Required to create the automation » and the two
+scripted questions. (The Workflows view needs the PostHog `workflows` flag;
+this machine builds with `NEXT_PUBLIC_SCREENPIPE_WORKFLOWS_ROLLOUT=1`.)
+
 ## Task Page evidence (ticket 15)
 
 `demo.ts` lookup: 9/9 captures resolved to frames recorded on this Mac
