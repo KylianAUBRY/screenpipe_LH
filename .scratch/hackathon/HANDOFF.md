@@ -29,14 +29,14 @@ Read this first, then `AGENTS.md` (Hackathon mode), `CONTEXT.md`, `SPEC.md`,
 | 06 | Questions unlock "Créer l'automatisation" | merged |
 | 07 | ScreenPipe node as AI Agent tool | merged; live tool check pending human |
 | 08 | Chat modification (pause → Needs Review) | merged (`9d9d4c952`); live rehearsal pending human (steps in the ticket) |
-| 09 | Chat creation (Add) | **in progress** (implementer on branch `hackathon/ticket-09`) |
+| 09 | Chat creation (Add) | merged (`572075ef1`); live chat creation pending human (steps in the ticket) |
 | 10 | ScreenPipe Trigger (deterministic) | merged; manual check pending human |
 | 11 | ScreenPipe AI Trigger | merged; manual check pending human |
 | 12 | Demo assembly + rehearsal | todo, unblocked (needs the human live checks) |
 | 13 | AI proxy returns OpenAI-shaped tool calls | merged; live check pending human |
 | — | Prompt-injection hardening of the demo workflow | merged |
 
-Remaining implement-spec steps: finish 09 → 12, then `/code-review` on
+Remaining implement-spec steps: 12 (needs the human live checks), then `/code-review` on
 the integration branch, fix findings in one implementer, set every ticket's
 `Status:` to done, clean up implementer worktrees.
 
