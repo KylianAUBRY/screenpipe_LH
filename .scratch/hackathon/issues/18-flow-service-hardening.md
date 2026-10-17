@@ -28,7 +28,7 @@ Spec: stories 12, 21, 38, 44; Implementation Decisions "Flow service". Found by 
 activate call in parallel: keep your edits away from activation and merge the
 integration tip before reporting.
 
-**Status:** done (branch `hackathon/ticket-18`, integration tip merged); live check in the real app pending (orchestrator)
+**Status:** done (live: refused key message and recovery; an active pre-imported copy was created switched off; list/Review Screen refreshed without reopening; see `.scratch/hackathon/evidence/LIVE-CHECKS.md`)
 
 - [x] Engine tests (fake n8n): an active pre-imported copy is switched off on creation; n8n 401 → `n8n_unauthorized`; pagination returns every tagged workflow.
 - [x] Frontend tests: the unauthorized message; the screen reloads on focus/visibility and on its interval, keeping its content while loading; last-run line rendered.

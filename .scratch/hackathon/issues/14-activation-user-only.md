@@ -25,7 +25,7 @@ refuse activation, that is expected.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** done (branch `hackathon/ticket-14`); live check in the real app pending (orchestrator)
+**Status:** done (live-verified on the demo machine 2026-10-17: API-key-only activation → 403, no JSON → 415, the click activates, the chat refused to activate; see `.scratch/hackathon/evidence/LIVE-CHECKS.md`)
 
 - [x] Flow service tests: activate without `versionId` → 400; activate from an agent/pipe/MCP client context → 403; activate from the app context with the reviewed version → 200 (existing tests still pass).
 - [x] The Review Screen's Activer still works (frontend tests and browser mock; the browser mock was exercised through its mock engine and mock Tauri IPC in `api.test.ts`, not opened in a browser).

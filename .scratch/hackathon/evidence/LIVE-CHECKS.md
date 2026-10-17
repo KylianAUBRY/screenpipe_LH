@@ -98,6 +98,34 @@ this machine builds with `NEXT_PUBLIC_SCREENPIPE_WORKFLOWS_ROLLOUT=1`.)
 | Click « DÉSACTIVER », bug email sent | 2 min later: no execution, the email still unread (deactivation stops processing) |
 | Flows → « AJOUTER » → chat creation « quand je dis « point d'étape » à voix haute, note l'heure… » | prompt prefilled; agent created « Noter les points d'étape »: Draft, inactive, tagged, `CUSTOM.screenPipeTrigger` + Set, French sentences — but the trigger's parameters were empty (the skill did not name them) → fixed: the skill now lists every node parameter (package test guards it) |
 
+## Final build (tickets 14–20) — security and robustness, live
+
+| Check | Observed |
+|---|---|
+| Chat creation with the updated skill (« quand je dis « fin de journée »… ») | Flow « Noter l'heure de fin de journée », Draft, inactive, tagged; trigger `{"event":"keyword","keyword":"fin de journée","pollTimes":…}` (ticket 09 + 17) |
+| Chat asked « active maintenant le Flow 87gx… » | « Je ne peux pas activer ce Flow. Seul vous pouvez le faire… ScreenPipe refuse toute activation qui ne vient pas de votre clic »; Flow still Draft, n8n inactive (ticket 14) |
+| Agent browser asked to open `tauri://localhost/home` | « cannot open tauri://localhost/home: this page is the screenpipe app itself… »; `https://example.com` still opens (ticket 20) |
+| Wrong n8n API key saved in Connections | Flows tab: « n8n a refusé la clé API » + « Ouvrir Connexions » / « Réessayer »; the right key restored → list back without reopening (ticket 18) |
+| Pre-imported copy left **on** in n8n, then « Créer l'automatisation » | the Flow is created **switched off** (Draft) from that copy (ticket 18, rehearsal 1) |
+| Reset while n8n is still unpublishing | first run left an archived copy (n8n 409); fixed: reset retries the delete (ticket 16 follow-up), live reset of an active Flow → deleted, exit 0 |
+| Email arrives while the Flow is off, then « Activer » | before the fix: never processed (n8n's IMAP trigger only fetches on a new arrival); after seeding the trigger's `lastMessageUid`: processed 8 s after activation (NOVA-38) |
+
+## Timed rehearsals (native app driven by accessibility; email sent from the Gmail connector)
+
+| | Part A: notification → Activer | Ticket created | Chat change → Needs Review | Re-activated | Notes |
+|---|---|---|---|---|---|
+| 1 | 54 s | — | 92 s | 110 s | email arrived in the same second as « Activer », before the IMAP listener was ready → missed (fixed: catch-up seed) |
+| 2 | 48 s | **80 s** (NOVA-39) | 87 s | **106 s** | full journey in 1 min 46 s |
+| 3 | 51 s | — | 87 s | 105 s | email being processed when the chat change paused the Flow: execution orphaned, email lost → ticket 21 |
+
+Every rehearsal: « Créer l'automatisation » disabled at 0 and 1 answer,
+enabled at 2; Review Screen with 8 sentences; n8n one inactive tagged
+workflow until « Activer »; « Voir le graphe » opened the right workflow URL
+in Safari (n8n sign-in page: log in before the demo); history
+`activated/user → paused_for_edit/chat → modified/chat → activated/user`;
+reset between rehearsals restored the start state (empty Flows list, answers
+cleared, 0 unread).
+
 ## Task Page evidence (ticket 15)
 
 `demo.ts` lookup: 9/9 captures resolved to frames recorded on this Mac

@@ -20,7 +20,7 @@ demo machine also use NovaPlanning (NOVA-29). Spec audit gap 7: the
 
 **Blocked by:** None.
 
-**Status:** in progress (orchestrator)
+**Status:** done (live: NOVA-33 « NovaPlanning - … »; a chat-created Flow got `CUSTOM.screenPipeTrigger` with its keyword; see `.scratch/hackathon/evidence/LIVE-CHECKS.md`)
 
-- [ ] `bun test infra/automation-flows` passes with NovaPlanning accepted end to end (parser enum, IF allowlist).
-- [ ] Live: a NovaPlanning bug email becomes « NovaPlanning - … ».
+- [x] `bun test infra/automation-flows` passes with NovaPlanning accepted end to end (parser enum, IF allowlist).
+- [x] Live: a NovaPlanning bug email becomes « NovaPlanning - … ».

@@ -21,7 +21,7 @@ Spec: `.scratch/hackathon/automation-flows-spec.md` (stories 6–10); ticket 06 
 
 **Blocked by:** None (can start immediately).
 
-**Status:** done (branch `hackathon/ticket-19`)
+**Status:** done (live: French block and Créer on the demo task; an unsaved answer was still there after leaving and reopening the Task Page — « Réponses : 1 sur 2 »; see `.scratch/hackathon/evidence/LIVE-CHECKS.md`)
 
 - [x] Frontend tests: a non-creatable task keeps the old page (optional answers, "Not sure", no Créer button); the demo task keeps the required mode; a typed answer is restored after unmount/remount without pressing save.
   `components/workflows/task-page-create-flow.test.tsx` drives `WorkflowsApp` with a host predicate:
