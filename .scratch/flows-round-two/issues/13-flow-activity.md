@@ -70,7 +70,10 @@ else, adjust `existing_issue` in `activity.rs`. Ticket 12 (Retry) can add a
 
 ## Tests run
 
-- `cargo test -p screenpipe-engine --test automation_flows_test` → 79 passed, 0 failed
+After `git merge main` (ticket 07 included) into `ticket-13`:
+
+- `cargo test -p screenpipe-engine --test automation_flows_test` → 89 passed, 0 failed
+- `cargo test -p screenpipe-engine --lib automation_flows` → 3 passed
   (new: `activity_shows_the_ticket_an_email_became_with_the_ais_reason`,
   `activity_shows_an_email_the_ai_was_unsure_about_as_abstained`,
   `activity_shows_an_email_that_needed_no_ticket_as_ignored`,

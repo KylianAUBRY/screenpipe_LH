@@ -100,9 +100,62 @@ impl N8nCredential {
 /// refusal, every problem is listed so one answer tells the chat all it must
 /// fix.
 pub fn check_and_wire(workflow: &mut Value, credentials: &[N8nCredential]) -> Result<(), Vec<String>> {
-    let catalog = catalog();
+    let problems = inspect(workflow, credentials).problems();
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
+/// What the check found on one node (sticky notes are not reported).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeReport {
+    pub name: String,
+    pub kind: String,
+    /// The node can never run here: a type this n8n does not have or
+    /// switches off, or a version it lacks. A step of a draft is refused.
+    pub invention: Option<String>,
+    /// What the node still lacks: a required parameter, a credential, a link.
+    pub missing: Vec<String>,
+    /// The credentials the node holds after wiring: (credential type, name).
+    pub credentials: Vec<(String, String)>,
+}
+
+/// The check of a whole workflow, node by node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Report {
+    pub nodes: Vec<NodeReport>,
+    pub has_trigger: bool,
+}
+
+pub const NO_TRIGGER: &str = "the workflow has no trigger node, so it would never run";
+
+impl Report {
+    /// Why the workflow can never become a Flow as built: inventions only.
+    pub fn inventions(&self) -> Vec<String> {
+        self.nodes.iter().filter_map(|node| node.invention.clone()).collect()
+    }
+
+    /// Every problem, node by node, then the missing trigger.
+    pub fn problems(&self) -> Vec<String> {
+        let mut problems: Vec<String> = self
+            .nodes
+            .iter()
+            .flat_map(|node| node.invention.iter().chain(&node.missing).cloned())
+            .collect();
+        if !self.has_trigger {
+            problems.push(NO_TRIGGER.into());
+        }
+        problems
+    }
+}
+
+/// [`check_and_wire`] without the verdict: what each node lacks, and the
+/// credentials it holds once the only one n8n has of a needed type is wired.
+pub fn inspect(workflow: &mut Value, credentials: &[N8nCredential]) -> Report {
     let linked = linked_names(&workflow["connections"]);
-    let mut problems = Vec::new();
+    let mut reports = Vec::new();
     let mut has_trigger = false;
     for node in workflow["nodes"].as_array_mut().into_iter().flatten() {
         let kind = node["type"].as_str().unwrap_or_default().to_string();
@@ -110,74 +163,94 @@ pub fn check_and_wire(workflow: &mut Value, credentials: &[N8nCredential]) -> Re
             continue;
         }
         let name = node["name"].as_str().unwrap_or("(unnamed)").to_string();
+        let mut report = NodeReport {
+            name: name.clone(),
+            kind: kind.clone(),
+            invention: None,
+            missing: Vec::new(),
+            credentials: Vec::new(),
+        };
         if !linked.contains(&name) {
-            problems.push(format!("« {name} » is connected to no other node"));
+            report.missing.push(format!("« {name} » is connected to no other node"));
         }
-        let Some(groups) = catalog.nodes.get(&kind) else {
-            problems.push(if catalog.excluded.contains(&kind) {
-                format!("« {name} »: `{kind}` is switched off in this n8n; no node here can do that")
-            } else {
-                format!("« {name} »: `{kind}` is not a node type this n8n has; never invent one")
-            });
-            continue;
-        };
-        let version = node["typeVersion"].as_f64().unwrap_or(1.0);
-        let Some(group) = groups
-            .iter()
-            .find(|g| g.versions.iter().any(|v| (v - version).abs() < 1e-9))
-        else {
-            let known: Vec<String> = groups.iter().flat_map(|g| &g.versions).map(f64::to_string).collect();
-            problems.push(format!(
-                "« {name} »: `{kind}` has no version {version} here (versions: {})",
-                known.join(", ")
-            ));
-            continue;
-        };
-        has_trigger |= group.trigger;
-        let empty_params = Map::new();
-        let params = node["parameters"].as_object().unwrap_or(&empty_params);
-        let eval = Eval { group, params, version };
+        inspect_node(node, &mut report, credentials, &mut has_trigger);
+        report.credentials = held_credentials(node);
+        reports.push(report);
+    }
+    Report { nodes: reports, has_trigger }
+}
 
-        let mut checked = HashSet::new();
-        for def in group.params.iter().filter(|def| def.required) {
-            if checked.contains(&def.name) || eval.shown(&def.rules, 0) != Some(true) {
-                continue;
-            }
-            checked.insert(def.name.clone());
-            let value = params.get(&def.name).unwrap_or(&def.default);
-            if is_empty(value, def.kind.as_deref()) {
-                problems.push(format!("« {name} »: required parameter `{}` is empty", def.name));
-            }
-        }
+fn inspect_node(node: &mut Value, report: &mut NodeReport, credentials: &[N8nCredential], has_trigger: &mut bool) {
+    let catalog = catalog();
+    let (name, kind) = (report.name.clone(), report.kind.clone());
+    let Some(groups) = catalog.nodes.get(&kind) else {
+        report.invention = Some(if catalog.excluded.contains(&kind) {
+            format!("« {name} »: `{kind}` is switched off in this n8n; no node here can do that")
+        } else {
+            format!("« {name} »: `{kind}` is not a node type this n8n has; never invent one")
+        });
+        return;
+    };
+    let version = node["typeVersion"].as_f64().unwrap_or(1.0);
+    let Some(group) = groups
+        .iter()
+        .find(|g| g.versions.iter().any(|v| (v - version).abs() < 1e-9))
+    else {
+        let known: Vec<String> = groups.iter().flat_map(|g| &g.versions).map(f64::to_string).collect();
+        report.invention = Some(format!(
+            "« {name} »: `{kind}` has no version {version} here (versions: {})",
+            known.join(", ")
+        ));
+        return;
+    };
+    *has_trigger |= group.trigger;
+    let empty_params = Map::new();
+    let params = node["parameters"].as_object().unwrap_or(&empty_params);
+    let eval = Eval { group, params, version };
 
-        let mut needed: Vec<String> = group
-            .credentials
-            .iter()
-            .filter(|rule| eval.shown(&rule.rules, 0) == Some(true))
-            .map(|rule| rule.name.clone())
-            .collect();
-        // HTTP Request and its kin name any credential type in a parameter.
-        if params.get("authentication").and_then(Value::as_str) == Some("predefinedCredentialType") {
-            if let Some(predefined) = params.get("nodeCredentialType").and_then(Value::as_str) {
-                needed.push(predefined.to_string());
-            }
+    let mut checked = HashSet::new();
+    for def in group.params.iter().filter(|def| def.required) {
+        if checked.contains(&def.name) || eval.shown(&def.rules, 0) != Some(true) {
+            continue;
         }
-        needed.sort();
-        needed.dedup();
-        for credential_kind in needed {
-            if let Err(problem) = wire(node, &name, &credential_kind, credentials) {
-                problems.push(problem);
-            }
+        checked.insert(def.name.clone());
+        let value = params.get(&def.name).unwrap_or(&def.default);
+        if is_empty(value, def.kind.as_deref()) {
+            report.missing.push(format!("« {name} »: required parameter `{}` is empty", def.name));
         }
     }
-    if !has_trigger {
-        problems.push("the workflow has no trigger node, so it would never run".into());
+
+    let mut needed: Vec<String> = group
+        .credentials
+        .iter()
+        .filter(|rule| eval.shown(&rule.rules, 0) == Some(true))
+        .map(|rule| rule.name.clone())
+        .collect();
+    // HTTP Request and its kin name any credential type in a parameter.
+    if params.get("authentication").and_then(Value::as_str) == Some("predefinedCredentialType") {
+        if let Some(predefined) = params.get("nodeCredentialType").and_then(Value::as_str) {
+            needed.push(predefined.to_string());
+        }
     }
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(problems)
+    needed.sort();
+    needed.dedup();
+    for credential_kind in needed {
+        if let Err(problem) = wire(node, &name, &credential_kind, credentials) {
+            report.missing.push(problem);
+        }
     }
+}
+
+/// (credential type, name) of each credential the node holds.
+fn held_credentials(node: &Value) -> Vec<(String, String)> {
+    node["credentials"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(kind, credential)| {
+            (kind.clone(), credential["name"].as_str().unwrap_or_default().to_string())
+        })
+        .collect()
 }
 
 /// The parameters a new node of `kind` at `version` starts from, for the card

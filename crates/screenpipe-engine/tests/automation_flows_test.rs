@@ -2414,6 +2414,56 @@ async fn chat_create_wires_the_only_credential_n8n_holds_of_a_type() {
     );
 }
 
+/// The request bodies of the example Flows in the chat's n8n guide: every
+/// ```json block that holds a `workflow`.
+fn guide_examples() -> Vec<Value> {
+    let guide = include_str!("../../screenpipe-core/assets/skills/automation-flows/n8n-guide.md");
+    guide
+        .split("```json\n")
+        .skip(1)
+        .filter_map(|block| block.split("\n```").next())
+        .map(|block| {
+            serde_json::from_str::<Value>(block).unwrap_or_else(|e| panic!("{e}: {block}"))
+        })
+        .filter(|body| body.get("workflow").is_some())
+        .collect()
+}
+
+#[tokio::test]
+async fn every_example_flow_of_the_guide_passes_the_flow_check() {
+    // The chat copies these patterns: each one must be a Flow ScreenPipe
+    // accepts as is, against the credentials the user's n8n holds.
+    let examples = guide_examples();
+    let triggers: Vec<String> = examples
+        .iter()
+        .map(|body| {
+            body["workflow"]["nodes"][0]["type"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    for expected in [
+        "CUSTOM.screenPipeTrigger",
+        "n8n-nodes-base.emailReadImap",
+        "n8n-nodes-base.scheduleTrigger",
+    ] {
+        assert!(
+            triggers.iter().any(|t| t == expected),
+            "no example starts with {expected}: {triggers:?}"
+        );
+    }
+    for body in examples {
+        let (server, _n8n) = start_fake_n8n().await;
+        let app = App::new().await;
+        app.configure_n8n(&server.uri());
+        let name = body["workflow"]["name"].clone();
+        let (status, flow) = chat_create(&app, body).await;
+        assert_eq!(status, StatusCode::CREATED, "{name}: {flow}");
+        assert_eq!(flow["status"], "draft", "{name}");
+    }
+}
+
 #[tokio::test]
 async fn chat_update_of_a_draft_keeps_it_a_draft_and_its_summary() {
     let (server, n8n) = start_fake_n8n().await;
@@ -3832,4 +3882,379 @@ async fn activity_of_a_flow_without_an_ai_answer_says_its_runs_went_through() {
 
     let (status, _) = activity(&app, "wf404").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// The chat builds a Flow step by step (flows-round-two 07)
+// ---------------------------------------------------------------------------
+
+const BUILDING_TAG: &str = "screenpipe-flow-building";
+
+/// The first step of a draft: a trigger alone, nothing else yet.
+fn first_step() -> Value {
+    json!({
+        "name": "Résumé du soir",
+        "nodes": [{
+            "id": "n1", "name": "Chaque soir", "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2, "position": [0, 0], "parameters": {},
+            "notes": "Le Flow démarre chaque soir à 18 h."
+        }],
+        "connections": {}
+    })
+}
+
+async fn start_draft(app: &App, workflow: Value) -> (StatusCode, Value) {
+    app.call(
+        "POST",
+        "/automation-flows/drafts",
+        Some(json!({"workflow": workflow})),
+    )
+    .await
+}
+
+fn tag_names(workflow: &Value) -> Vec<String> {
+    let mut names: Vec<String> = workflow["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn a_draft_starts_in_n8n_switched_off_marked_under_construction_and_hidden() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+
+    let (status, state) = start_draft(&app, first_step()).await;
+
+    assert_eq!(status, StatusCode::CREATED, "{state}");
+    let workflows = n8n.workflows();
+    assert_eq!(workflows.len(), 1);
+    let id = workflows[0]["id"].as_str().unwrap();
+    assert_eq!(state["id"], id);
+    assert_eq!(state["building"], true);
+    assert_eq!(workflows[0]["active"], false);
+    assert_eq!(tag_names(&workflows[0]), ["screenpipe-flow", BUILDING_TAG]);
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    assert_eq!(app.store()["flows"][id]["building"], true);
+
+    // Invisible in ScreenPipe's Flows list.
+    let (status, list) = app.call("GET", "/automation-flows", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list, json!([]));
+}
+
+async fn draft_step(app: &App, id: &str, body: Value) -> (StatusCode, Value) {
+    app.call("PUT", &format!("/automation-flows/drafts/{id}"), Some(body))
+        .await
+}
+
+fn node_state<'a>(state: &'a Value, name: &str) -> &'a Value {
+    state["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == name)
+        .unwrap_or_else(|| panic!("node {name} in {state}"))
+}
+
+fn missing(state: &Value, name: &str) -> Vec<String> {
+    node_state(state, name)["missing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m.as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The first step plus a ScreenPipe summary (complete once wired) and an
+/// email step still half-built: no address, no sentence, linked to nothing.
+fn second_step() -> Value {
+    let mut workflow = first_step();
+    let nodes = workflow["nodes"].as_array_mut().unwrap();
+    nodes.push(json!({
+        "id": "n2", "name": "Préparer le résumé", "type": "CUSTOM.screenPipe",
+        "typeVersion": 1, "position": [220, 0],
+        "parameters": {"operation": "activitySummary", "startTime": "1d ago", "endTime": "now"},
+        "notes": "Le résumé de la journée est préparé."
+    }));
+    nodes.push(json!({
+        "id": "n3", "name": "Envoyer", "type": "n8n-nodes-base.gmail",
+        "typeVersion": 2.1, "position": [440, 0], "parameters": {"operation": "send"}
+    }));
+    workflow["connections"] = json!({
+        "Chaque soir": {"main": [[{"node": "Préparer le résumé", "type": "main", "index": 0}]]}
+    });
+    workflow
+}
+
+#[tokio::test]
+async fn each_step_is_accepted_half_built_and_the_state_says_what_each_node_lacks() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+
+    // A trigger alone, no summary yet: accepted, and the state says so.
+    let (_, state) = start_draft(&app, first_step()).await;
+    let id = state["id"].as_str().unwrap().to_string();
+    assert_eq!(state["complete"], false);
+    assert_eq!(
+        missing(&state, "Chaque soir"),
+        ["« Chaque soir » is connected to no other node"]
+    );
+    assert!(state["problems"][0].as_str().unwrap().contains("`summary`"), "{state}");
+
+    let (status, state) = draft_step(&app, &id, json!({"workflow": second_step()})).await;
+
+    assert_eq!(status, StatusCode::OK, "{state}");
+    assert_eq!(node_state(&state, "Chaque soir")["complete"], true);
+    // The only ScreenPipe API credential n8n holds was wired, and saved in n8n.
+    let summary_node = node_state(&state, "Préparer le résumé");
+    assert_eq!(summary_node["complete"], true, "{state}");
+    assert_eq!(
+        summary_node["credentials"],
+        json!([{"type": "screenpipeApi", "name": "ScreenPipe API (local)"}])
+    );
+    assert_eq!(
+        credentials_of(&n8n.workflows()[0], "Préparer le résumé"),
+        json!({"screenpipeApi": {"id": "spScreenpipeApi1", "name": "ScreenPipe API (local)"}})
+    );
+    let email = missing(&state, "Envoyer");
+    assert_eq!(node_state(&state, "Envoyer")["complete"], false);
+    for lack in [
+        "« Envoyer » is connected to no other node",
+        "« Envoyer »: required parameter `sendTo` is empty",
+        "« Envoyer » has no one-sentence `notes` for the Review Screen",
+    ] {
+        assert!(email.iter().any(|m| m == lack), "{lack} not in {email:?}");
+    }
+    assert_eq!(n8n.workflows()[0]["nodes"].as_array().unwrap().len(), 3);
+
+    // Reading the state again changes nothing.
+    let writes = n8n_writes(&server).await.len();
+    let (status, again) = app
+        .call("GET", &format!("/automation-flows/drafts/{id}"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again["nodes"], state["nodes"]);
+    assert_eq!(n8n_writes(&server).await.len(), writes);
+}
+
+#[tokio::test]
+async fn a_step_with_an_invented_or_switched_off_node_or_unknown_version_is_refused() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+
+    // Not even started with an invented node.
+    let mut invented = first_step();
+    invented["nodes"][0]["type"] = json!("n8n-nodes-base.openTerminal");
+    let (status, body) = start_draft(&app, invented).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["detail"].as_str().unwrap().contains("not a node type this n8n has"));
+    assert!(n8n.workflows().is_empty());
+
+    let (_, state) = start_draft(&app, first_step()).await;
+    let id = state["id"].as_str().unwrap().to_string();
+    let writes = n8n_writes(&server).await.len();
+    for (kind, version, refusal) in [
+        ("n8n-nodes-base.executeCommand", 1.0, "is switched off in this n8n"),
+        ("n8n-nodes-base.openTerminal", 1.0, "is not a node type this n8n has"),
+        ("n8n-nodes-base.httpRequest", 9.0, "has no version 9 here"),
+    ] {
+        let mut step = first_step();
+        step["nodes"].as_array_mut().unwrap().push(json!({
+            "id": "n2", "name": "Étape", "type": kind, "typeVersion": version,
+            "position": [220, 0], "parameters": {}
+        }));
+        let (status, body) = draft_step(&app, &id, json!({"workflow": step})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{kind}: {body}");
+        assert_eq!(body["error"], "invalid_workflow");
+        assert!(body["detail"].as_str().unwrap().contains(refusal), "{body}");
+    }
+    assert_eq!(n8n_writes(&server).await.len(), writes, "nothing changed");
+    assert_eq!(n8n.workflows()[0]["nodes"].as_array().unwrap().len(), 1);
+}
+
+async fn finish(app: &App, id: &str, body: Value) -> (StatusCode, Value) {
+    app.call(
+        "POST",
+        &format!("/automation-flows/drafts/{id}/finish"),
+        Some(body),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn terminer_is_refused_while_anything_is_missing_and_lists_every_problem() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, state) = start_draft(&app, first_step()).await;
+    let id = state["id"].as_str().unwrap().to_string();
+    draft_step(&app, &id, json!({"workflow": second_step()})).await;
+
+    let (status, body) = finish(&app, &id, json!({})).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_workflow");
+    let detail = body["detail"].as_str().unwrap();
+    for problem in [
+        "« Envoyer » is connected to no other node",
+        "« Envoyer »: required parameter `sendTo` is empty",
+        "« Envoyer » has no one-sentence `notes`",
+        "`summary` is required",
+    ] {
+        assert!(detail.contains(problem), "{problem} not in {detail}");
+    }
+    // Still a hidden draft under construction.
+    assert_eq!(tag_names(&n8n.workflows()[0]), ["screenpipe-flow", BUILDING_TAG]);
+    assert_eq!(app.store()["flows"][&id]["building"], true);
+    let (_, list) = app.call("GET", "/automation-flows", None).await;
+    assert_eq!(list, json!([]));
+}
+
+#[tokio::test]
+async fn terminer_turns_a_complete_draft_into_a_switched_off_draft_to_review() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, state) = start_draft(&app, first_step()).await;
+    let id = state["id"].as_str().unwrap().to_string();
+    let (_, state) = draft_step(
+        &app,
+        &id,
+        json!({"workflow": chat_workflow(), "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+    assert_eq!(state["complete"], true, "{state}");
+    assert_eq!(state["problems"], json!([]));
+
+    let (status, flow) = finish(&app, &id, json!({})).await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["id"], id);
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(flow["summary"], "Chaque soir, un résumé.");
+    assert_eq!(flow["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(n8n.workflows()[0]["active"], false);
+    assert_eq!(tag_names(&n8n.workflows()[0]), ["screenpipe-flow"]);
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    assert_eq!(app.store()["flows"][&id]["building"], false);
+
+    // Now listed and reviewable like any Draft; the draft routes are closed.
+    let (_, list) = app.call("GET", "/automation-flows", None).await;
+    assert_eq!(list[0]["id"], id.as_str());
+    assert_eq!(list[0]["status"], "draft");
+    let (status, _) = app.call("GET", &format!("/automation-flows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = draft_step(&app, &id, json!({"workflow": chat_workflow()})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "flow_not_under_construction");
+}
+
+#[tokio::test]
+async fn terminer_wires_a_credential_the_user_created_since_the_last_step() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    n8n.hold_credentials(json!([]));
+    let mut workflow = chat_workflow();
+    workflow["nodes"][1] = second_step()["nodes"][1].clone();
+    let (_, state) = start_draft(&app, workflow).await;
+    let id = state["id"].as_str().unwrap().to_string();
+    assert!(missing(&state, "Préparer le résumé")[0].contains("`screenpipeApi` credential and n8n has none"));
+
+    // The user creates the connection in n8n, then the chat finishes.
+    n8n.hold_credentials(json!([{"id": "sp1", "name": "ScreenPipe API", "type": "screenpipeApi"}]));
+    let (status, flow) = finish(&app, &id, json!({"summary": "Chaque soir, un résumé."})).await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(
+        credentials_of(&n8n.workflows()[0], "Préparer le résumé"),
+        json!({"screenpipeApi": {"id": "sp1", "name": "ScreenPipe API"}})
+    );
+    assert_eq!(flow["summary"], "Chaque soir, un résumé.");
+}
+
+#[tokio::test]
+async fn a_draft_under_construction_can_never_be_activated_or_used_as_a_flow() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, state) = start_draft(&app, chat_workflow()).await;
+    let id = state["id"].as_str().unwrap().to_string();
+    let version = state["versionId"].as_str().unwrap().to_string();
+
+    // Even the user's click on the Review Screen cannot switch it on.
+    let (status, body) = app
+        .ui_call(
+            "POST",
+            &format!("/automation-flows/{id}/activate"),
+            Some(json!({"versionId": version})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "flow_under_construction");
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    assert_eq!(n8n.workflows()[0]["active"], false);
+
+    for (method, uri, body) in [
+        ("GET", format!("/automation-flows/{id}"), None),
+        ("GET", format!("/automation-flows/{id}/workflow"), None),
+        (
+            "PUT",
+            format!("/automation-flows/{id}"),
+            Some(json!({"workflow": chat_workflow()})),
+        ),
+    ] {
+        let (status, answer) = app.call(method, &uri, body).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {uri}: {answer}");
+        assert_eq!(answer["error"], "flow_under_construction");
+    }
+}
+
+#[tokio::test]
+async fn the_chat_deletes_a_draft_it_abandons() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, state) = start_draft(&app, first_step()).await;
+    let id = state["id"].as_str().unwrap().to_string();
+
+    let (status, answer) = app
+        .call("DELETE", &format!("/automation-flows/{id}"), None)
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(n8n.workflows().is_empty());
+    assert_eq!(app.store()["flows"], json!({}));
+    let (status, _) = app
+        .call("GET", &format!("/automation-flows/drafts/{id}"), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_finished_draft_reports_its_failed_runs_like_any_flow() {
+    // D16 (ticket 11): « Terminer » names ScreenPipe's error workflow, as
+    // creation does, even when the chat's steps left the setting out.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, state) = start_draft(&app, chat_workflow()).await;
+    let id = state["id"].as_str().unwrap().to_string();
+
+    let (status, flow) = finish(&app, &id, json!({"summary": "Chaque soir, un résumé."})).await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    let errors = n8n.error_workflows();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let draft = n8n.workflows().into_iter().find(|w| w["id"] == id.as_str()).unwrap();
+    assert_eq!(draft["settings"]["errorWorkflow"], errors[0]["id"]);
+    assert_eq!(flow["versionId"], draft["versionId"]);
 }
