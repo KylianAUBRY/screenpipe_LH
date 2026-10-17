@@ -13,13 +13,14 @@ import { readWorkflowAnswers } from "../../../../packages/workflows-ui/src/workf
 const at = "2026-10-17T02:05:41Z";
 const CREATE = "Créer l'automatisation";
 
-async function openTaskPage(extra: Partial<WorkflowsPlatform> = {}) {
+async function openTaskPage(extra: Partial<WorkflowsPlatform> = {}, taskId = DEMO_TASK_ID) {
   window.localStorage.clear();
   window.history.replaceState(null, "", "/home?mode=workflows");
-  const catalog = JSON.parse(serializeWorkflowData(upsertTask(null, buildDetectedTask(() => "data:image/webp;base64,AAAA", at), at)));
+  const task = { ...buildDetectedTask(() => "data:image/webp;base64,AAAA", at), id: taskId };
+  const catalog = JSON.parse(serializeWorkflowData(upsertTask(null, task, at)));
   const platform = { ...createFixtureWorkflowsPlatform(catalog), ...extra };
   await act(async () => {
-    render(<WorkflowsApp platform={platform} storageKey={null} reviewRequest={{ key: "demo", workflowId: DEMO_TASK_ID }} />);
+    render(<WorkflowsApp platform={platform} storageKey={null} reviewRequest={{ key: "demo", workflowId: taskId }} />);
   });
   await screen.findByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] });
   return platform;
@@ -46,6 +47,21 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     expect(screen.queryByRole("button", { name: CREATE })).toBeNull();
     expect(screen.getByText("0 of 2 answered · All optional")).toBeVisible();
     expect(screen.getAllByRole("checkbox", { name: "Not sure" })).toHaveLength(2);
+  });
+
+  it("leaves the page unchanged for a task the host cannot turn into a Flow", async () => {
+    const createAutomationFlow = vi.fn(async () => {});
+    await openTaskPage({ createAutomationFlow, canCreateAutomationFlow: id => id === DEMO_TASK_ID }, "wf-other-task");
+    expect(screen.queryByRole("button", { name: CREATE })).toBeNull();
+    expect(screen.getByText("0 of 2 answered · All optional")).toBeVisible();
+    expect(screen.getAllByRole("checkbox", { name: "Not sure" })).toHaveLength(2);
+    expect(createAutomationFlow).not.toHaveBeenCalled();
+  });
+
+  it("keeps the required mode for the task the host can turn into a Flow", async () => {
+    await openTaskPage({ createAutomationFlow: vi.fn(async () => {}), canCreateAutomationFlow: id => id === DEMO_TASK_ID });
+    expect(screen.getByRole("button", { name: CREATE })).toBeDisabled();
+    expect(screen.queryByRole("checkbox", { name: "Not sure" })).toBeNull();
   });
 
   it("marks the questions as required when the host can create Flows", async () => {

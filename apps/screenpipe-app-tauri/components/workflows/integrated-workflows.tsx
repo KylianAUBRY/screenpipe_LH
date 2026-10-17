@@ -14,7 +14,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorkflowsApp, type WorkflowsAppProps, type WorkflowMap, type WorkflowComposerAccessoryProps } from "@screenpipe/workflows-ui";
 import { createFixtureWorkflowsPlatform } from "@screenpipe/workflows-ui/fixture";
 import { desktopWorkflowsPlatform } from "@/lib/workflows/desktop-platform";
-import { createAutomationFlow } from "@/lib/workflows/automation-flows";
+import { canCreateAutomationFlow, createAutomationFlow } from "@/lib/workflows/automation-flows";
 import { ProductSwitcher, type ProductMode } from "./product-switcher";
 import { ComposerDictationControl } from "@/components/chat/standalone/composer-dictation-control";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -40,7 +40,7 @@ const workflowAgentActions = (workflow: WorkflowMap) => <WorkflowAgentActions ke
 // the parent PR's adapter, native recorder and app-local persistent storage.
 // Flow creation stays the desktop path: the browser mock answers its routes.
 const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
-  ? { ...createFixtureWorkflowsPlatform(undefined, typeof window === "undefined" ? "ready" : new URLSearchParams(window.location.search).get("workflowConnection") ?? "ready"), createAutomationFlow }
+  ? { ...createFixtureWorkflowsPlatform(undefined, typeof window === "undefined" ? "ready" : new URLSearchParams(window.location.search).get("workflowConnection") ?? "ready"), createAutomationFlow, canCreateAutomationFlow }
   : desktopWorkflowsPlatform;
 export function DeviceWorkflows({ active, fullscreen = false, onModeChange, recordingStatus, navigationFooter, sourceControl }: { sourceControl?: React.ReactNode; active: boolean; fullscreen?: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"] }) {
   const enabled = useWorkflowsRolloutEnabled();
