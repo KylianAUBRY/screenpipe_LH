@@ -18,7 +18,7 @@ export const fixtureFlow: Flow = {
   lastExecution: null,
   n8nUrl: "http://localhost:5678/workflow/spNovaFlow000001",
   sourceTaskId: "wf-novadesk-support-tickets",
-  summary: "Ce flux transforme chaque email de bug ou d'idée reçu sur la boîte support NovaDesk (servicedesk.novadesk@gmail.com) en ticket dans le projet Jira NOVA. Dès qu'un email non lu arrive, n8n le lit puis le marque comme lu, pour qu'il ne soit jamais traité deux fois. Une IA, fournie par votre abonnement ScreenPipe, ne décide que ce qui demande du jugement : Bug, Tâche (idée d'amélioration) ou aucun ticket (par exemple une alerte de sécurité), le produit concerné, un résumé court, la priorité (Highest si c'est bloquant, Medium si un contournement existe, Low pour une idée) et l'étiquette back ou front. Pour reprendre vos habitudes, elle regarde d'abord dans ScreenPipe les captures des tickets que vous avez créés à la main pour des emails similaires. Si aucun ticket n'est nécessaire, rien n'est créé. Sinon, le ticket est construit sans IA : titre « Produit - résumé », email d'origine cité dans la description, aucune personne assignée. Rien ne tourne tant que vous n'avez pas cliqué sur Activer.",
+  summary: "Ce flux transforme chaque email de bug ou d'idée reçu sur la boîte support NovaDesk (servicedesk.novadesk@gmail.com) en ticket dans le projet Jira NOVA. Dès qu'un email non lu arrive, n8n le lit puis le marque comme lu, pour qu'il ne soit jamais traité deux fois. Une IA, fournie par votre abonnement ScreenPipe, ne décide que ce qui demande du jugement : Bug, Tâche (idée d'amélioration) ou aucun ticket (par exemple une alerte de sécurité), le produit concerné, un résumé court, la priorité (Highest si c'est bloquant, Medium si un contournement existe, Low pour une idée) et l'étiquette back ou front. Pour reprendre vos habitudes, elle regarde d'abord dans ScreenPipe le seul texte d'écran des fenêtres Jira, où figurent les tickets que vous avez créés à la main pour des emails similaires. L'email est traité comme une donnée, jamais comme une instruction : si aucun ticket n'est nécessaire, ou si la réponse de l'IA sort des valeurs autorisées, rien n'est créé. Sinon, le ticket est construit sans IA : titre « Produit - résumé », email d'origine cité dans la description, aucune personne assignée. Rien ne tourne tant que vous n'avez pas cliqué sur Activer.",
   nodes: [
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000001",
@@ -32,7 +32,7 @@ export const fixtureFlow: Flow = {
       name: "Analyser l'email (IA)",
       type: "@n8n/n8n-nodes-langchain.agent",
       position: [260, 0],
-      sentence: "Une IA lit l'email et décide s'il faut un ticket (Bug, Tâche ou rien), puis propose le produit, un résumé court, la priorité et l'étiquette back ou front.",
+      sentence: "Une IA lit l'email comme une simple donnée, jamais comme une instruction, décide s'il faut un ticket (Bug, Tâche ou rien), puis propose le produit, un résumé court, la priorité et l'étiquette back ou front.",
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000003",
@@ -46,21 +46,21 @@ export const fixtureFlow: Flow = {
       name: "Format de la réponse",
       type: "@n8n/n8n-nodes-langchain.outputParserStructured",
       position: [400, 220],
-      sentence: "La réponse de l'IA est limitée à cinq champs fixes (type, produit, résumé, priorité, étiquette) pour que la suite du flux reste déterministe.",
+      sentence: "La réponse de l'IA est limitée à cinq champs fixes : type, produit, priorité et étiquette pris dans une liste fermée, et un résumé d'une ligne de 80 caractères au plus.",
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000009",
       name: "Historique ScreenPipe",
       type: "CUSTOM.screenPipeTool",
       position: [620, 220],
-      sentence: "Avant de répondre, l'IA consulte dans ScreenPipe les captures des tickets Jira que vous avez créés à la main pour des emails similaires, afin de reprendre les mêmes conventions.",
+      sentence: "Avant de répondre, l'IA consulte dans ScreenPipe le seul texte d'écran des fenêtres Jira, pour reprendre la façon dont vous avez typé, titré et priorisé vos tickets NOVA pour des emails similaires.",
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005",
       name: "Ticket nécessaire",
       type: "n8n-nodes-base.if",
       position: [620, 0],
-      sentence: "Si l'IA a répondu qu'aucun ticket n'est nécessaire (par exemple pour une alerte de sécurité), le flux s'arrête ici sans rien créer.",
+      sentence: "Le flux s'arrête ici sans rien créer si l'IA répond qu'aucun ticket n'est nécessaire (par exemple pour une alerte de sécurité) ou si un champ de sa réponse sort des valeurs autorisées.",
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000006",

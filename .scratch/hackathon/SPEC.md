@@ -229,6 +229,21 @@ chaque ticket créé ».
   in non-streaming JSON responses, give every `choices[].message.tool_calls[]` a unique `id`
   (e.g. `call_<uuid>`) and `type: "function"`, and set `finish_reason: "tool_calls"` when absent.
   Until then the demo workflow fails at the AI step for any email where the agent calls the tool.
+- Security (prompt injection from incoming emails): the agent gets the email between
+  `<email_non_fiable>` delimiters, with look-alikes of the tag stripped from every email field,
+  and the system message says that content is data, never instructions, and limits the tool to
+  how earlier NOVA tickets were typed, titled and prioritized. The ScreenPipe tool is fixed to
+  screen text (`contentType: ocr`, which searches every frame's OCR and accessibility text; no
+  audio, input or memories) in windows whose title contains `Jira`, 5 results × 600 chars; the AI
+  only fills the keywords. The parser closes `product` (NovaCRM, NovaPay, NovaDesk, Autre) and
+  caps `summary` at 80 chars. The "Ticket nécessaire" IF re-checks every field with regex
+  allowlists (summary: one line, 1–80 chars, no control characters), so a malformed or injected
+  answer ends the run without a ticket; its conditions agree with `executeFilter` from
+  `n8n-workflow` 2.42.2 on 11 cases. Gaps: no app filter (the demo browser is not recorded in the
+  repo; only the window is pinned); the newline rule lives in the IF, not in the parser schema
+  (no `pattern` sent to the model through the proxy); the summary stays free text, so up to 80
+  chars the agent read can still reach a ticket title; the email body is quoted unescaped in the
+  Jira wiki-markup description. Not yet run live: needs a re-import.
 
 ## Risks to check first (golden path)
 
