@@ -10,6 +10,8 @@
 //! api.screenpipe.com with the user's cloud JWT held in AppState.
 //! Successful non-streaming JSON answers get OpenAI-shaped tool calls (see
 //! `normalize_tool_calls`); everything else streams through unchanged.
+//! `chatgpt/<model>` requests go to the user's ChatGPT subscription instead
+//! (see `chatgpt_proxy`).
 
 use axum::{
     body::Body,
@@ -29,6 +31,9 @@ pub async fn chat_completions(
     State(state): State<Arc<AppState>>,
     body: axum::body::Bytes,
 ) -> Response {
+    if let Some(model) = crate::routes::chatgpt_proxy::requested_model(&body) {
+        return crate::routes::chatgpt_proxy::chat_completions(model, body).await;
+    }
     let token = (**state.cloud_token.load()).clone();
     chat_completions_with_base(token, body, CLOUD_BASE_URL).await
 }

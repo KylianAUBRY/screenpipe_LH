@@ -91,9 +91,13 @@ n8n workflow — distinct from ScreenPipe's existing automations and pipes.
 - **Real integrations**: Gmail (dedicated account, IMAP + app password) and
   Jira (Cloud, email + API token) are real integrations, configured in n8n —
   not through ScreenPipe's Connections.
-- **AI model**: AI nodes (in the n8n workflows) use the ScreenPipe Business
-  subscription through the local OpenAI-compatible proxy; fallback is a
-  personal API key.
+- **AI model**: the user's ChatGPT subscription, everywhere. The ScreenPipe
+  chat (Flow creation included) uses the ChatGPT preset (Settings → AI →
+  ChatGPT). AI nodes in n8n workflows and the ScreenPipe AI Trigger name a
+  `chatgpt/<model>` model (default `chatgpt/gpt-5.6-terra`) on the local
+  OpenAI-compatible proxy (`:3030/v1/chat/completions`), which answers with
+  the ChatGPT sign-in the app holds; `auto` on the same proxy still reaches
+  the ScreenPipe subscription.
 - **Situational triggers are generic**: any PC situation ScreenPipe can
   observe can trigger an n8n workflow (not just the reference case); this is
   implemented by the two ScreenPipe trigger nodes above.

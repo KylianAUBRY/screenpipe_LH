@@ -14,6 +14,12 @@ import {
 } from "n8n-workflow";
 
 /**
+ * The AI that judges by default: the user's ChatGPT subscription, which
+ * ScreenPipe's proxy answers for any `chatgpt/<model>` model.
+ */
+const DEFAULT_MODEL = "chatgpt/gpt-5.6-terra";
+
+/**
  * Starts a workflow when an AI judges that a situation described in plain
  * language is happening on the user's computer. On each poll it sends
  * ScreenPipe's activity summary for the look-back window to ScreenPipe's local
@@ -59,6 +65,14 @@ export class ScreenPipeAiTrigger implements INodeType {
         default: 60,
         description: "After firing, the trigger does not fire again (nor ask the AI) for this long",
       },
+      {
+        displayName: "Model",
+        name: "model",
+        type: "string",
+        default: DEFAULT_MODEL,
+        description:
+          "The AI that judges the condition. A model starting with chatgpt/ (e.g. chatgpt/gpt-5.6-sol) uses your ChatGPT subscription, connected in ScreenPipe's AI settings; auto uses your ScreenPipe subscription.",
+      },
     ],
   };
 
@@ -69,6 +83,7 @@ export class ScreenPipeAiTrigger implements INodeType {
     const condition = String(this.getNodeParameter("conditionPrompt"));
     const lookbackMinutes = Number(this.getNodeParameter("lookbackMinutes", 15));
     const cooldownMinutes = Number(this.getNodeParameter("cooldownMinutes", 60));
+    const model = String(this.getNodeParameter("model", DEFAULT_MODEL));
     const state = this.getWorkflowStaticData("node");
     const now = new Date();
     const lastFiredAt = typeof state.lastFiredAt === "string" ? Date.parse(state.lastFiredAt) : NaN;
@@ -89,7 +104,7 @@ export class ScreenPipeAiTrigger implements INodeType {
 
     let decision: Decision;
     try {
-      decision = await askAi(this, `${baseUrl}/v1/chat/completions`, headers, [
+      decision = await askAi(this, `${baseUrl}/v1/chat/completions`, headers, model, [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userPrompt(condition, from, now, summary) },
       ]);
@@ -174,6 +189,7 @@ async function askAi(
   ctx: IPollFunctions,
   url: string,
   headers: Record<string, string>,
+  model: string,
   messages: Message[],
 ): Promise<Decision> {
   let response: { statusCode: number; body: unknown };
@@ -182,7 +198,7 @@ async function askAi(
       method: "POST",
       url,
       headers,
-      body: { model: "auto", messages },
+      body: { model, messages },
       json: true,
       returnFullResponse: true,
       ignoreHttpStatusErrors: true,
@@ -193,12 +209,19 @@ async function askAi(
   }
   const body = response.body as IDataObject | undefined;
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    const detail = body && typeof body === "object" ? String(body.error ?? JSON.stringify(body)) : String(body ?? "");
-    throw new Error(`the AI proxy returned HTTP ${response.statusCode}: ${clip(detail)}`);
+    throw new Error(`the AI proxy returned HTTP ${response.statusCode}: ${clip(errorDetail(body))}`);
   }
   const content = (body as any)?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new Error("the AI answer has no message content");
   return parseDecision(content);
+}
+
+/** The reason in an error body: OpenAI's `{error: {message}}` or ScreenPipe's `{error: "..."}`. */
+function errorDetail(body: unknown): string {
+  if (!body || typeof body !== "object") return String(body ?? "");
+  const error = (body as IDataObject).error;
+  if (error && typeof error === "object") return String((error as IDataObject).message ?? JSON.stringify(error));
+  return String(error ?? JSON.stringify(body));
 }
 
 /** Reads `{"met": boolean, "reason": string}` from the model's text, tolerating a code fence around it. */

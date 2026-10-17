@@ -123,7 +123,10 @@ off; the user reviews it and switches it on.
    - No `credentials`: ScreenPipe drops them (rule 4). The user picks them
      in n8n (« Voir le graphe »); say which nodes need one.
    - AI nodes only where judgment is needed (rule 3); plain n8n nodes for the
-     rest.
+     rest. Their model is the user's ChatGPT subscription: an OpenAI Chat
+     Model node (`@n8n/n8n-nodes-langchain.lmChatOpenAi`, `typeVersion: 1.3`)
+     with `{"model": {"__rl": true, "mode": "id", "value": "chatgpt/gpt-5.6-terra"}, "responsesApiEnabled": false}`;
+     its credential is « ScreenPipe AI proxy ».
    - ScreenPipe nodes (package `n8n-nodes-screenpipe`, loaded by this n8n
      as custom nodes, so their type starts with `CUSTOM.`) start a Flow on
      what happens on this computer: `CUSTOM.screenPipeTrigger` (a keyword
@@ -141,7 +144,8 @@ off; the user reviews it and switches it on.
        `{"event": "keyword", "keyword": "point d'étape", "pollTimes": {"item": [{"mode": "everyMinute"}]}}`.
      - `CUSTOM.screenPipeAiTrigger`: `conditionPrompt` (the situation, in
        plain French), `lookbackMinutes` (default 15), `cooldownMinutes`
-       (default 60), and `pollTimes` as above.
+       (default 60), `model` (default `chatgpt/gpt-5.6-terra`, the user's
+       ChatGPT subscription; leave it out), and `pollTimes` as above.
      - `CUSTOM.screenPipe` / `CUSTOM.screenPipeTool`: `operation`
        `searchContent` with `query`, `contentType` (`all`, `accessibility`,
        `ocr`, `audio`, `input` or `memory`), `limit` and `filters`

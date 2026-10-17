@@ -50,14 +50,14 @@
       "typeVersion": 1.3,
       "position": [180, 220],
       "parameters": {
-        "model": { "__rl": true, "mode": "id", "value": "auto" },
+        "model": { "__rl": true, "mode": "id", "value": "chatgpt/gpt-5.6-terra" },
         "responsesApiEnabled": false,
         "options": { "timeout": 20000, "maxRetries": 0 }
       },
       "credentials": {
         "openAiApi": { "id": "spProxyOpenAI001", "name": "ScreenPipe AI proxy" }
       },
-      "notes": "Le modèle d'IA est celui de votre abonnement Screenpipe, appelé via le proxy local de Screenpipe.",
+      "notes": "Le modèle d'IA est celui de votre abonnement ChatGPT, appelé via le proxy local de Screenpipe.",
       "notesInFlow": true
     },
     {
