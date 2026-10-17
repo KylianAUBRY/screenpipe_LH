@@ -147,6 +147,16 @@ impl Respond for FakeN8n {
         let mut state = self.0.lock().unwrap();
 
         match (request.method.as_str(), segments.as_slice()) {
+            // The credentials the demo workflow uses, as the user's n8n holds them.
+            ("GET", ["credentials"]) => json_response(
+                200,
+                json!({"data": [
+                    {"id": "spNovaImap000001", "name": "NovaDesk Gmail (IMAP)", "type": "imap"},
+                    {"id": "spProxyOpenAI001", "name": "ScreenPipe AI proxy", "type": "openAiApi"},
+                    {"id": "spScreenpipeApi1", "name": "ScreenPipe API (local)", "type": "screenpipeApi"},
+                    {"id": "spNovaJira000001", "name": "NovaDesk Jira", "type": "jiraSoftwareCloudApi"},
+                ], "nextCursor": null}),
+            ),
             ("GET", ["workflows"]) => {
                 let tag = query("tags");
                 let data: Vec<Value> = state
@@ -2189,18 +2199,6 @@ async fn chat_update_keeps_the_users_credentials_and_never_takes_the_chats() {
                 node.as_object_mut().unwrap().remove("credentials");
             }
         }
-        // A new node and a retyped node bring credentials of their own.
-        nodes.push(json!({
-            "id": "new-node", "name": "Prévenir l'équipe", "type": "n8n-nodes-base.slack",
-            "typeVersion": 2.3, "position": [1300, 0], "parameters": {},
-            "notes": "L'équipe est prévenue sur Slack.",
-            "credentials": {"slackApi": {"id": "slack0000000001", "name": "Slack"}}
-        }));
-        let model = nodes
-            .iter_mut()
-            .find(|n| n["name"] == "Modèle IA ScreenPipe")
-            .unwrap();
-        model["type"] = json!("@n8n/n8n-nodes-langchain.lmChatAnthropic");
     });
     let (status, flow) = app
         .call(
@@ -2214,8 +2212,113 @@ async fn chat_update_keeps_the_users_credentials_and_never_takes_the_chats() {
     let stored = n8n.workflows()[0].clone();
     assert_eq!(credentials_of(&stored, jira), user_jira);
     assert_eq!(credentials_of(&stored, imap), user_imap);
-    assert_eq!(credentials_of(&stored, "Prévenir l'équipe"), Value::Null);
-    assert_eq!(credentials_of(&stored, "Modèle IA ScreenPipe"), Value::Null);
+}
+
+/// The demo Flow, activated, and the n8n writes made so far.
+async fn active_demo_flow(app: &App, server: &MockServer) -> (String, usize) {
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    app.ui_call(
+        "POST",
+        &format!("/automation-flows/{id}/activate"),
+        Some(json!({"versionId": "version-1"})),
+    )
+    .await;
+    (id, n8n_writes(server).await.len())
+}
+
+#[tokio::test]
+async fn chat_update_with_a_node_n8n_cannot_run_is_refused_untouched() {
+    // A node type n8n 2.x switches off (Execute Command), a node that needs
+    // a credential n8n does not hold (a retyped model), and a node connected
+    // to nothing: refused at once, every reason named, the Flow left running.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (id, writes_before) = active_demo_flow(&app, &server).await;
+
+    let workflow = edited_workflow(&n8n, &id, |workflow| {
+        let nodes = workflow["nodes"].as_array_mut().unwrap();
+        nodes.push(json!({
+            "id": "new-node", "name": "Ouvrir un terminal", "type": "n8n-nodes-base.executeCommand",
+            "typeVersion": 1, "position": [1300, 0], "parameters": {"command": "open -a Terminal"},
+            "notes": "Un terminal s'ouvre sur le Mac."
+        }));
+        let model = nodes
+            .iter_mut()
+            .find(|n| n["name"] == "Modèle IA ScreenPipe")
+            .unwrap();
+        model["type"] = json!("@n8n/n8n-nodes-langchain.lmChatAnthropic");
+        model["typeVersion"] = json!(1.3);
+    });
+    let (status, body) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_workflow");
+    let detail = body["detail"].as_str().unwrap();
+    assert!(detail.contains("`n8n-nodes-base.executeCommand` is switched off"), "{detail}");
+    assert!(detail.contains("« Ouvrir un terminal » is connected to no other node"), "{detail}");
+    assert!(detail.contains("`anthropicApi` credential and n8n has none"), "{detail}");
+    assert!(n8n_writes(&server).await[writes_before..].is_empty());
+    assert_eq!(n8n.workflows()[0]["active"], true);
+}
+
+#[tokio::test]
+async fn chat_create_refuses_an_invented_node_before_n8n_sees_it() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let mut workflow = chat_workflow();
+    workflow["nodes"][1]["type"] = json!("n8n-nodes-base.openTerminal");
+
+    let (status, body) = chat_create(
+        &app,
+        json!({"workflow": workflow, "summary": "Chaque soir, un terminal s'ouvre."}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["detail"]
+        .as_str()
+        .unwrap()
+        .contains("`n8n-nodes-base.openTerminal` is not a node type this n8n has"));
+    assert!(workflow_posts(&server).await.is_empty());
+    assert!(n8n.workflows().is_empty());
+}
+
+#[tokio::test]
+async fn chat_create_wires_the_only_credential_n8n_holds_of_a_type() {
+    // A ScreenPipe search needs the ScreenPipe API credential: n8n holds one,
+    // so ScreenPipe wires it; the chat named none.
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let mut workflow = chat_workflow();
+    workflow["nodes"][1] = json!({
+        "id": "n2", "name": "Préparer le résumé", "type": "CUSTOM.screenPipe",
+        "typeVersion": 1, "position": [220, 0],
+        "parameters": {"operation": "activitySummary", "startTime": "1d ago", "endTime": "now"},
+        "notes": "Le résumé de la journée est préparé."
+    });
+
+    let (status, flow) = chat_create(
+        &app,
+        json!({"workflow": workflow, "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{flow}");
+    let posts = workflow_posts(&server).await;
+    assert_eq!(
+        credentials_of(&posts[0], "Préparer le résumé"),
+        json!({"screenpipeApi": {"id": "spScreenpipeApi1", "name": "ScreenPipe API (local)"}})
+    );
 }
 
 #[tokio::test]

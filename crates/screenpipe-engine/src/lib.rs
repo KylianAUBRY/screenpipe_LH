@@ -41,6 +41,7 @@ pub mod archive;
 mod atomic_file;
 pub mod auth_key;
 pub mod automation_flows;
+pub mod flow_checks;
 mod auto_destruct;
 pub mod calendar_speaker_id;
 mod capture_exclusions;
