@@ -39,7 +39,7 @@ and adopts the copy `import-workflow.sh` already installed (fixed id
 | Status derivation, bundled fixture validity | `cargo test -p screenpipe-engine --lib automation_flows` | 3 passed, 0 failed |
 | n8n connection fields + secret | `cargo test -p screenpipe-connect --lib connections::` | 110 passed, 0 failed, 1 ignored (includes `n8n::tests::api_url_is_plain_and_api_key_is_secret`, `api_key_is_stored_in_the_secret_store`, `test_checks_the_api_with_the_key_header`, `test_rejects_half_configured_api_and_empty_form`) |
 | Flows tab + Review Screen from the typed client, error messages, browser mock (fixture = ticket 01 workflow), n8n form fields | `bun x vitest run --config vitest.config.ts components/automation-flows components/__tests__/pipe-store-flows-tab.test.tsx components/settings/__tests__/connection-credential-forms.test.tsx` (in `apps/screenpipe-app-tauri`) | 30 passed (api 12, flows-tab 10, pipe-store-flows-tab 2, connection forms 6) |
-| Whole frontend suite | `NODE_OPTIONS=--no-experimental-webstorage bun run test` | vitest 6909 passed, 1 skipped; bun 398 pass, 0 fail. Without the flag, 171 tests in 16 unrelated files fail on this machine (Node v26's built-in `localStorage` shadows jsdom's; none of those files import changed code). |
+| Whole frontend suite | `NODE_OPTIONS=--no-experimental-webstorage bun run test` | vitest 6912 passed, 1 skipped; bun 398 pass, 0 fail (after merging the integration tip with tickets 03, 07, 13). Without the flag, 171 tests in 16 unrelated files fail on this machine (Node v26's built-in `localStorage` shadows jsdom's; none of those files import changed code). |
 | Types | `bun run typecheck` | 0 errors |
 
 Browser mock (`bun run dev:web`, then

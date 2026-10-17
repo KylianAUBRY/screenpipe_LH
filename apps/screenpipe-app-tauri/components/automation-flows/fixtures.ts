@@ -18,7 +18,7 @@ export const fixtureFlow: Flow = {
   lastExecution: null,
   n8nUrl: "http://localhost:5678/workflow/spNovaFlow000001",
   sourceTaskId: "wf-novadesk-support-tickets",
-  summary: "Ce flux transforme chaque email de bug ou d'idée reçu sur la boîte support NovaDesk (servicedesk.novadesk@gmail.com) en ticket dans le projet Jira NOVA. Dès qu'un email non lu arrive, n8n le lit puis le marque comme lu, pour qu'il ne soit jamais traité deux fois. Une IA, fournie par votre abonnement ScreenPipe, ne décide que ce qui demande du jugement : Bug, Tâche (idée d'amélioration) ou aucun ticket (par exemple une alerte de sécurité), le produit concerné, un résumé court, la priorité (Highest si c'est bloquant, Medium si un contournement existe, Low pour une idée) et l'étiquette back ou front. Si aucun ticket n'est nécessaire, rien n'est créé. Sinon, le ticket est construit sans IA : titre « Produit - résumé », email d'origine cité dans la description, aucune personne assignée. Rien ne tourne tant que vous n'avez pas cliqué sur Activer.",
+  summary: "Ce flux transforme chaque email de bug ou d'idée reçu sur la boîte support NovaDesk (servicedesk.novadesk@gmail.com) en ticket dans le projet Jira NOVA. Dès qu'un email non lu arrive, n8n le lit puis le marque comme lu, pour qu'il ne soit jamais traité deux fois. Une IA, fournie par votre abonnement ScreenPipe, ne décide que ce qui demande du jugement : Bug, Tâche (idée d'amélioration) ou aucun ticket (par exemple une alerte de sécurité), le produit concerné, un résumé court, la priorité (Highest si c'est bloquant, Medium si un contournement existe, Low pour une idée) et l'étiquette back ou front. Pour reprendre vos habitudes, elle regarde d'abord dans ScreenPipe les captures des tickets que vous avez créés à la main pour des emails similaires. Si aucun ticket n'est nécessaire, rien n'est créé. Sinon, le ticket est construit sans IA : titre « Produit - résumé », email d'origine cité dans la description, aucune personne assignée. Rien ne tourne tant que vous n'avez pas cliqué sur Activer.",
   nodes: [
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000001",
@@ -49,6 +49,13 @@ export const fixtureFlow: Flow = {
       sentence: "La réponse de l'IA est limitée à cinq champs fixes (type, produit, résumé, priorité, étiquette) pour que la suite du flux reste déterministe.",
     },
     {
+      id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000009",
+      name: "Historique ScreenPipe",
+      type: "CUSTOM.screenPipeTool",
+      position: [620, 220],
+      sentence: "Avant de répondre, l'IA consulte dans ScreenPipe les captures des tickets Jira que vous avez créés à la main pour des emails similaires, afin de reprendre les mêmes conventions.",
+    },
+    {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005",
       name: "Ticket nécessaire",
       type: "n8n-nodes-base.if",
@@ -74,6 +81,7 @@ export const fixtureFlow: Flow = {
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000001", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000003", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000004", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002" },
+    { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000009", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000002", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000005", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000006" },
     { from: "6d0f5c1e-0b7a-4c55-9f1e-01a000000006", to: "6d0f5c1e-0b7a-4c55-9f1e-01a000000007" },
