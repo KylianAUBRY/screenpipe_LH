@@ -77,6 +77,8 @@ const answer = ({ status, body }: { status: number; body: any }) =>
 /** Switches a workflow off, then deletes it (archiving first when n8n asks for
  * it). Returns what it did; throws with n8n's reason when it is still there. */
 async function removeWorkflow(n8n: N8nCall, id: string): Promise<string> {
+  // Same rule as the engine's `valid_workflow_id`: never splice a path into the URL.
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error(`${JSON.stringify(id)} is not an n8n workflow id; left untouched`);
   const found = await n8n("GET", `/workflows/${id}`);
   if (found.status === 404) return `${id} is not in n8n (already removed)`;
   if (!ok(found.status)) throw new Error(`cannot read ${id}: ${answer(found)}`);

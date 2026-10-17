@@ -214,6 +214,19 @@ describe("demo reset", () => {
     expect(n8n.workflows.size).toBe(0);
   });
 
+  it("refuses a record id that is not an n8n workflow id instead of calling n8n with it", async () => {
+    const n8n = serve([{ id: "wfOther00000001", name: "Not a Flow", active: true }]);
+    const data = dataDir({ "../wfOther00000001": record(DEMO_TASK) });
+
+    const report = await resetDemo({
+      n8n: { url: n8n.url, apiKey: KEY }, dataDir: data, catalogDir: catalogDir(), container: "n8n-test", run: inbox(), log: () => {},
+    });
+
+    expect(report.failures).toEqual([expect.stringContaining("not an n8n workflow id")]);
+    expect(n8n.workflows.get("wfOther00000001")!.active).toBe(true);
+    expect(Object.keys(storedFlows(data))).toEqual(["../wfOther00000001"]);
+  });
+
   it("reports a missing Task Page catalog", async () => {
     const n8n = serve([]);
 
