@@ -16,6 +16,7 @@ export const fixtureFlow: Flow = {
   name: "NovaDesk : emails support → tickets Jira",
   status: "draft",
   lastExecution: null,
+  failedRun: null,
   n8nUrl: "http://localhost:5678/workflow/spNovaFlow000001",
   sourceTaskId: "wf-novadesk-support-tickets",
   // The scripted task's first evidence (an embedded image, so no recorder frame).
@@ -126,5 +127,6 @@ export function summaryOf(flow: Flow): FlowSummary {
     name: flow.name,
     status: flow.status,
     lastExecution: flow.lastExecution,
+    failedRun: flow.failedRun,
   };
 }

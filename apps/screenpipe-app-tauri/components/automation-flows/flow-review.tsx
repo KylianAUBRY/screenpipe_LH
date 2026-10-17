@@ -24,7 +24,7 @@ import {
 } from "./common";
 import { FlowActivation } from "./flow-activation";
 import { FlowGraph } from "./flow-graph";
-import { activationLabel, lastRunLabel } from "./labels";
+import { activationLabel, formatDate, lastRunLabel } from "./labels";
 
 export function FlowReview({
   flowId,
@@ -97,7 +97,11 @@ function ReviewContent({
       <header className="space-y-2">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-lg font-medium">{flow.name}</h2>
-          <StatusBadge status={flow.status} running={flow.lastExecution?.status === "running"} />
+          <StatusBadge
+            status={flow.status}
+            running={flow.lastExecution?.status === "running"}
+            failed={flow.failedRun !== null}
+          />
         </div>
         <p className="text-xs text-muted-foreground">
           Dernière exécution : {lastRunLabel(flow.lastExecution)}
@@ -130,6 +134,17 @@ function ReviewContent({
         </div>
       </header>
 
+      {flow.failedRun && (
+        <p
+          role="status"
+          data-testid="flow-failed-run"
+          className="border border-red-600 p-3 text-sm dark:border-red-500"
+        >
+          Le dernier passage a échoué le {formatDate(flow.failedRun.startedAt)}. Un échec
+          ne met pas le Flow en pause ; il apparaît en rouge jusqu&apos;au prochain passage
+          réussi.
+        </p>
+      )}
       {flow.status === "needs_review" && (
         <p role="status" className="border border-border bg-accent p-3 text-sm">
           Ce Flow a changé depuis sa dernière activation : relisez-le avant de le

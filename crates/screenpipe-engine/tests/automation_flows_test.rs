@@ -25,6 +25,17 @@ const TASK_ID: &str = "wf-novadesk-support-tickets";
 const API_KEY: &str = "test-n8n-key";
 const STICKY_NOTE: &str = "n8n-nodes-base.stickyNote";
 const JSON: (&str, &str) = ("content-type", "application/json");
+const ERROR_TRIGGER: &str = "n8n-nodes-base.errorTrigger";
+/// The tag of the error workflow ScreenPipe installs in n8n (ticket 24).
+const ERRORS_TAG: &str = "screenpipe-flow-errors";
+
+/// The n8n error workflow ScreenPipe installs (it starts on an Error
+/// Trigger), as opposed to a Flow.
+fn is_error_workflow(workflow: &Value) -> bool {
+    workflow["nodes"]
+        .as_array()
+        .is_some_and(|nodes| nodes.iter().any(|n| n["type"] == ERROR_TRIGGER))
+}
 
 // ---------------------------------------------------------------------------
 // Fake n8n: a tiny in-memory public API (workflows, tags, executions)
@@ -57,8 +68,26 @@ struct N8nState {
 struct FakeN8n(Arc<Mutex<N8nState>>);
 
 impl FakeN8n {
+    /// Every workflow n8n holds except ScreenPipe's error workflow.
     fn workflows(&self) -> Vec<Value> {
-        self.0.lock().unwrap().workflows.clone()
+        let state = self.0.lock().unwrap();
+        state
+            .workflows
+            .iter()
+            .filter(|w| !is_error_workflow(w))
+            .cloned()
+            .collect()
+    }
+
+    /// ScreenPipe's error workflows in n8n (there should be one at most).
+    fn error_workflows(&self) -> Vec<Value> {
+        let state = self.0.lock().unwrap();
+        state
+            .workflows
+            .iter()
+            .filter(|w| is_error_workflow(w))
+            .cloned()
+            .collect()
     }
 
     fn edit_workflow(&self, id: &str, edit: impl FnOnce(&mut Value)) {
@@ -317,15 +346,37 @@ impl Respond for FakeN8n {
                         }
                     }
                 }
+                // Newest first; n8n leaves the Run data out of lists.
+                let limit: usize = query("limit").and_then(|l| l.parse().ok()).unwrap_or(100);
                 let data: Vec<Value> = state
                     .executions
                     .iter()
                     .filter(|e| e["workflowId"].as_str().map(str::to_string) == workflow_id)
                     .filter(|e| status.as_ref().is_none_or(|s| e["status"] == s.as_str()))
-                    .take(1)
-                    .cloned()
+                    .take(limit)
+                    .map(|e| {
+                        let mut e = e.clone();
+                        if let Some(fields) = e.as_object_mut() {
+                            fields.remove("data");
+                        }
+                        e
+                    })
                     .collect();
                 json_response(200, json!({"data": data, "nextCursor": null}))
+            }
+            ("GET", ["executions", id]) => {
+                match state.executions.iter().find(|e| e["id"] == *id) {
+                    Some(execution) => {
+                        let mut execution = execution.clone();
+                        if query("includeData").as_deref() != Some("true") {
+                            if let Some(fields) = execution.as_object_mut() {
+                                fields.remove("data");
+                            }
+                        }
+                        json_response(200, execution)
+                    }
+                    None => json_response(404, json!({"message": "Not Found"})),
+                }
             }
             _ => json_response(404, json!({"message": "unknown route in fake n8n"})),
         }
@@ -351,6 +402,8 @@ struct App {
     dir: tempfile::TempDir,
     /// The credential the desktop app hands only to its Review Screen.
     ui_key: Option<FlowActivationKey>,
+    /// The desktop app's notification server (`POST /notify`).
+    notify: MockServer,
 }
 
 /// The local API key the app, the chat agent (Pi), pipes and MCP clients share.
@@ -398,6 +451,15 @@ impl App {
             "balanced".to_string(),
         );
         server.flow_activation_key = ui_key.clone();
+        let notify = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"message": "Notification sent successfully"})),
+            )
+            .mount(&notify)
+            .await;
+        server.flow_notify_url = Some(format!("{}/notify", notify.uri()));
         // The desktop owner's Detected Task catalog (empty until written).
         server.workflow_catalog_dir = Some(dir.path().join("workflow-catalog"));
         // Waiting for a running execution: the real pace, scaled down.
@@ -414,7 +476,20 @@ impl App {
             router,
             dir,
             ui_key,
+            notify,
         }
+    }
+
+    /// The notifications the app was asked to show, in order.
+    async fn notifications(&self) -> Vec<Value> {
+        self.notify
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.method.as_str() == "POST" && r.url.path() == "/notify")
+            .map(|r| serde_json::from_slice(&r.body).unwrap())
+            .collect()
     }
 
     /// Fill in ScreenPipe's n8n connection (no SecretStore in tests, so the
@@ -514,6 +589,8 @@ async fn workflow_posts(server: &MockServer) -> Vec<Value> {
         .into_iter()
         .filter(|r| r.method.as_str() == "POST" && r.url.path() == "/api/v1/workflows")
         .map(|r| serde_json::from_slice(&r.body).unwrap())
+        // Installing ScreenPipe's error workflow is not importing a Flow.
+        .filter(|body| !is_error_workflow(body))
         .collect()
 }
 
@@ -1128,18 +1205,21 @@ async fn list_shows_only_flows_with_status_and_last_run() {
     let (status, mut list) = app.call("GET", "/automation-flows", None).await;
     assert_eq!(status, StatusCode::OK);
     // The engine's timestamp middleware renders times in the local offset.
-    let started_at = list[0]["lastExecution"]["startedAt"].take();
-    assert_eq!(
-        chrono::DateTime::parse_from_rfc3339(started_at.as_str().unwrap()).unwrap(),
-        chrono::DateTime::parse_from_rfc3339("2026-10-17T09:00:00.000Z").unwrap()
-    );
+    for run in ["lastExecution", "failedRun"] {
+        let started_at = list[0][run]["startedAt"].take();
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(started_at.as_str().unwrap()).unwrap(),
+            chrono::DateTime::parse_from_rfc3339("2026-10-17T09:00:00.000Z").unwrap()
+        );
+    }
     assert_eq!(
         list,
         json!([{
             "id": id,
             "name": created["name"],
             "status": "draft",
-            "lastExecution": {"status": "error", "startedAt": null}
+            "lastExecution": {"status": "error", "startedAt": null},
+            "failedRun": {"executionId": "1", "startedAt": null}
         }])
     );
 }
@@ -2450,7 +2530,9 @@ async fn no_flow_is_offered_to_n8n_mcp_clients() {
         .filter_map(|r| serde_json::from_slice(&r.body).ok())
         .collect();
     assert_eq!(
-        sent.iter().filter(|body| body["nodes"].is_array()).count(),
+        sent.iter()
+            .filter(|body| body["nodes"].is_array() && !is_error_workflow(body))
+            .count(),
         3
     );
     for body in &sent {
@@ -2665,4 +2747,334 @@ async fn switching_off_an_idle_flow_asks_n8n_once() {
         n8n_writes(&server).await.last().unwrap(),
         &format!("POST /api/v1/workflows/{id}/unpublish")
     );
+}
+
+// ---------------------------------------------------------------------------
+// Failed Runs (ticket 24, SPEC D16)
+// ---------------------------------------------------------------------------
+
+/// The error workflow n8n holds, which must be exactly one.
+fn the_error_workflow(n8n: &FakeN8n) -> Value {
+    let found = n8n.error_workflows();
+    assert_eq!(found.len(), 1, "one error workflow installed: {found:?}");
+    found.into_iter().next().unwrap()
+}
+
+#[tokio::test]
+async fn every_chat_created_flow_gets_the_one_error_workflow_which_is_not_a_flow() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+
+    let summary = "Chaque soir, un résumé.";
+    let (status, first) =
+        chat_create(&app, json!({"workflow": chat_workflow(), "summary": summary})).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let mut second_workflow = chat_workflow();
+    second_workflow["name"] = json!("Deuxième Flow");
+    let (status, second) =
+        chat_create(&app, json!({"workflow": second_workflow, "summary": summary})).await;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+
+    // Installed once, tagged as ScreenPipe's error workflow, switched off.
+    let errors = the_error_workflow(&n8n);
+    assert_eq!(errors["tags"].as_array().unwrap().len(), 1);
+    assert_eq!(errors["tags"][0]["name"], ERRORS_TAG);
+    assert_eq!(errors["active"], false);
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    // Both Flows name it as their error workflow.
+    for flow in n8n.workflows() {
+        assert_eq!(
+            flow["settings"]["errorWorkflow"], errors["id"],
+            "{}",
+            flow["name"]
+        );
+    }
+    // It is never listed or opened as a Flow.
+    let (_, list) = app.call("GET", "/automation-flows", None).await;
+    let listed: Vec<&Value> = list.as_array().unwrap().iter().map(|f| &f["id"]).collect();
+    assert_eq!(listed, [&first["id"], &second["id"]]);
+    let errors_id = errors["id"].as_str().unwrap();
+    let (status, _) = app
+        .call("GET", &format!("/automation-flows/{errors_id}"), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_flow_created_from_a_task_gets_the_error_workflow() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+
+    let (status, flow) = app.create_from_task().await;
+
+    assert_eq!(status, StatusCode::CREATED, "{flow}");
+    let errors = the_error_workflow(&n8n);
+    let posts = workflow_posts(&server).await;
+    assert_eq!(posts[0]["settings"]["errorWorkflow"], errors["id"]);
+    assert_eq!(flow["status"], "draft");
+}
+
+#[tokio::test]
+async fn the_copy_from_the_import_script_gets_the_error_workflow_when_adopted() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let mut imported: Value = serde_json::from_str(include_str!(
+        "../../../infra/automation-flows/workflows/novadesk-support-tickets.json"
+    ))
+    .unwrap();
+    imported["active"] = json!(false);
+    imported["versionId"] = json!("imported-version");
+    imported["tags"] = json!([{"id": "tag-imported", "name": "screenpipe-flow"}]);
+    n8n.add_workflow(imported);
+
+    let (status, flow) = app.create_from_task().await;
+
+    assert!(status.is_success(), "{status} {flow}");
+    let errors = the_error_workflow(&n8n);
+    let adopted = &n8n.workflows()[0];
+    assert_eq!(adopted["id"], "spNovaFlow000001");
+    assert_eq!(adopted["settings"]["errorWorkflow"], errors["id"]);
+    assert_eq!(adopted["active"], false);
+    // What the import script set is kept: the IMAP cursor.
+    assert_eq!(
+        adopted["staticData"]["node:Nouvel email support"]["lastMessageUid"],
+        1
+    );
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(flow["versionId"], adopted["versionId"]);
+}
+
+#[tokio::test]
+async fn a_chat_update_keeps_the_error_workflow_whatever_the_chat_sends() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let errors = the_error_workflow(&n8n);
+
+    let mut workflow = edited_workflow(&n8n, &id, add_auto_label);
+    workflow["settings"]["errorWorkflow"] = json!("someone-elses-workflow");
+    let (status, flow) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(
+        n8n.workflows()[0]["settings"]["errorWorkflow"],
+        errors["id"]
+    );
+    assert_eq!(n8n.error_workflows().len(), 1);
+}
+
+const EMAIL_BODY: &str = "Le corps confidentiel de l'email";
+const ERROR_MESSAGE: &str = "Bad request: token sk-live-123 refusé";
+
+/// A Run of the demo Flow that stopped on its Jira step, as n8n stores it:
+/// the IMAP trigger's email (sender, subject, body) and the step's error.
+fn failed_run(id: &str, workflow_id: &str, subject: &str) -> Value {
+    json!({
+        "id": id, "workflowId": workflow_id, "status": "error", "finished": false,
+        "mode": "trigger",
+        "startedAt": "2026-10-17T09:00:00.000Z", "stoppedAt": "2026-10-17T09:00:20.000Z",
+        "data": {"resultData": {
+            "runData": {
+                "Nouvel email support": [{"data": {"main": [[{"json": {
+                    "from": "Arthur Noteris <arthur@novacrm.example>",
+                    "subject": subject,
+                    "textPlain": EMAIL_BODY,
+                    "textHtml": format!("<p>{EMAIL_BODY}</p>"),
+                }}]]}}],
+                "Analyser l'email (IA)": [{"data": {"main": [[{"json": {"output": {"type": "Bug"}}}]]}}]
+            },
+            "lastNodeExecuted": "Créer le ticket Jira",
+            "error": {"message": ERROR_MESSAGE, "node": {"name": "Créer le ticket Jira"}}
+        }}
+    })
+}
+
+async fn report_failed_run(app: &App, body: Value) -> (StatusCode, Value) {
+    app.call("POST", "/automation-flows/failed-runs", Some(body))
+        .await
+}
+
+#[tokio::test]
+async fn a_failed_run_notifies_once_with_the_flow_the_step_and_the_email() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    n8n.add_execution(failed_run("231", &id, "Export des contacts vide dans NovaCRM"));
+
+    // What the error workflow sends.
+    let report = json!({"executionId": "231", "workflowId": id});
+    let (status, answer) = report_failed_run(&app, report.clone()).await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["notified"], true);
+    let sent = app.notifications().await;
+    assert_eq!(sent.len(), 1);
+    let notification = &sent[0];
+    let text = format!("{} {}", notification["title"], notification["body"]);
+    assert!(text.contains(created["name"].as_str().unwrap()), "{text}");
+    assert!(text.contains("Créer le ticket Jira"), "{text}");
+    assert!(text.contains("Arthur Noteris"), "{text}");
+    assert!(text.contains("Export des contacts vide dans NovaCRM"), "{text}");
+    // Clicking it opens the Flow's Review Screen.
+    let review = format!("screenpipe://flows/{id}");
+    assert_eq!(notification["actions"][0]["type"], "deeplink");
+    assert_eq!(notification["actions"][0]["url"], review.as_str());
+    assert_eq!(notification["actions"][0]["primary"], true);
+    // It stays in the notification center until read.
+    assert_eq!(notification["transient"], false);
+    // Never the email body nor what the error message quotes.
+    let whole = notification.to_string();
+    for private in [EMAIL_BODY, "sk-live", "Bad request"] {
+        assert!(!whole.contains(private), "{private} leaked: {whole}");
+    }
+
+    // n8n retries the error workflow's call, or a later check reports the
+    // same Run: still one notification.
+    let (status, answer) = report_failed_run(&app, report).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(answer["notified"], false);
+    assert_eq!(app.notifications().await.len(), 1);
+}
+
+#[tokio::test]
+async fn an_email_cannot_put_links_or_markup_in_the_notification() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let hostile = format!(
+        "Urgent [cliquez ici](https://evil.example) **gras**\nligne 2 {}",
+        "x".repeat(400)
+    );
+    n8n.add_execution(failed_run("232", &id, &hostile));
+
+    let (status, _) = report_failed_run(&app, json!({"executionId": "232", "workflowId": id})).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let body = app.notifications().await[0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!body.contains("](https://"), "{body}");
+    assert!(!body.contains("**"), "{body}");
+    assert!(body.contains("Urgent"), "{body}");
+    assert!(body.len() < 600, "subject cut: {} bytes", body.len());
+}
+
+#[tokio::test]
+async fn only_a_failed_run_of_a_flow_notifies() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    // A Run that succeeded.
+    let mut succeeded = failed_run("300", &id, "Sujet");
+    succeeded["status"] = json!("success");
+    n8n.add_execution(succeeded);
+    // A failed Run of a workflow that is not a Flow.
+    n8n.add_workflow(json!({
+        "id": "other", "name": "Perso", "active": true, "versionId": "v",
+        "tags": [], "nodes": [], "connections": {}
+    }));
+    n8n.add_execution(failed_run("301", "other", "Sujet"));
+
+    for (body, expected) in [
+        (json!({"executionId": "300", "workflowId": id}), StatusCode::OK),
+        // The workflow id comes from n8n, not from the caller.
+        (json!({"executionId": "301", "workflowId": id}), StatusCode::OK),
+        // The trigger itself failed: no Run to name.
+        (json!({"executionId": null, "workflowId": id}), StatusCode::OK),
+        (json!({"executionId": "999", "workflowId": id}), StatusCode::NOT_FOUND),
+        (json!({"executionId": "../x", "workflowId": id}), StatusCode::NOT_FOUND),
+    ] {
+        let (status, answer) = report_failed_run(&app, body.clone()).await;
+        assert_eq!(status, expected, "{body} → {answer}");
+        if status == StatusCode::OK {
+            assert_eq!(answer["notified"], false, "{body}");
+        }
+    }
+    assert!(app.notifications().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_run_without_an_email_names_the_flow_and_the_step() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (status, created) = chat_create(
+        &app,
+        json!({"workflow": chat_workflow(), "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = created["id"].as_str().unwrap().to_string();
+    n8n.add_execution(json!({
+        "id": "400", "workflowId": id, "status": "error",
+        "startedAt": "2026-10-17T18:00:00.000Z",
+        "data": {"resultData": {
+            "runData": {"Chaque soir": [{"data": {"main": [[{"json": {"timestamp": "2026-10-17T18:00:00Z"}}]]}}]},
+            "lastNodeExecuted": "Préparer le résumé",
+            "error": {"message": "boom"}
+        }}
+    }));
+
+    let (status, _) = report_failed_run(&app, json!({"executionId": "400", "workflowId": id})).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let sent = app.notifications().await;
+    assert_eq!(sent.len(), 1);
+    let text = format!("{} {}", sent[0]["title"], sent[0]["body"]);
+    assert!(text.contains("Résumé des réunions"), "{text}");
+    assert!(text.contains("Préparer le résumé"), "{text}");
+    assert!(!text.contains("E-mail"), "{text}");
+}
+
+#[tokio::test]
+async fn a_flow_stays_failed_until_a_later_run_succeeds() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let uri = format!("/automation-flows/{id}");
+    assert_eq!(created["failedRun"], Value::Null);
+    let run = |run_id: &str, status: &str, at: &str| {
+        json!({"id": run_id, "workflowId": id, "status": status, "startedAt": at})
+    };
+
+    // Newest first, as n8n lists them.
+    let failed = run("1", "error", "2026-10-17T09:00:00.000Z");
+    for (executions, failed_id) in [
+        (vec![failed.clone()], Some("1")),
+        // A Run in progress after the failure does not clear it yet.
+        (vec![run("2", "running", "2026-10-17T09:05:00.000Z"), failed.clone()], Some("1")),
+        (vec![run("2", "crashed", "2026-10-17T09:05:00.000Z"), failed.clone()], Some("2")),
+        // A later Run that succeeded clears it.
+        (vec![run("2", "success", "2026-10-17T09:05:00.000Z"), failed.clone()], None),
+    ] {
+        n8n.0.lock().unwrap().executions = executions;
+        let (_, flow) = app.call("GET", &uri, None).await;
+        let (_, list) = app.call("GET", "/automation-flows", None).await;
+        for shown in [&flow, &list[0]] {
+            match failed_id {
+                Some(run_id) => assert_eq!(shown["failedRun"]["executionId"], run_id, "{shown}"),
+                None => assert_eq!(shown["failedRun"], Value::Null, "{shown}"),
+            }
+        }
+    }
 }

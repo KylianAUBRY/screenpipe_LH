@@ -10,6 +10,7 @@ import { emit } from "@tauri-apps/api/event";
 import type { WorkflowsPlatform } from "@screenpipe/workflows-ui";
 import { commands } from "@/lib/utils/tauri";
 import { flowsApi, FlowsApiError, type FlowsErrorCode } from "@/components/automation-flows/api";
+import { flowIdFromReviewLink, flowReviewDestination, flowReviewLink } from "./flow-links";
 
 // Shown on the Task Page, under the action; the answers stay on screen.
 const CREATION_FAILED = "Impossible de créer l'automatisation. Vos réponses sont conservées. Réessayez.";
@@ -50,19 +51,7 @@ export const createAutomationFlow: NonNullable<WorkflowsPlatform["createAutomati
  * The Review Screen link the `automation-flows` chat skill ends with
  * (`screenpipe://flows/<id>`).
  */
-export function flowReviewLink(flowId: string): string {
-  return `screenpipe://flows/${encodeURIComponent(flowId)}`;
-}
-
-function flowIdFromReviewLink(href: string): string | null {
-  try {
-    const url = new URL(href);
-    if (url.protocol !== "screenpipe:" || url.host !== "flows") return null;
-    return decodeURIComponent(url.pathname.replace(/^\/+/, "").split("/")[0] ?? "") || null;
-  } catch {
-    return null;
-  }
-}
+export { flowReviewLink };
 
 /**
  * Opens the Review Screen a chat link points at; false when `href` is not a
@@ -75,15 +64,13 @@ export async function openFlowReviewLink(href: string): Promise<boolean> {
   if (window.location.pathname === "/home") {
     await openFlowReview(flowId);
   } else {
-    await commands.showWindowActivated({
-      Home: { page: `pipes&tab=flows&flow=${encodeURIComponent(flowId)}` },
-    });
+    await commands.showWindowActivated({ Home: { page: flowReviewDestination(flowId).page } });
   }
   return true;
 }
 
 async function openFlowReview(flowId: string): Promise<void> {
-  const url = `/home?section=pipes&tab=flows&flow=${encodeURIComponent(flowId)}`;
+  const { url } = flowReviewDestination(flowId);
   // The Automations view reads ?tab=flows&flow= when it mounts; one that is
   // already mounted (kept hidden behind Workflows) follows `switch-pipes-tab`.
   window.history.replaceState(window.history.state, "", url);

@@ -18,11 +18,21 @@ export type LastExecution = {
   startedAt: string;
 };
 
+/**
+ * The latest finished Run, when it failed (ticket 24): the Flow shows red
+ * until a later Run succeeds. A Run in progress neither sets nor clears it.
+ */
+export type FailedRun = {
+  executionId: string;
+  startedAt: string;
+};
+
 export type FlowSummary = {
   id: string;
   name: string;
   status: FlowStatus;
   lastExecution: LastExecution | null;
+  failedRun: FailedRun | null;
 };
 
 export type FlowNode = {

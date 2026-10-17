@@ -324,6 +324,9 @@ pub struct SCServer {
     pub flow_activation_key: Option<crate::automation_flows::FlowActivationKey>,
     /// How long switching a Flow off waits for an execution n8n is running.
     pub flow_running_wait: crate::automation_flows::RunningWait,
+    /// Where a Failed Run of a Flow is notified: the desktop app's `/notify`
+    /// route. `None` sends nothing.
+    pub flow_notify_url: Option<String>,
 }
 
 fn should_advertise_mdns(addr: SocketAddr) -> bool {
@@ -426,6 +429,7 @@ impl SCServer {
             advertise_mdns: should_advertise_mdns(addr),
             flow_activation_key: None,
             flow_running_wait: Default::default(),
+            flow_notify_url: Some(crate::automation_flows::DEFAULT_NOTIFY_URL.to_string()),
         }
     }
 
@@ -1496,6 +1500,7 @@ impl SCServer {
                 self.flow_activation_key.clone(),
                 self.workflow_catalog_dir.clone(),
                 self.flow_running_wait,
+                self.flow_notify_url.clone(),
             ),
         );
 

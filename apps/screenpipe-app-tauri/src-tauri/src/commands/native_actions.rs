@@ -871,6 +871,9 @@ pub(crate) fn dispatch_notification_action(json: String) {
         if crate::notifications::workflow::open_review(app, &url) {
             return;
         }
+        if open_flow_review(app, &url) {
+            return;
+        }
 
         let is_in_app = url.starts_with("screenpipe://");
         let app_clone = app.clone();
@@ -1014,6 +1017,9 @@ pub(crate) fn dispatch_notification_action(json: String) {
         // screenpipe:// URL into "link". We route on actual scheme, not on
         // the declared type, so a typo doesn't break the click.
         if crate::notifications::workflow::open_review(app, &url) {
+            return;
+        }
+        if open_flow_review(app, &url) {
             return;
         }
 
@@ -1207,6 +1213,45 @@ fn notification_deeplink_target(url: &str) -> ShowRewindWindow {
     } else {
         ShowRewindWindow::Main
     }
+}
+
+/// `screenpipe://flows/<id>` (an Automation Flow's Failed Run notification,
+/// ticket 24): the Home page of that Flow's Review Screen.
+fn flow_review_page(url: &str) -> Option<String> {
+    let id = url
+        .strip_prefix("screenpipe://flows/")?
+        .split(['/', '?', '#'])
+        .next()?;
+    let valid = !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    valid.then(|| format!("pipes&tab=flows&flow={id}"))
+}
+
+/// Opens a Flow's Review Screen in Home: the initial Home URL for a cold
+/// window, `navigate` events for one already open (the webview forwards
+/// `tab=flows&flow=` to the Automations view).
+fn open_flow_review(app: &tauri::AppHandle, url: &str) -> bool {
+    let Some(page) = flow_review_page(url) else {
+        return false;
+    };
+    let target = format!("/home?section={page}");
+    let app_for_show = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(e) = (ShowRewindWindow::Home { page: Some(page) }).show(&app_for_show) {
+            error!("failed to open the Flow's Review Screen: {}", e);
+        }
+    });
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        for delay in [0_u64, 250, 750, 1500] {
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            let _ = app.emit("navigate", serde_json::json!({ "url": target }));
+        }
+    });
+    true
 }
 
 fn emit_notification_deeplink(app: &tauri::AppHandle, url: String) {
@@ -1956,6 +2001,23 @@ mod tests {
             crate::window::ShowRewindWindow::Home { page: Some(page) }
                 if page == "activity"
         ));
+    }
+
+    #[test]
+    fn flow_notification_deeplink_opens_that_flows_review_screen() {
+        assert_eq!(
+            flow_review_page("screenpipe://flows/spNovaFlow000001").as_deref(),
+            Some("pipes&tab=flows&flow=spNovaFlow000001")
+        );
+        for other in [
+            "screenpipe://flows/",
+            "screenpipe://flows/a&section=settings",
+            "screenpipe://flows/../x",
+            "screenpipe://workflows?workflow=wf-one",
+            "https://flows/x",
+        ] {
+            assert_eq!(flow_review_page(other), None, "{other}");
+        }
     }
 
     #[test]

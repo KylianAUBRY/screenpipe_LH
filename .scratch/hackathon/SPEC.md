@@ -76,6 +76,9 @@ type FlowSummary = {
   name: string;
   status: FlowStatus;
   lastExecution: { status: "success" | "error" | "running"; startedAt: string } | null;
+  // Ticket 24 (D16): the latest finished Run when it failed; the Flow shows red
+  // until a later Run succeeds. Running/canceled Runs neither set nor clear it.
+  failedRun: { executionId: string; startedAt: string } | null;
 };
 
 type Flow = FlowSummary & {
@@ -116,6 +119,7 @@ excluded from `nodes`. `sentence` is the node's `notes`.
 | `GET /automation-flows/:id/workflow` | For the chat: `{id, versionId, summary, workflow}`, the n8n workflow reduced to what an update accepts (no `active`, no tags). |
 | `PUT /automation-flows/:id` `{workflow, summary?}` | Chat modification: refuses (`400 invalid_workflow`, nothing changed) a workflow without nodes or connections or with a non-sticky node lacking `notes`; if active, unpublish first (log `paused_for_edit`); update in place with `publishIfActive=false`; log `modified`; both events `by: "chat"`. n8n's 400 → `400 invalid_workflow` with its message. Each node's `credentials` come from the current n8n workflow for nodes that keep their name and type, none for new or retyped nodes, never from the request. Returns `Flow`. |
 | `POST /automation-flows/:id/activate` `{versionId}` | Only from the user's click (ticket 14): needs header `x-screenpipe-flow-activation` with the app's UI credential (`403 activation_requires_user` otherwise) and the reviewed `versionId` (`400 version_required` when missing, `409 version_changed` when n8n moved on). n8n publish of that version; `reviewedVersionId = versionId`; log `activated`. |
+| `POST /automation-flows/failed-runs` `{executionId, workflowId}` | Ticket 24 (D16), called by the n8n error workflow (`infra/automation-flows/workflows/screenpipe-flow-errors.json`, installed once, tag `screenpipe-flow-errors`, named in every Flow's `settings.errorWorkflow` on create, import, adopt and chat update). Reads the execution in n8n; a failed Run of a Flow is notified once through `localhost:11435/notify` (Flow, failing step, email sender and subject, deeplink `screenpipe://flows/<id>`; never the body or the error message) → `{notified: true}`; otherwise `{notified: false, reason}`; unknown execution `404 run_not_found`; `/notify` refused `503 notify_failed`. |
 | `POST /automation-flows/:id/deactivate` | n8n unpublish; log `deactivated`, `by: "user"` with the UI credential header, `"api"` without. Open to any authenticated caller. |
 
 Every unpublish (deactivate, chat change of an active Flow, a pre-imported
