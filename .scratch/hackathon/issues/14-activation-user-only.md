@@ -13,6 +13,16 @@ context (see `crates/screenpipe-engine/src/routes/request_origin.rs`,
 UI-only credential or Tauri command. State-changing `/automation-flows` routes
 also require `Content-Type: application/json`.
 
+Orchestrator decision (2026-10-17): use the UI-only credential. The
+`x-screenpipe-client` header defaults to App when missing, so a header check
+alone does not stop the chat agent. The credential lives only in memory of
+the app process (engine + Tauri side) and reaches the webview only through a
+Tauri command; it is never put in an environment variable (child processes
+such as Pi inherit them), a file, a log or the local API key. Deactivation
+stays open to any authenticated caller (switching off is always safe). The
+browser mock keeps working through its mock engine; the live web dev loop may
+refuse activation, that is expected.
+
 **Blocked by:** None (can start immediately).
 
 **Status:** ready-for-agent

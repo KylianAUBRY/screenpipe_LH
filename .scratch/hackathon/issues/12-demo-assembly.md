@@ -10,7 +10,7 @@ bundled fixture is the final export from the demo n8n instance (credentials
 bound, ScreenPipe tool wired). Demo and reset scripts restore the start
 state between runs.
 
-**Blocked by:** 01, 04, 05, 06, 07, 08, 13.
+**Blocked by:** 01, 04, 05, 06, 07, 08, 13, 14, 15, 16.
 
 **Status:** ready-for-agent
 
