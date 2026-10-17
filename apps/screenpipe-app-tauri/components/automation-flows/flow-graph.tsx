@@ -5,8 +5,8 @@
 "use client";
 
 // Read-only picture of a Flow's n8n workflow for the Review Screen: each node
-// by its name, its one-sentence explanation on hover. Editing happens in n8n
-// ("Open in n8n").
+// by its name and two lines of its one-sentence explanation (all of it on
+// hover). Editing happens in n8n ("Open in n8n").
 
 import React, { useMemo } from "react";
 import {
@@ -22,14 +22,14 @@ import {
 } from "@xyflow/react";
 import type { Flow, FlowNode } from "./api";
 
-// Cards hold the step's name only, so they stay short and the fitted picture
-// zooms in enough to read it; n8n's own row spacing is kept as is.
-const NODE_WIDTH = 180;
+// Cards hold the name and two lines of the sentence: wide enough to read
+// without stretching, short enough that the fitted picture stays legible.
+const NODE_WIDTH = 220;
 const NODE_GAP = 32;
 const N8N_NODE_SIZE = 100;
-const SPREAD_Y = 1;
+const SPREAD_Y = 1.15;
 // First-render estimate only: the browser measures the real card height.
-const NODE_HEIGHT = 72;
+const NODE_HEIGHT = 110;
 const NO_SENTENCE = "No explanation for this step.";
 
 type StepNode = Node<{ node: FlowNode }, "step">;
@@ -52,7 +52,7 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
     <div
       data-testid={`flow-node-${node.id}`}
       title={node.sentence ?? NO_SENTENCE}
-      className="border border-border bg-background px-3 py-2.5"
+      className="border border-border bg-background p-3"
     >
       {HANDLES.map((handle) => (
         <Handle
@@ -64,11 +64,13 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
           className={HIDDEN_HANDLE}
         />
       ))}
-      {/* The step's name only, large enough to read in the fitted picture.
-          What it does is on hover (title) and for screen readers; the n8n
-          node type and the fixed facts stay in n8n ("Open in n8n"). */}
+      {/* The step's name, large enough to read in the fitted picture, then
+          two lines at most of what it does; the whole sentence is on hover.
+          The n8n node type and fixed facts stay in n8n ("Open in n8n"). */}
       <p className="break-words text-base font-medium leading-snug">{node.name}</p>
-      <p className="sr-only">{node.sentence ?? NO_SENTENCE}</p>
+      <p className="mt-1 line-clamp-2 break-words text-xs leading-snug text-muted-foreground">
+        {node.sentence ?? NO_SENTENCE}
+      </p>
     </div>
   );
 }
