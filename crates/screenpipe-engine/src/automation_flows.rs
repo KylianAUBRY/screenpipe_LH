@@ -365,6 +365,27 @@ impl N8nApi {
         }
     }
 
+    /// Every item of an n8n list endpoint, following its `nextCursor` (n8n
+    /// answers at most 250 per page).
+    async fn all_pages(&self, path: &str, query: &[(&str, &str)]) -> Result<Vec<Value>, FlowError> {
+        let mut items = Vec::new();
+        let mut cursor: Option<String> = None;
+        // Bounds a cursor that never ends: 40 pages of 250.
+        for _ in 0..40 {
+            let mut params = query.to_vec();
+            if let Some(cursor) = cursor.as_deref() {
+                params.push(("cursor", cursor));
+            }
+            let page = self.expect_ok(Method::GET, path, &params, None).await?;
+            items.extend(page["data"].as_array().into_iter().flatten().cloned());
+            match page["nextCursor"].as_str().filter(|next| !next.is_empty()) {
+                Some(next) if cursor.as_deref() != Some(next) => cursor = Some(next.to_string()),
+                _ => break,
+            }
+        }
+        Ok(items)
+    }
+
     /// The workflow, or `None` when n8n does not have it (deleted or archived).
     async fn workflow(&self, id: &str) -> Result<Option<Value>, FlowError> {
         let (status, value) = self
@@ -400,14 +421,11 @@ impl N8nApi {
     }
 
     async fn find_tag(&self) -> Result<Option<String>, FlowError> {
-        let tags = self
-            .expect_ok(Method::GET, "/tags", &[("limit", "250")], None)
-            .await?;
-        Ok(tags["data"].as_array().and_then(|tags| {
-            tags.iter()
-                .find(|tag| tag["name"] == FLOW_TAG)
-                .and_then(|tag| tag["id"].as_str().map(str::to_string))
-        }))
+        let tags = self.all_pages("/tags", &[("limit", "250")]).await?;
+        Ok(tags
+            .iter()
+            .find(|tag| tag["name"] == FLOW_TAG)
+            .and_then(|tag| tag["id"].as_str().map(str::to_string)))
     }
 
     /// Adds [`FLOW_TAG`] to the workflow's tags and returns it re-read.
@@ -823,16 +841,11 @@ async fn build_flow(api: &N8nApi, workflow: &Value, record: Option<&FlowRecord>)
 async fn list_flows(State(state): State<FlowsState>) -> Result<Json<Vec<FlowSummary>>, FlowError> {
     let api = N8nApi::from_connection(&state).await?;
     let store = FlowStore::load(&state.screenpipe_dir)?;
-    let page = api
-        .expect_ok(
-            Method::GET,
-            "/workflows",
-            &[("tags", FLOW_TAG), ("limit", "250")],
-            None,
-        )
+    let workflows = api
+        .all_pages("/workflows", &[("tags", FLOW_TAG), ("limit", "250")])
         .await?;
     let mut flows = Vec::new();
-    for workflow in page["data"].as_array().into_iter().flatten() {
+    for workflow in &workflows {
         if !has_flow_tag(workflow) || workflow["isArchived"] == true {
             continue;
         }

@@ -42,6 +42,9 @@ struct N8nState {
     /// When set, publishing answers 400 with this message (e.g. a trigger
     /// whose credentials n8n cannot use).
     refuse_publish: Option<String>,
+    /// When set, the workflow list answers at most this many per page (n8n
+    /// pages by `limit` and an opaque `cursor`).
+    page_size: Option<usize>,
 }
 
 #[derive(Clone, Default)]
@@ -117,7 +120,16 @@ impl Respond for FakeN8n {
                     })
                     .cloned()
                     .collect();
-                json_response(200, json!({"data": data, "nextCursor": null}))
+                let start: usize = query("cursor")
+                    .and_then(|cursor| cursor.strip_prefix("after-")?.parse().ok())
+                    .unwrap_or(0);
+                let limit: usize = query("limit").and_then(|l| l.parse().ok()).unwrap_or(100);
+                let end = (start + state.page_size.unwrap_or(limit).min(limit)).min(data.len());
+                let next = (end < data.len()).then(|| format!("after-{end}"));
+                json_response(
+                    200,
+                    json!({"data": data[start.min(end)..end], "nextCursor": next}),
+                )
             }
             ("POST", ["workflows"]) => {
                 if body.get("active").is_some() || body.get("tags").is_some() {
@@ -612,7 +624,11 @@ async fn create_switches_off_a_pre_imported_copy_that_was_left_on() {
     assert!(status.is_success(), "{status} {flow}");
     assert_eq!(flow["id"], "spNovaFlow000001");
     assert_eq!(flow["status"], "draft");
-    assert_eq!(flow["activationLog"], json!([]), "nothing logged as activated");
+    assert_eq!(
+        flow["activationLog"],
+        json!([]),
+        "nothing logged as activated"
+    );
     assert_eq!(n8n.workflows()[0]["active"], false);
     assert_eq!(
         posts_ending_with(&server, "/unpublish").await,
@@ -776,6 +792,50 @@ async fn list_shows_only_flows_with_status_and_last_run() {
             "status": "draft",
             "lastExecution": {"status": "error", "startedAt": null}
         }])
+    );
+}
+
+#[tokio::test]
+async fn list_follows_n8n_pages_to_show_every_flow() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    n8n.0.lock().unwrap().page_size = Some(2);
+    for i in 1..=5 {
+        n8n.add_workflow(json!({
+            "id": format!("flow{i}"), "name": format!("Flow {i}"), "active": false,
+            "versionId": "v", "tags": [{"id": "t", "name": "screenpipe-flow"}],
+            "nodes": [], "connections": {}
+        }));
+    }
+    n8n.add_workflow(json!({
+        "id": "other", "name": "Unrelated", "active": false, "versionId": "v",
+        "tags": [], "nodes": [], "connections": {}
+    }));
+
+    let (status, list) = app.call("GET", "/automation-flows", None).await;
+
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let ids: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|flow| flow["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["flow1", "flow2", "flow3", "flow4", "flow5"]);
+    // Every page keeps the tag filter.
+    let pages: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method.as_str() == "GET" && r.url.path() == "/api/v1/workflows")
+        .map(|r| r.url.query().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(pages.len(), 3, "{pages:?}");
+    assert!(
+        pages.iter().all(|q| q.contains("tags=screenpipe-flow")),
+        "{pages:?}"
     );
 }
 
