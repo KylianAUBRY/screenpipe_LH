@@ -32,6 +32,7 @@ const workflow = JSON.parse(raw) as {
   nodes: N8nNode[];
   connections: Record<string, Record<string, { node: string; type: string; index: number }[][]>>;
   settings: Record<string, unknown>;
+  staticData?: Record<string, Record<string, unknown>>;
   tags: { name: string }[];
 };
 
@@ -65,6 +66,18 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(JSON.parse(trigger.parameters.options.customEmailConfig)).toEqual(["UNSEEN"]);
     expect(trigger.parameters.format).toBe("simple");
     expect(trigger.credentials?.imap.id).toBe("spNovaImap000001");
+  });
+
+  test("every activation catches up the unread emails, even one that arrived just before or during a pause", () => {
+    // n8n's IMAP trigger (v2) fetches on a new arrival only, unless it has a
+    // last processed UID in its static data: then each activation catches up
+    // every UNSEEN email from that UID. Seeding it makes a freshly created
+    // Flow behave the same; the trigger marks emails read, so each is
+    // processed once.
+    const trigger = onlyNode("n8n-nodes-base.emailReadImap");
+    expect(trigger.typeVersion).toBe(2.2);
+    const seed = workflow.staticData?.[`node:${trigger.name}`];
+    expect(seed?.lastMessageUid).toBe(1);
   });
 
   test("one AI Agent judges each email, through ScreenPipe's local AI proxy, into a fixed answer shape", () => {

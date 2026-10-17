@@ -259,6 +259,9 @@
     "executionOrder": "v1",
     "availableInMCP": true
   },
+  "staticData": {
+    "node:Nouvel email support": { "lastMessageUid": 1 }
+  },
   "tags": [{ "name": "screenpipe-flow" }],
   "pinData": {}
 }
