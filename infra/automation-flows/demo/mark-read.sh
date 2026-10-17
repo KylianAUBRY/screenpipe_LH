@@ -51,6 +51,7 @@ const fail = error => {
   process.exit(5);
 };
 client.on("error", fail);
+setTimeout(() => fail(new Error("no answer from the IMAP server within 60 s")), 60_000).unref();
 const unseen = async () => (await client.search({ seen: false }, { uid: true })) || [];
 (async () => {
   await client.connect();
@@ -66,6 +67,6 @@ const unseen = async () => (await client.search({ seen: false }, { uid: true }))
     lock.release();
   }
   await client.logout();
-  console.log(JSON.stringify({ marked, unread }));
+  process.stdout.write(`${JSON.stringify({ marked, unread })}\n`, () => process.exit(0));
 })().catch(fail);
 JS
