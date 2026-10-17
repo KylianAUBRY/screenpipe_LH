@@ -55,6 +55,11 @@ struct N8nState {
     orphaned: Vec<String>,
     /// When set, the credentials n8n holds instead of the demo's four.
     credentials: Option<Vec<Value>>,
+    /// How the next retried runs end (`POST /executions/:id/retry`), in
+    /// order; a run retried with none queued succeeds without data.
+    retries: Vec<Value>,
+    /// When set, a retry answers with this status and message.
+    refuse_retry: Option<(u16, String)>,
 }
 
 #[derive(Clone, Default)]
@@ -128,6 +133,22 @@ impl FakeN8n {
 
     fn orphaned(&self) -> Vec<String> {
         self.0.lock().unwrap().orphaned.clone()
+    }
+
+    /// How the next retried run ends: its status and run data, as n8n
+    /// answers a retry (it waits for the retried run to finish).
+    fn retry_ends_as(&self, run: Value) {
+        self.0.lock().unwrap().retries.push(run);
+    }
+
+    fn execution(&self, id: &str) -> Value {
+        let state = self.0.lock().unwrap();
+        state
+            .executions
+            .iter()
+            .find(|e| e["id"] == id)
+            .cloned()
+            .expect("execution exists in fake n8n")
     }
 
     /// The credentials n8n holds from now on (`id`, `name`, `type`).
@@ -357,6 +378,45 @@ impl Respond for FakeN8n {
                 }
                 None => json_response(404, json!({"message": "Not Found"})),
             },
+            // Like n8n 2.42.2's `ExecutionService.retry`: only a run that did
+            // not finish; the retry is a new execution `retryOf` the old one,
+            // and a successful retry is recorded on the old one.
+            ("POST", ["executions", id, "retry"]) => {
+                if let Some((status, message)) = state.refuse_retry.clone() {
+                    return json_response(status, json!({"message": message}));
+                }
+                let Some(original) = state.executions.iter().find(|e| e["id"] == *id).cloned()
+                else {
+                    return json_response(
+                        404,
+                        json!({"message": format!("The execution with the ID \"{id}\" does not exist.")}),
+                    );
+                };
+                if original["finished"] == true {
+                    return json_response(
+                        409,
+                        json!({"message": "The execution succeeded, so it cannot be retried."}),
+                    );
+                }
+                let mut retried = if state.retries.is_empty() {
+                    json!({"status": "success", "finished": true})
+                } else {
+                    state.retries.remove(0)
+                };
+                let retry_id = format!("{id}-retry{}", state.executions.len() + 1);
+                retried["id"] = json!(retry_id);
+                retried["workflowId"] = original["workflowId"].clone();
+                retried["mode"] = json!("retry");
+                retried["retryOf"] = json!(id);
+                retried["startedAt"] = json!("2026-10-17T12:00:00.000Z");
+                retried["stoppedAt"] = json!("2026-10-17T12:00:09.000Z");
+                if retried["status"] == "success" {
+                    let original = state.executions.iter_mut().find(|e| e["id"] == *id).unwrap();
+                    original["retrySuccessId"] = json!(retry_id);
+                }
+                state.executions.insert(0, retried.clone());
+                json_response(200, retried)
+            }
             ("GET", ["tags"]) => json_response(200, json!({"data": state.tags})),
             ("POST", ["tags"]) => {
                 if state.tags.iter().any(|t| t["name"] == body["name"]) {
@@ -3494,6 +3554,16 @@ async fn a_failed_run_is_notified_with_its_email_and_the_flow_keeps_running() {
     assert_eq!(notice["actions"][0]["type"], "deeplink");
     assert_eq!(notice["actions"][0]["url"], review);
     assert_eq!(notice["source_url"], review);
+    // « Relancer » (D17): the app calls the retry route of this run, then
+    // opens the Review Screen, where the Activity shows how it ended.
+    assert_eq!(
+        notice["actions"][1],
+        json!({
+            "type": "api", "label": "Relancer", "method": "POST",
+            "url": format!("/automation-flows/{id}/runs/exec-failed/retry"),
+            "body": {}, "deeplink_url": review
+        })
+    );
     // One notification per failed run: the notification server drops a
     // repeated id, so a second report of the same run is never shown twice.
     assert_eq!(
@@ -3538,6 +3608,8 @@ async fn a_failing_trigger_is_notified_with_its_error() {
         sent[0]["actions"][0]["url"],
         format!("screenpipe://flows/{id}")
     );
+    // No run, so nothing to retry.
+    assert_eq!(sent[0]["actions"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -4257,4 +4329,254 @@ async fn a_finished_draft_reports_its_failed_runs_like_any_flow() {
     let draft = n8n.workflows().into_iter().find(|w| w["id"] == id.as_str()).unwrap();
     assert_eq!(draft["settings"]["errorWorkflow"], errors[0]["id"]);
     assert_eq!(flow["versionId"], draft["versionId"]);
+}
+
+// ---------------------------------------------------------------------------
+// Retry a failed run (SPEC D17)
+// ---------------------------------------------------------------------------
+
+async fn retry(app: &App, id: &str, execution_id: &str) -> (StatusCode, Value) {
+    app.ui_call(
+        "POST",
+        &format!("/automation-flows/{id}/runs/{execution_id}/retry"),
+        Some(json!({})),
+    )
+    .await
+}
+
+/// The run data of a retry of [`failed_run`] that created the ticket.
+fn ticket_created_on_retry() -> Value {
+    json!({
+        "status": "success", "finished": true,
+        "data": {"resultData": {
+            "runData": {
+                "Nouvel email support": [{"startTime": 1, "data": {"main": [[{"json": {
+                    "from": "Claire Martin <claire.martin@client.fr>",
+                    "subject": "Export PDF vide depuis la mise à jour"
+                }}]]}}],
+                "Analyser l'email (IA)": [{"startTime": 2, "data": {"main": [[{"json": {
+                    "output": {"type": "Bug", "confidence": "high", "reason": "L'export PDF est cassé."}
+                }}]]}}],
+                "Créer le ticket Jira": [{"startTime": 5, "data": {"main": [[{"json": {
+                    "id": "30", "key": "NOVA-30", "self": "https://x.atlassian.net/rest/api/3/issue/30"
+                }}]]}}]
+            },
+            "lastNodeExecuted": "Créer le ticket Jira"
+        }}
+    })
+}
+
+#[tokio::test]
+async fn retrying_a_failed_run_runs_it_again_in_n8n_and_says_how_it_ended() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("exec-failed", &id));
+    n8n.retry_ends_as(ticket_created_on_retry());
+
+    let (status, run) = retry(&app, &id, "exec-failed").await;
+
+    assert_eq!(status, StatusCode::OK, "{run}");
+    // n8n retried that run, with the Flow as it is now (the version the
+    // user reviewed and activated): a fix made since is what runs.
+    let retries = posts_ending_with(&server, "/retry").await;
+    assert_eq!(retries.len(), 1, "{retries:?}");
+    assert_eq!(retries[0].0, "/api/v1/executions/exec-failed/retry");
+    assert_eq!(retries[0].1, json!({"loadWorkflow": true}));
+    // The answer is the retried run, as the Activity lists it.
+    let retry_id = n8n.execution("exec-failed")["retrySuccessId"].clone();
+    assert_eq!(run["executionId"], retry_id);
+    assert_eq!(run["outcome"], "ticket");
+    assert_eq!(run["ticket"], "NOVA-30");
+    assert_eq!(
+        run["email"]["subject"],
+        "Export PDF vide depuis la mise à jour"
+    );
+}
+
+#[tokio::test]
+async fn a_retry_that_fails_again_says_where_and_why() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("exec-failed", &id));
+    n8n.retry_ends_as(json!({
+        "status": "error", "finished": false,
+        "data": {"resultData": {
+            "runData": {},
+            "lastNodeExecuted": "Chercher le ticket de cet email",
+            "error": {"message": "503 Service Unavailable"}
+        }}
+    }));
+
+    let (status, run) = retry(&app, &id, "exec-failed").await;
+
+    assert_eq!(status, StatusCode::OK, "{run}");
+    assert_eq!(run["outcome"], "failed");
+    assert_eq!(
+        run["reason"],
+        "Échec à l'étape « Chercher le ticket de cet email » : 503 Service Unavailable"
+    );
+}
+
+#[tokio::test]
+async fn only_a_failed_run_of_that_flow_is_retried() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("exec-other", "someOtherWorkflow"));
+    n8n.add_execution(demo_run(
+        "exec-ticket",
+        &id,
+        "2026-10-17T10:00:00.000Z",
+        ("Loris Omont <loris@novadesk.fr>", "NovaPay refuse les centimes"),
+        ai_answer("Bug", "high", "Un défaut de NovaPay."),
+        &[],
+    ));
+    n8n.add_execution(json!({
+        "id": "exec-running", "workflowId": id, "status": "running", "finished": false,
+        "startedAt": "2026-10-17T11:00:00.000Z", "stoppedAt": null
+    }));
+    let mut already = failed_run("exec-retried", &id);
+    already["retrySuccessId"] = json!("exec-retried-ok");
+    n8n.add_execution(already);
+
+    for run in ["exec-missing", "exec-other", "bad%20id"] {
+        let (status, body) = retry(&app, &id, run).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{run}: {body}");
+        assert_eq!(body["error"], "run_not_found", "{run}");
+    }
+    // A run that went through, is still going, or was already retried
+    // successfully has nothing to retry (a double click, or the notification
+    // after the Review Screen).
+    for run in ["exec-ticket", "exec-running", "exec-retried"] {
+        let (status, body) = retry(&app, &id, run).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{run}: {body}");
+        assert_eq!(body["error"], "run_not_failed", "{run}");
+    }
+    let (status, body) = retry(&app, "unknownFlow", "exec-other").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "flow_not_found");
+
+    assert!(posts_ending_with(&server, "/retry").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_retry_n8n_refuses_is_reported_with_its_reason() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("exec-failed", &id));
+    n8n.0.lock().unwrap().refuse_retry = Some((
+        500,
+        "Could not find the node \"Créer le ticket Jira\" in workflow.".to_string(),
+    ));
+
+    let (status, body) = retry(&app, &id, "exec-failed").await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_eq!(body["error"], "n8n_failed");
+    assert!(
+        body["detail"].as_str().unwrap().contains("Could not find the node"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_retry_never_runs_a_change_nobody_reviewed_or_published() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("exec-1", &id));
+    n8n.add_execution(failed_run("exec-2", &id));
+    n8n.add_execution(failed_run("exec-3", &id));
+
+    // A chat change waiting for review: n8n's saved Flow is not what the
+    // user approved, so the run is retried as it ran.
+    n8n.edit_workflow(&id, |w| {
+        w["versionId"] = json!("chat-edit");
+        w["active"] = json!(false);
+        w["activeVersionId"] = Value::Null;
+    });
+    let (status, body) = retry(&app, &id, "exec-1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // A fix made and published in the n8n editor runs on every email
+    // already: the retry takes it too.
+    n8n.edit_workflow(&id, |w| {
+        w["versionId"] = json!("n8n-fix");
+        w["active"] = json!(true);
+        w["activeVersionId"] = json!("n8n-fix");
+    });
+    let (status, body) = retry(&app, &id, "exec-2").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Saved in n8n but not published, while the reviewed version runs.
+    n8n.edit_workflow(&id, |w| {
+        w["versionId"] = json!("n8n-draft");
+        w["activeVersionId"] = json!("n8n-fix");
+    });
+    let (status, body) = retry(&app, &id, "exec-3").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let sent: Vec<(String, Value)> = posts_ending_with(&server, "/retry").await;
+    assert_eq!(
+        sent,
+        vec![
+            ("/api/v1/executions/exec-1/retry".to_string(), json!({"loadWorkflow": false})),
+            ("/api/v1/executions/exec-2/retry".to_string(), json!({"loadWorkflow": true})),
+            ("/api/v1/executions/exec-3/retry".to_string(), json!({"loadWorkflow": false})),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn activity_offers_to_retry_only_failed_runs_not_retried_yet() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("exec-fixed", &id));
+    n8n.add_execution(failed_run("exec-again", &id));
+    n8n.add_execution(failed_run("exec-new", &id));
+    n8n.add_execution(demo_run(
+        "exec-ticket",
+        &id,
+        "2026-10-17T10:00:00.000Z",
+        ("Loris Omont <loris@novadesk.fr>", "NovaPay refuse les centimes"),
+        ai_answer("Bug", "high", "Un défaut de NovaPay."),
+        &[],
+    ));
+    // One retry went through, one failed again (n8n then records nothing on
+    // the original, only `retryOf` on the new run).
+    retry(&app, &id, "exec-fixed").await;
+    n8n.retry_ends_as(json!({
+        "status": "error", "finished": false,
+        "data": {"resultData": {"runData": {}, "lastNodeExecuted": "Chercher le ticket de cet email",
+            "error": {"message": "503 Service Unavailable"}}}
+    }));
+    let (_, failed_again) = retry(&app, &id, "exec-again").await;
+
+    let (status, runs) = activity(&app, &id).await;
+
+    assert_eq!(status, StatusCode::OK, "{runs}");
+    let retried = |execution_id: &str| {
+        runs.as_array()
+            .unwrap()
+            .iter()
+            .find(|run| run["executionId"] == execution_id)
+            .unwrap_or_else(|| panic!("{execution_id} in {runs}"))["retried"]
+            .clone()
+    };
+    assert_eq!(retried("exec-fixed"), true);
+    assert_eq!(retried("exec-again"), true);
+    assert_eq!(retried("exec-new"), false);
+    assert_eq!(retried("exec-ticket"), false);
+    // The run that failed again is the one to retry now.
+    assert_eq!(retried(failed_again["executionId"].as_str().unwrap()), false);
 }

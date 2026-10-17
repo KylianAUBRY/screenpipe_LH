@@ -52,6 +52,7 @@ use tokio::sync::Mutex;
 
 mod activity;
 mod failures;
+mod retry;
 pub use failures::{FailureReports, ERROR_WORKFLOW_TAG};
 
 /// n8n tag that marks a workflow as a ScreenPipe Automation Flow.
@@ -260,6 +261,7 @@ where
         .route("/:id/deactivate", post(deactivate_flow))
         .route("/:id/failures", post(failures::report_failure))
         .route("/:id/activity", get(activity::flow_activity))
+        .route("/:id/runs/:run/retry", post(retry::retry_run))
         .layer(middleware::from_fn(require_json))
         .with_state(state)
 }
@@ -421,6 +423,14 @@ enum FlowError {
     UnderConstruction,
     /// A finished Flow, on a route for drafts under construction.
     NotUnderConstruction,
+    /// Retry (D17): n8n has no such run of this Flow.
+    RunNotFound,
+    /// Retry (D17): the run did not fail, is still running, or was already
+    /// retried successfully.
+    RunNotFailed,
+    /// Retry (D17): n8n still runs the retried run when the engine stops
+    /// waiting; its outcome shows in the Activity.
+    RetryStillRunning,
 }
 
 impl IntoResponse for FlowError {
@@ -506,6 +516,21 @@ impl IntoResponse for FlowError {
                 json!({
                     "error": "flow_not_under_construction",
                     "detail": "this Flow is finished: change it with PUT /automation-flows/<id>",
+                }),
+            ),
+            FlowError::RunNotFound => (StatusCode::NOT_FOUND, json!({"error": "run_not_found"})),
+            FlowError::RunNotFailed => (
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "run_not_failed",
+                    "detail": "this run did not fail, is still running, or was already retried successfully: nothing to retry",
+                }),
+            ),
+            FlowError::RetryStillRunning => (
+                StatusCode::GATEWAY_TIMEOUT,
+                json!({
+                    "error": "retry_still_running",
+                    "detail": "n8n is still running the retried run; its outcome will show in the Flow's Activity",
                 }),
             ),
             FlowError::Internal(detail) => {

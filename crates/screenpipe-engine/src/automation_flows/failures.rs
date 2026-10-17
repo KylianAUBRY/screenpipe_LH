@@ -184,8 +184,8 @@ pub(super) async fn report_failure(
 }
 
 /// The notification of a failed run of Flow `flow_id`: the email's sender
-/// and subject when the run had one, the failing step and its error, and the
-/// Review Screen link. Its id names the run, so the notification server
+/// and subject when the run had one, the failing step and its error, the
+/// Review Screen link and « Relancer ». Its id names the run, so the notification server
 /// shows each failed run once however many times it is reported.
 pub(super) fn failure_notice(
     flow_id: &str,
@@ -210,10 +210,25 @@ pub(super) fn failure_notice(
     }
     lines.push("Le Flow reste actif.".to_string());
     let review = format!("screenpipe://flows/{flow_id}");
-    let run = execution
-        .and_then(|e| e["id"].as_str())
+    let execution_id = execution.and_then(|e| e["id"].as_str());
+    let run = execution_id
         .map(str::to_string)
         .unwrap_or_else(|| format!("trigger-{}", chrono::Utc::now().timestamp_millis()));
+    let mut actions =
+        vec![json!({"type": "deeplink", "label": "Voir le Flow", "url": review, "primary": true})];
+    // « Relancer » (D17): the app calls the retry route with its local API
+    // key, then opens the Review Screen, whose Activity shows how it ended.
+    // A failing trigger has no run to retry.
+    if let Some(execution_id) = execution_id {
+        actions.push(json!({
+            "type": "api",
+            "label": "Relancer",
+            "method": "POST",
+            "url": format!("/automation-flows/{flow_id}/runs/{execution_id}/retry"),
+            "body": {},
+            "deeplink_url": review,
+        }));
+    }
     json!({
         "id": format!("automation-flow-failure:{flow_id}:{run}"),
         "title": format!("Échec du Flow « {flow_name} »"),
@@ -222,7 +237,7 @@ pub(super) fn failure_notice(
         "priority": "high",
         "transient": false,
         "source_url": review,
-        "actions": [{"type": "deeplink", "label": "Voir le Flow", "url": review, "primary": true}],
+        "actions": actions,
     })
 }
 

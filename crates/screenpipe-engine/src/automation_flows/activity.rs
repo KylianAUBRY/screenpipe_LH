@@ -23,6 +23,15 @@ pub(super) struct FlowRun {
     email: Option<HandledEmail>,
     /// The Jira ticket's key, when the run created one.
     ticket: Option<String>,
+    /// A failed run already run again (D17): a retry of it succeeded, or a
+    /// later retry of it is listed (which is then the one to retry).
+    retried: bool,
+}
+
+impl FlowRun {
+    pub(super) fn failed(&self) -> bool {
+        self.outcome == "failed"
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -49,10 +58,18 @@ pub(super) async fn flow_activity(
             None,
         )
         .await?;
-    let mut runs: Vec<FlowRun> = page["data"]
+    let executions = page["data"]
         .as_array()
-        .map(|executions| executions.iter().filter_map(flow_run).collect())
+        .map(Vec::as_slice)
         .unwrap_or_default();
+    let retried: std::collections::HashSet<&str> = executions
+        .iter()
+        .filter_map(|execution| execution["retryOf"].as_str())
+        .collect();
+    let mut runs: Vec<FlowRun> = executions.iter().filter_map(flow_run).collect();
+    for run in runs.iter_mut().filter(|run| run.failed()) {
+        run.retried |= retried.contains(run.execution_id.as_str());
+    }
     runs.sort_by_key(|run| std::cmp::Reverse(instant(&run.started_at)));
     Ok(Json(runs))
 }
@@ -63,7 +80,7 @@ fn instant(at: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
 
 /// What one execution did; `None` while it is still running (the email is
 /// not handled yet).
-fn flow_run(execution: &Value) -> Option<FlowRun> {
+pub(super) fn flow_run(execution: &Value) -> Option<FlowRun> {
     let result = &execution["data"]["resultData"];
     let succeeded = match execution["status"].as_str() {
         Some("success") => true,
@@ -84,6 +101,7 @@ fn flow_run(execution: &Value) -> Option<FlowRun> {
             reason: Some(failure_reason(result)),
             email,
             ticket: None,
+            retried: !execution["retrySuccessId"].is_null(),
         });
     }
     let items = output_items(result);
@@ -118,6 +136,7 @@ fn flow_run(execution: &Value) -> Option<FlowRun> {
         reason,
         email,
         ticket,
+        retried: false,
     })
 }
 
