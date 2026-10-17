@@ -54,7 +54,8 @@ export function flowReviewLink(flowId: string): string {
   return `screenpipe://flows/${encodeURIComponent(flowId)}`;
 }
 
-function flowIdFromReviewLink(href: string): string | null {
+/** The Flow a `screenpipe://flows/<id>` link (chat, failure notification) points at. */
+export function flowIdFromReviewLink(href: string): string | null {
   try {
     const url = new URL(href);
     if (url.protocol !== "screenpipe:" || url.host !== "flows") return null;
@@ -62,6 +63,11 @@ function flowIdFromReviewLink(href: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** The Home page (`showWindowActivated`) of a Flow's Review Screen. */
+export function flowReviewPage(flowId: string): string {
+  return `pipes&tab=flows&flow=${encodeURIComponent(flowId)}`;
 }
 
 /**
@@ -75,18 +81,33 @@ export async function openFlowReviewLink(href: string): Promise<boolean> {
   if (window.location.pathname === "/home") {
     await openFlowReview(flowId);
   } else {
-    await commands.showWindowActivated({
-      Home: { page: `pipes&tab=flows&flow=${encodeURIComponent(flowId)}` },
-    });
+    await commands.showWindowActivated({ Home: { page: flowReviewPage(flowId) } });
   }
   return true;
 }
 
 async function openFlowReview(flowId: string): Promise<void> {
-  const url = `/home?section=pipes&tab=flows&flow=${encodeURIComponent(flowId)}`;
-  // The Automations view reads ?tab=flows&flow= when it mounts; one that is
-  // already mounted (kept hidden behind Workflows) follows `switch-pipes-tab`.
+  const url = `/home?section=${flowReviewPage(flowId)}`;
   window.history.replaceState(window.history.state, "", url);
   await emit("navigate", { url });
-  window.dispatchEvent(new CustomEvent("switch-pipes-tab", { detail: { tab: "flows", flow: flowId } }));
+  showFlowsTab(flowId);
+}
+
+/**
+ * Home's `navigate` listener: a navigation to the Flows tab (Home brought up
+ * from another window, e.g. a failure notification) opens it on its Flow.
+ * False for any other navigation. Never emits, so it cannot loop.
+ */
+export function followFlowsNavigation(url: URL): boolean {
+  const params = url.searchParams;
+  if (params.get("section") !== "pipes" || params.get("tab") !== "flows") return false;
+  window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params}`);
+  showFlowsTab(params.get("flow"));
+  return true;
+}
+
+// The Automations view reads ?tab=flows&flow= when it mounts; one that is
+// already mounted (kept hidden behind Workflows) follows `switch-pipes-tab`.
+function showFlowsTab(flowId: string | null): void {
+  window.dispatchEvent(new CustomEvent("switch-pipes-tab", { detail: { tab: "flows", flow: flowId ?? undefined } }));
 }
