@@ -78,7 +78,16 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
       ? ui("1 question to answer")
       : pending.length
         ? ui("{count} questions to answer", { count: pending.length })
-        : ui("Ready to turn on");
+        : null;
+  // Once every question is answered, the header says it is ready, with the replay score.
+  const readyDetail =
+    flow.replay && score !== null
+      ? ui("same choices as you on {matched} of your last {total} {unit}", {
+          matched: score,
+          total: flow.replay.total,
+          unit,
+        })
+      : null;
 
   const switchFlow = async (on: boolean) => {
     setBusy(true);
@@ -97,19 +106,6 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
     }
   };
 
-  const turnOnButton = (testId: string) => (
-    <Button
-      size="sm"
-      className={HERO_BUTTON}
-      disabled={!ready || busy}
-      onClick={() => void switchFlow(true)}
-      data-testid={testId}
-    >
-      {busy ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Power className="h-4 w-4 mr-1.5" />}
-      TURN ON
-    </Button>
-  );
-
   return (
     <div className="space-y-8">
       <button
@@ -120,16 +116,34 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
         {ui("Back to recommendations")}
       </button>
 
-      {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      {/* Header, pinned while scrolling so TURN ON / PAUSE stay in reach */}
+      <div
+        className="sticky top-0 z-20 flex flex-wrap items-start justify-between gap-4 border-b border-border bg-background/95 py-3 backdrop-blur"
+        data-testid="flow-header"
+      >
         <div className="min-w-0 space-y-1.5">
           <h2 className="text-xl font-semibold tracking-tight">{flow.title}</h2>
           <p className="text-sm text-muted-foreground">{flow.learnedFrom}</p>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="flow-status">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground" data-testid="flow-status">
             <FlowStatusSquare status={status} />
             <span className={cn(running && "text-foreground")}>{statusLabel}</span>
             <span className="text-muted-foreground/50">·</span>
-            <span>{statusDetail}</span>
+            {statusDetail ? (
+              <span>{statusDetail}</span>
+            ) : (
+              <>
+                <span className="flex items-center gap-1.5 font-medium text-foreground">
+                  <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+                  {ui("Ready to turn on")}
+                </span>
+                {readyDetail && (
+                  <>
+                    <span className="text-muted-foreground/50">·</span>
+                    <span>{readyDetail}</span>
+                  </>
+                )}
+              </>
+            )}
           </div>
         </div>
         <div className="flex flex-shrink-0 items-center gap-2">
@@ -150,7 +164,16 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
               PAUSE
             </Button>
           ) : (
-            turnOnButton("flow-turn-on")
+            <Button
+              size="sm"
+              className={HERO_BUTTON}
+              disabled={!ready || busy}
+              onClick={() => void switchFlow(true)}
+              data-testid="flow-turn-on"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Power className="h-4 w-4 mr-1.5" />}
+              TURN ON
+            </Button>
           )}
         </div>
       </div>
@@ -196,6 +219,7 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
               </h3>
               <p className="mt-1 text-sm text-muted-foreground">
                 {ui("screenpipe could not settle these on its own. Your answers become rules.")}
+                {hasCustomAnswer(flow, answers) ? ` ${ui("Your own answers apply to new {unit}.", { unit })}` : ""}
               </p>
             </div>
             <div className="divide-y divide-border">
@@ -212,26 +236,6 @@ export function FlowReview({ flow, onBack }: { flow: AutomationFlow; onBack: () 
               ))}
             </div>
           </section>
-
-          {ready && (
-            <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border p-4" data-testid="flow-ready">
-              <CheckCircle2 className="h-5 w-5 shrink-0" aria-hidden />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">{ui("Ready to turn on")}</p>
-                <p className="text-sm text-muted-foreground">
-                  {flow.replay && score !== null
-                    ? ui("On your last {total} {unit}, it made the same choices as you {matched} times out of {total}.", {
-                        total: flow.replay.total,
-                        matched: score,
-                        unit,
-                      })
-                    : ui("Every question is answered.")}
-                  {hasCustomAnswer(flow, answers) ? ` ${ui("Your own answers apply to new {unit}.", { unit })}` : ""}
-                </p>
-              </div>
-              {turnOnButton("flow-turn-on-ready")}
-            </div>
-          )}
         </>
       )}
 

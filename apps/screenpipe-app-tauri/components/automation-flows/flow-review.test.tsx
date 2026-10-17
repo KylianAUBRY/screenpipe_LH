@@ -44,9 +44,12 @@ describe("flow review screen", () => {
     fireEvent.click(screen.getByRole("button", { name: "SAVE ANSWER" }));
 
     expect(screen.getByText("Your answer: “Because of Z”")).toBeTruthy();
-    expect(screen.getByTestId("flow-ready").textContent).toContain(
-      "On your last 4 examples, it made the same choices as you 3 times out of 4.",
-    );
+    const status = screen.getByTestId("flow-status").textContent;
+    expect(status).toContain("Ready to turn on");
+    expect(status).toContain("same choices as you on 3 of your last 4 examples");
+    expect(screen.getByTestId("flow-questions").textContent).toContain("Your own answers apply to new examples.");
+    expect(screen.getAllByRole("button", { name: /TURN ON/ })).toHaveLength(1);
+    expect(screen.getByTestId("flow-header").className).toContain("sticky");
     expect(turnOn().disabled).toBe(false);
 
     fireEvent.click(turnOn());
