@@ -166,7 +166,7 @@ function ReviewContent({
         <FlowGraph nodes={steps} edges={flow.edges} />
       </section>
 
-      <FlowActivity flowId={flow.id} api={api} />
+      <FlowActivity flowId={flow.id} lastExecution={flow.lastExecution} api={api} />
 
       <section className="space-y-2">
         <SectionLabel>Historique d&apos;activation</SectionLabel>

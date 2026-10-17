@@ -38,8 +38,14 @@ function asFlowsError(error: unknown): FlowsApiError {
  * [`REFRESH_INTERVAL_MS`], so a new run, a chat change or an edit in n8n
  * shows up on its own. A background read never goes through "loading" and
  * keeps what is on screen when it fails or brings nothing new.
+ * `{ refresh: false }` turns those background reads off: the data is read
+ * again only when `key` changes or on `reload`.
  */
-export function useFlowsLoad<T>(load: () => Promise<T>, key: string) {
+export function useFlowsLoad<T>(
+  load: () => Promise<T>,
+  key: string,
+  { refresh = true }: { refresh?: boolean } = {},
+) {
   const [result, setResult] = useState<Load<T>>({ state: "loading" });
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -84,18 +90,19 @@ export function useFlowsLoad<T>(load: () => Promise<T>, key: string) {
   }, [key, run]);
 
   useEffect(() => {
-    const refresh = () => {
+    if (!refresh) return;
+    const background = () => {
       if (document.visibilityState === "visible") run("background");
     };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    const timer = window.setInterval(refresh, REFRESH_INTERVAL_MS);
+    window.addEventListener("focus", background);
+    document.addEventListener("visibilitychange", background);
+    const timer = window.setInterval(background, REFRESH_INTERVAL_MS);
     return () => {
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", background);
+      document.removeEventListener("visibilitychange", background);
       window.clearInterval(timer);
     };
-  }, [run]);
+  }, [run, refresh]);
 
   const reload = useCallback(() => run("foreground"), [run]);
   const replace = useCallback((data: T, options?: { read?: boolean }) => {

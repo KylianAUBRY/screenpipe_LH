@@ -48,12 +48,13 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use futures::StreamExt;
 use reqwest::Method;
 use screenpipe_connect::connections::{load_connection, n8n};
 use screenpipe_secrets::SecretStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -204,6 +205,10 @@ impl std::fmt::Debug for FlowActivationKey {
 pub struct RunningWait {
     pub interval: Duration,
     pub deadline: Duration,
+    /// How long « Relancer » waits for n8n's replay of a Run (n8n answers
+    /// once it has finished) before answering that it is still running
+    /// (`202`). The demo's AI step alone takes up to 30 s.
+    pub retry: Duration,
 }
 
 impl Default for RunningWait {
@@ -211,6 +216,7 @@ impl Default for RunningWait {
         Self {
             interval: Duration::from_secs(1),
             deadline: Duration::from_secs(90),
+            retry: Duration::from_secs(120),
         }
     }
 }
@@ -233,6 +239,39 @@ struct FlowsState {
     write_lock: Arc<Mutex<()>>,
     /// The Flow health check's own state (ticket 29).
     health: health::HealthHandle,
+    /// Failed Runs being replayed (« Relancer »): a double click replays once.
+    retrying: Claims,
+    /// Notifications being handed to the desktop app, outside the write lock.
+    notifying: Claims,
+}
+
+/// Keys of work in progress in this process, so the same work never runs
+/// twice at once. A [`Claim`] releases its key when dropped, however the
+/// work ends (answer, error, cancelled request).
+#[derive(Clone, Default)]
+struct Claims(Arc<std::sync::Mutex<HashSet<String>>>);
+
+impl Claims {
+    /// `None` while another holder works on `key`.
+    fn claim(&self, key: &str) -> Option<Claim> {
+        let mut keys = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        keys.insert(key.to_string()).then(|| Claim {
+            claims: self.clone(),
+            key: key.to_string(),
+        })
+    }
+}
+
+struct Claim {
+    claims: Claims,
+    key: String,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        let mut keys = self.claims.0.lock().unwrap_or_else(|e| e.into_inner());
+        keys.remove(&self.key);
+    }
 }
 
 /// `health_check`: when the background Flow health check runs (SPEC D19);
@@ -264,6 +303,8 @@ where
         http,
         write_lock: Arc::new(Mutex::new(())),
         health: health::HealthHandle::default(),
+        retrying: Claims::default(),
+        notifying: Claims::default(),
     };
     if let Some(schedule) = health_check {
         health::spawn(&state, schedule);
@@ -416,11 +457,12 @@ struct RetryRequest {
     execution_id: Value,
 }
 
-/// The Run a retry started, as n8n reports it once it answers.
+/// The Run a retry started, as n8n reports it once it answers. `None` id
+/// and `running`: n8n had not answered when ScreenPipe stopped waiting.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RetriedRun {
-    execution_id: String,
+    execution_id: Option<String>,
     status: &'static str,
     started_at: Option<String>,
 }
@@ -450,6 +492,9 @@ enum FlowError {
     Unauthorized(String),
     /// No answer from n8n: connection refused, DNS, timeout.
     Unreachable(String),
+    /// n8n took a call made with its own deadline ([`N8nApi::send_timed`])
+    /// and had not answered when it passed: it is still working on it.
+    TimedOut(String),
     /// n8n answered with any other non-2xx; the detail carries its message.
     N8nFailed(String),
     TaskNotFound,
@@ -498,6 +543,10 @@ impl IntoResponse for FlowError {
             FlowError::N8nFailed(detail) => (
                 StatusCode::BAD_GATEWAY,
                 json!({"error": "n8n_failed", "detail": detail}),
+            ),
+            FlowError::TimedOut(detail) => (
+                StatusCode::GATEWAY_TIMEOUT,
+                json!({"error": "n8n_timeout", "detail": detail}),
             ),
             FlowError::TaskNotFound => (StatusCode::NOT_FOUND, json!({"error": "task_not_found"})),
             FlowError::RunNotFound => (StatusCode::NOT_FOUND, json!({"error": "run_not_found"})),
@@ -616,8 +665,14 @@ impl N8nApi {
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
         }
-        let response = request.send().await.map_err(|e| {
-            FlowError::Unreachable(format!("cannot reach n8n at {}: {e}", self.base))
+        let response = request.send().await.map_err(|e| match timeout {
+            // n8n took the call and is still working on it: it is reachable.
+            Some(timeout) if e.is_timeout() => FlowError::TimedOut(format!(
+                "n8n at {} did not answer within {} s",
+                self.base,
+                timeout.as_secs()
+            )),
+            _ => FlowError::Unreachable(format!("cannot reach n8n at {}: {e}", self.base)),
         })?;
         let status = response.status().as_u16();
         let value = response.json::<Value>().await.unwrap_or(Value::Null);
@@ -737,23 +792,37 @@ impl N8nApi {
 
     /// The Flow's last Run and, when the latest finished Run failed, that
     /// Failed Run: it stays until a later Run succeeds (SPEC D16). Read from
-    /// n8n's recent executions, newest first.
+    /// n8n's recent executions, newest first: only the last one when it is
+    /// finished (it alone decides), else the last [`RECENT_RUNS`].
     async fn runs(&self, workflow_id: &str) -> Runs {
-        let page = match self
-            .expect_ok(
-                Method::GET,
-                "/executions",
-                &[("workflowId", workflow_id), ("limit", RECENT_RUNS)],
-                None,
+        let finished = |page: &Value| {
+            matches!(
+                page["data"][0]["status"].as_str(),
+                Some("success" | "error" | "crashed")
             )
-            .await
-        {
-            Ok(page) => page,
-            Err(e) => {
-                tracing::warn!("automation flows: last execution of {workflow_id}: {e:?}");
-                return Runs::default();
-            }
         };
+        let mut page = Value::Null;
+        for limit in ["1", RECENT_RUNS] {
+            page = match self
+                .expect_ok(
+                    Method::GET,
+                    "/executions",
+                    &[("workflowId", workflow_id), ("limit", limit)],
+                    None,
+                )
+                .await
+            {
+                Ok(page) => page,
+                Err(e) => {
+                    tracing::warn!("automation flows: last execution of {workflow_id}: {e:?}");
+                    return Runs::default();
+                }
+            };
+            let none = page["data"].as_array().is_none_or(Vec::is_empty);
+            if none || finished(&page) {
+                break;
+            }
+        }
         let executions = page["data"].as_array().map(Vec::as_slice).unwrap_or_default();
         let last = executions.first().and_then(|execution| {
             Some(LastExecution {
@@ -843,16 +912,41 @@ impl N8nApi {
 
     /// Replays a Run with its input (`POST /executions/:id/retry`). n8n
     /// answers once the new Run has finished, so this waits longer than any
-    /// other call: the demo's AI step alone takes up to 30 s.
-    async fn retry(&self, execution_id: &str, load_workflow: bool) -> Result<(u16, Value), FlowError> {
+    /// other call (`wait`, [`RunningWait::retry`]); past it,
+    /// [`FlowError::TimedOut`]: n8n is still replaying the Run.
+    async fn retry(
+        &self,
+        execution_id: &str,
+        load_workflow: bool,
+        wait: Duration,
+    ) -> Result<(u16, Value), FlowError> {
         self.send_timed(
             Method::POST,
             &format!("/executions/{execution_id}/retry"),
             &[],
             Some(&json!({"loadWorkflow": load_workflow})),
-            Some(RETRY_TIMEOUT),
+            Some(wait),
         )
         .await
+    }
+
+    /// Whether n8n is replaying Run `execution_id` of the workflow right now
+    /// (a running execution whose `retryOf` is that Run), e.g. a retry
+    /// ScreenPipe stopped waiting for.
+    async fn is_retrying(&self, workflow_id: &str, execution_id: &str) -> Result<bool, FlowError> {
+        let running = self
+            .all_pages(
+                "/executions",
+                &[
+                    ("workflowId", workflow_id),
+                    ("status", "running"),
+                    ("limit", "250"),
+                ],
+            )
+            .await?;
+        Ok(running
+            .iter()
+            .any(|run| execution_id_of(&run["retryOf"]).as_deref() == Some(execution_id)))
     }
 
     fn editor_url(&self, workflow_id: &str) -> String {
@@ -860,8 +954,10 @@ impl N8nApi {
     }
 
     /// The id of ScreenPipe's error workflow, installed from the bundled file
-    /// (switched off, tagged [`ERRORS_TAG`]) when n8n has none. Callers hold
-    /// the write lock, so it is installed once.
+    /// (switched off, tagged [`ERRORS_TAG`]) when n8n has none. An untagged
+    /// copy (an install whose tag call failed) is tagged instead of
+    /// installing another. Callers hold the write lock, so it is installed
+    /// once.
     async fn error_workflow_id(&self) -> Result<String, FlowError> {
         let installed = self
             .all_pages("/workflows", &[("tags", ERRORS_TAG), ("limit", "250")])
@@ -875,10 +971,20 @@ impl N8nApi {
         }
         let bundled: Value = serde_json::from_str(ERROR_WORKFLOW)
             .map_err(|e| FlowError::Internal(format!("bundled error workflow: {e}")))?;
-        let created = self
-            .expect_ok(Method::POST, "/workflows", &[], Some(&importable(&bundled)))
-            .await?;
-        let tagged = self.ensure_tag(created, ERRORS_TAG).await?;
+        let name = bundled["name"].as_str().unwrap_or_default();
+        let untagged = self
+            .all_pages("/workflows", &[("name", name), ("limit", "250")])
+            .await?
+            .into_iter()
+            .find(|w| w["name"] == name && w["isArchived"] != true && w["id"].is_string());
+        let copy = match untagged {
+            Some(copy) => copy,
+            None => {
+                self.expect_ok(Method::POST, "/workflows", &[], Some(&importable(&bundled)))
+                    .await?
+            }
+        };
+        let tagged = self.ensure_tag(copy, ERRORS_TAG).await?;
         workflow_id(&tagged)
     }
 
@@ -937,8 +1043,8 @@ fn with_error_workflow(body: &mut Value, errors: Option<&str>) {
 
 /// How many recent executions are read to find the Failed Run.
 const RECENT_RUNS: &str = "20";
-/// How long a retry may take in n8n before ScreenPipe stops waiting.
-const RETRY_TIMEOUT: Duration = Duration::from_secs(120);
+/// How many Flows' Runs the list reads from n8n at a time.
+const LIST_READS_AT_ONCE: usize = 8;
 
 #[derive(Default)]
 struct Runs {
@@ -960,7 +1066,12 @@ fn run_status(execution: &Value) -> &'static str {
 /// n8n's public API gives execution ids as numbers, its Error Trigger as
 /// strings.
 fn execution_id(execution: &Value) -> Option<String> {
-    match &execution["id"] {
+    execution_id_of(&execution["id"])
+}
+
+/// An execution id field (`id`, `retryOf`…), number or string.
+fn execution_id_of(id: &Value) -> Option<String> {
+    match id {
         Value::String(id) => Some(id.clone()),
         Value::Number(id) => Some(id.to_string()),
         _ => None,
@@ -1438,15 +1549,21 @@ async fn list_flows(State(state): State<FlowsState>) -> Result<Json<Vec<FlowSumm
     let workflows = api
         .all_pages("/workflows", &[("tags", FLOW_TAG), ("limit", "250")])
         .await?;
-    let mut flows = Vec::new();
+    // Several Flows' Runs are read at a time, in the list's order: the list
+    // does not wait for n8n once per Flow.
+    let mut reads = Vec::new();
     for workflow in &workflows {
         if !has_flow_tag(workflow) || workflow["isArchived"] == true {
             continue;
         }
         let id = workflow["id"].as_str().unwrap_or_default();
-        let runs = api.runs(id).await;
-        flows.push(flow_summary(workflow, store.flows.get(id), runs));
+        let (api, record) = (&api, store.flows.get(id));
+        reads.push(async move { flow_summary(workflow, record, api.runs(id).await) });
     }
+    let flows = futures::stream::iter(reads)
+        .buffered(LIST_READS_AT_ONCE)
+        .collect()
+        .await;
     Ok(Json(flows))
 }
 
@@ -1619,7 +1736,15 @@ async fn update_flow(
         body["name"] = current["name"].clone();
     }
     keep_user_credentials(&mut body, Some(&current));
-    with_error_workflow(&mut body, api.error_workflow().await.as_deref());
+    // n8n cannot say which error workflow is ScreenPipe's right now: keep
+    // the one the Flow names, so its failures are still notified.
+    let errors = match api.error_workflow().await {
+        Some(id) => Some(id),
+        None => current["settings"]["errorWorkflow"]
+            .as_str()
+            .map(str::to_string),
+    };
+    with_error_workflow(&mut body, errors.as_deref());
 
     if current["active"] == true {
         let running = running_version(&current);
@@ -1841,16 +1966,21 @@ struct FailedRunReport {
 
 /// « Relancer » (SPEC D17): replays a Failed Run of this Flow with the same
 /// input (the email the trigger already marked read) through n8n's retry,
-/// and answers with the new Run and the Flow as it now stands.
+/// and answers with the new Run and the Flow as it now stands. A Run is
+/// replayed once at a time: while its replay runs (a double click, a retry
+/// ScreenPipe stopped waiting for), another is refused. n8n still replaying
+/// it at [`RunningWait::retry`]: `202` with a `running` Run.
 async fn retry_run(
     State(state): State<FlowsState>,
     Path(id): Path<String>,
     Json(request): Json<RetryRequest>,
-) -> Result<Json<RetryResponse>, FlowError> {
+) -> Result<(StatusCode, Json<RetryResponse>), FlowError> {
     let (api, store, workflow) = load_flow(&state, &id).await?;
     let run_id = execution_id(&json!({"id": request.execution_id}))
         .filter(|run_id| valid_workflow_id(run_id))
         .ok_or(FlowError::RunNotFound)?;
+    let already = || FlowError::RunNotFailed(RETRY_RUNNING.into());
+    let _claim = state.retrying.claim(&run_id).ok_or_else(already)?;
     let (status, original) = api
         .send(Method::GET, &format!("/executions/{run_id}"), &[], None)
         .await?;
@@ -1880,23 +2010,47 @@ async fn retry_run(
         .get(&id)
         .and_then(|record| record.reviewed_version_id.as_deref());
     let load_workflow = reviewed.is_some() && workflow["versionId"].as_str() == reviewed;
-    let (status, retried) = api.retry(&run_id, load_workflow).await?;
-    match status {
-        200..=299 => {}
-        404 => return Err(FlowError::RunNotFound),
-        // n8n saw it change in between (e.g. a retry from its editor).
-        409 => return Err(FlowError::RunNotFailed(n8n_answer(status, &retried))),
-        _ => return Err(upstream_error(status, &retried)),
+    if api.is_retrying(&id, &run_id).await? {
+        return Err(already());
     }
-    let run = RetriedRun {
-        execution_id: execution_id(&retried).unwrap_or_default(),
-        status: run_status(&retried),
-        started_at: retried["startedAt"].as_str().map(str::to_string),
+    let (code, run) = match api
+        .retry(&run_id, load_workflow, state.running_wait.retry)
+        .await
+    {
+        Ok((200..=299, retried)) => (
+            StatusCode::OK,
+            RetriedRun {
+                execution_id: execution_id(&retried),
+                status: run_status(&retried),
+                started_at: retried["startedAt"].as_str().map(str::to_string),
+            },
+        ),
+        Ok((404, _)) => return Err(FlowError::RunNotFound),
+        // n8n saw it change in between (e.g. a retry from its editor).
+        Ok((status @ 409, retried)) => {
+            return Err(FlowError::RunNotFailed(n8n_answer(status, &retried)))
+        }
+        Ok((status, retried)) => return Err(upstream_error(status, &retried)),
+        // n8n took the replay and is still running it: its outcome shows
+        // on the Flow (last Run, Failed Run, Activity) once it ends.
+        Err(FlowError::TimedOut(_)) => (
+            StatusCode::ACCEPTED,
+            RetriedRun {
+                execution_id: None,
+                status: "running",
+                started_at: None,
+            },
+        ),
+        Err(e) => return Err(e),
     };
     let workflow = api.workflow(&id).await?.unwrap_or(workflow);
     let flow = build_flow(&state, &api, &workflow, store.flows.get(&id)).await;
-    Ok(Json(RetryResponse { run, flow }))
+    Ok((code, Json(RetryResponse { run, flow })))
 }
+
+/// Why a second « Relancer » of the same Run is refused while the first runs.
+const RETRY_RUNNING: &str =
+    "a retry of this Run is already running; its outcome will show on the Flow once n8n finishes it";
 
 /// Why a Run cannot be replayed, or `None` for a Failed Run never replayed
 /// with success: retrying a Run that worked would redo what it did.
@@ -1948,8 +2102,8 @@ enum RunNotice {
 
 /// Notifies the user of Failed Run `execution_id` unless it already was.
 /// Shared by the error workflow's report (`POST /failed-runs`) and the
-/// health check, so each Failed Run is notified once whoever finds it first:
-/// the dedupe is checked and recorded under the write lock.
+/// health check, so each Failed Run is notified once whoever finds it first
+/// (see [`notify_once`]).
 async fn notify_failed_run(
     state: &FlowsState,
     api: &N8nApi,
@@ -1957,6 +2111,12 @@ async fn notify_failed_run(
 ) -> Result<RunNotice, FlowError> {
     let not_notified = |reason| Ok(RunNotice::Skipped(reason));
     let execution_id = execution_id.to_string();
+    let Some(claim) = state.notifying.claim(&format!("failed-run:{execution_id}")) else {
+        return not_notified("already_notified");
+    };
+    if notified(state, |store| &store.notified_failed_runs, &execution_id).await? {
+        return not_notified("already_notified");
+    }
     let (status, execution) = api
         .send(
             Method::GET,
@@ -1979,13 +2139,9 @@ async fn notify_failed_run(
         _ => return not_notified("not_a_flow"),
     };
 
-    // One notification per Run, even when n8n retries the call.
-    let _guard = state.write_lock.lock().await;
-    let mut store = FlowStore::load(&state.screenpipe_dir)?;
-    if store.notified_failed_runs.contains(&execution_id) {
-        return not_notified("already_notified");
-    }
-    let known = store.flows.contains_key(&workflow_id);
+    let known = FlowStore::load(&state.screenpipe_dir)?
+        .flows
+        .contains_key(&workflow_id);
     let workflow = match valid_workflow_id(&workflow_id) {
         true => api.workflow(&workflow_id).await?,
         false => None,
@@ -1997,15 +2153,55 @@ async fn notify_failed_run(
         return not_notified("no_notifier");
     };
     let notification = failed_run_notification(&workflow, &execution, &execution_id);
-    notify(&state, url, &notification).await?;
-    store.notified_failed_runs.push(execution_id);
-    let excess = store
-        .notified_failed_runs
-        .len()
-        .saturating_sub(NOTIFIED_RUNS_KEPT);
-    store.notified_failed_runs.drain(..excess);
-    store.save(&state.screenpipe_dir)?;
+    notify_once(
+        state,
+        claim,
+        url,
+        &notification,
+        |store| &mut store.notified_failed_runs,
+        execution_id,
+    )
+    .await?;
     Ok(RunNotice::Notified)
+}
+
+/// Whether `id` is in the store's list of notified ids (read under the
+/// write lock, held only for that read).
+async fn notified(
+    state: &FlowsState,
+    list: fn(&FlowStore) -> &Vec<String>,
+    id: &str,
+) -> Result<bool, FlowError> {
+    let _guard = state.write_lock.lock().await;
+    let store = FlowStore::load(&state.screenpipe_dir)?;
+    Ok(list(&store).iter().any(|known| known == id))
+}
+
+/// Hands `notification` to the desktop app, then records `id` in the
+/// store's `list`. The caller holds `claim` on it (no other caller notifies
+/// it meanwhile) and checked [`notified`] after claiming: the slow `/notify`
+/// call runs outside the write lock, held only to record the id, so each id
+/// is still notified at most once. Kept to the last [`NOTIFIED_RUNS_KEPT`].
+async fn notify_once(
+    state: &FlowsState,
+    claim: Claim,
+    url: &str,
+    notification: &Value,
+    list: fn(&mut FlowStore) -> &mut Vec<String>,
+    id: String,
+) -> Result<(), FlowError> {
+    notify(state, url, notification).await?;
+    let _guard = state.write_lock.lock().await;
+    let mut store = FlowStore::load(&state.screenpipe_dir)?;
+    let ids = list(&mut store);
+    if !ids.contains(&id) {
+        ids.push(id);
+        let excess = ids.len().saturating_sub(NOTIFIED_RUNS_KEPT);
+        ids.drain(..excess);
+        store.save(&state.screenpipe_dir)?;
+    }
+    drop(claim);
+    Ok(())
 }
 
 /// The `/notify` payload of a Failed Run: the Flow, the failing step, the
@@ -2026,7 +2222,12 @@ fn failed_run_notification(workflow: &Value, execution: &Value, execution_id: &s
     if let Some((from, subject)) = handled_email(workflow, result) {
         body.push_str(&format!("\n\nE-mail de {from} : « {subject} »"));
     }
-    body.push_str("\n\nLe Flow reste actif. Il apparaît en rouge jusqu'au prochain passage réussi.");
+    // A failure never switches a Flow off; say how it stands now.
+    body.push_str(if workflow["active"] == true {
+        "\n\nLe Flow reste actif. Il apparaît en rouge jusqu'au prochain passage réussi."
+    } else {
+        "\n\nLe Flow n'est pas actif. Il apparaît en rouge jusqu'au prochain passage réussi."
+    });
     let review = format!("screenpipe://flows/{flow_id}");
     json!({
         "id": format!("automation-flow-failed-run:{execution_id}"),
@@ -2136,9 +2337,9 @@ async fn abstained(
     let api = N8nApi::from_connection(&state).await?;
     let workflow = api.workflow(&workflow_id).await?;
 
-    let _guard = state.write_lock.lock().await;
-    let mut store = FlowStore::load(&state.screenpipe_dir)?;
-    let known = store.flows.contains_key(&workflow_id);
+    let known = FlowStore::load(&state.screenpipe_dir)?
+        .flows
+        .contains_key(&workflow_id);
     let Some(workflow) = workflow.filter(|w| has_flow_tag(w) || known) else {
         return answer(false, Some("not_a_flow"));
     };
@@ -2150,7 +2351,16 @@ async fn abstained(
         "automation-flow-abstention:{execution_id}:{:016x}",
         fnv1a(&format!("{from}\n{subject}"))
     );
-    if store.notified_abstentions.contains(&notification_id) {
+    let Some(claim) = state.notifying.claim(&notification_id) else {
+        return answer(false, Some("already_notified"));
+    };
+    if notified(
+        &state,
+        |store| &store.notified_abstentions,
+        &notification_id,
+    )
+    .await?
+    {
         return answer(false, Some("already_notified"));
     }
     let Some(url) = state.notify_url.as_deref() else {
@@ -2181,14 +2391,15 @@ async fn abstained(
         "source_url": review,
         "actions": [{"type": "deeplink", "label": "Voir le Flow", "url": review, "primary": true}],
     });
-    notify(&state, url, &notification).await?;
-    store.notified_abstentions.push(notification_id);
-    let excess = store
-        .notified_abstentions
-        .len()
-        .saturating_sub(NOTIFIED_RUNS_KEPT);
-    store.notified_abstentions.drain(..excess);
-    store.save(&state.screenpipe_dir)?;
+    notify_once(
+        &state,
+        claim,
+        url,
+        &notification,
+        |store| &mut store.notified_abstentions,
+        notification_id,
+    )
+    .await?;
     answer(true, None)
 }
 
