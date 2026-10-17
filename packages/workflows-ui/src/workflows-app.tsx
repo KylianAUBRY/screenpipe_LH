@@ -746,7 +746,7 @@ export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailab
           }
           throw error;
         }
-      } : undefined} createFlow={platform.createAutomationFlow && workflow.id ? answers => platform.createAutomationFlow!(workflow.id!, answers) : undefined} />}
+      } : undefined} createFlow={platform.createAutomationFlow && workflow.id && (platform.canCreateAutomationFlow?.(workflow.id) ?? true) ? answers => platform.createAutomationFlow!(workflow.id!, answers) : undefined} />}
       {!!workflow.variations.length && <section className={styles.panel}><h2>Variations</h2><ul className={styles.plainList}>{workflow.variations.map(item => <li key={item}>{item}</li>)}</ul></section>}
       {!!actionableFriction.length && <section><div className={styles.sectionHeading}><div><h2>Friction you can affect</h2></div></div><BottleneckList items={actionableFriction.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} /></section>}
       {!!constraints.length && <section><div className={styles.sectionHeading}><div><h2>External and required constraints</h2></div></div><BottleneckList items={constraints.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} numbered={false} /></section>}
