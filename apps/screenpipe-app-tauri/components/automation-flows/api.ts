@@ -31,6 +31,14 @@ export type FlowNode = {
   type: string;
   position: [number, number];
   sentence: string | null;
+  /** What the AI did not write, read from the node: its n8n credentials and, for an HTTP Request, method and host. */
+  facts: string[];
+};
+
+/** A captured moment, for « Voir dans la timeline »; `frameId` is null for embedded evidence. */
+export type SourceMoment = {
+  frameId: number | null;
+  timestamp: string;
 };
 
 export type ActivationEvent = {
@@ -44,6 +52,8 @@ export type ActivationEvent = {
 export type Flow = FlowSummary & {
   n8nUrl: string;
   sourceTaskId: string | null;
+  /** Where the source Detected Task was first seen; null for a Flow from the chat. */
+  sourceMoment: SourceMoment | null;
   summary: string;
   nodes: FlowNode[];
   edges: { from: string; to: string }[];

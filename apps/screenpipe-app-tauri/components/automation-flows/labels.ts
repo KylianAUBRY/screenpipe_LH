@@ -36,7 +36,8 @@ export function lastRunLabel(execution: LastExecution | null): string {
 }
 
 export function activationLabel(entry: ActivationEvent): string {
-  const by = entry.by === "chat" ? "par le chat" : "par vous";
+  const by =
+    entry.by === "chat" ? "par le chat" : entry.by === "api" ? "hors de Screenpipe" : "par vous";
   return `${EVENT_LABEL[entry.event]} ${by} · ${formatDate(entry.at)} · version ${shortVersion(entry.versionId)}`;
 }
 

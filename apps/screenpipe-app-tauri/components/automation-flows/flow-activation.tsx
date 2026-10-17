@@ -12,6 +12,10 @@ import { Button } from "@/components/ui/button";
 import { FlowsApiError, type Flow, type FlowsApi } from "./api";
 import { ACTION_BUTTON } from "./common";
 
+// The engine waits for the email n8n is processing, then gives up unchanged.
+const FLOW_RUNNING_MESSAGE =
+  "n8n traite encore un e-mail avec ce Flow : rien n'a changé. Réessayez dans un instant.";
+
 type Problem =
   | { kind: "changed" }
   | { kind: "failed"; action: "activate" | "deactivate"; error: FlowsApiError };
@@ -96,10 +100,14 @@ export function FlowActivation({
           <p className="text-sm font-medium">
             {problem.action === "activate" ? "Activation impossible" : "Désactivation impossible"}
           </p>
-          {problem.error.detail && (
-            <p className="break-all font-mono text-xs text-muted-foreground">
-              {problem.error.detail}
-            </p>
+          {problem.error.code === "flow_running" ? (
+            <p className="text-sm text-muted-foreground">{FLOW_RUNNING_MESSAGE}</p>
+          ) : (
+            problem.error.detail && (
+              <p className="break-all font-mono text-xs text-muted-foreground">
+                {problem.error.detail}
+              </p>
+            )
           )}
         </div>
       )}

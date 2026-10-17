@@ -288,6 +288,35 @@ describe("Review Screen", () => {
     expect((screen.getByRole("button", { name: "Activer" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("asks to try again when n8n is still processing an email at Désactiver", async () => {
+    const api = fakeApi({
+      get: vi.fn(async () => activeFlow),
+      deactivate: vi.fn(async () => {
+        throw new FlowsApiError("flow_running", "n8n is still running this Flow");
+      }),
+    });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Désactiver" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Désactivation impossible")).toBeTruthy();
+    expect(within(alert).getByText(/traite encore un e-mail.*Réessayez dans un instant/)).toBeTruthy();
+    expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+  });
+
+  it("says when the Flow was switched off outside Screenpipe", async () => {
+    const offElsewhere: Flow = {
+      ...pausedFlow,
+      activationLog: [activation, { ...activation, event: "deactivated", by: "api" }],
+    };
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => offElsewhere) })} />);
+
+    const history = await screen.findByRole("list", { name: "Historique d'activation" });
+    const entries = within(history).getAllByRole("listitem").map((item) => item.textContent);
+    expect(entries[1]).toMatch(/^Désactivé hors de Screenpipe · .+ · version fixture-/);
+  });
+
   it("reloads a Flow that changed since it was opened instead of activating it", async () => {
     const changed: Flow = { ...fixtureFlow, versionId: "fixture-version-2" };
     const get = vi.fn().mockResolvedValueOnce(fixtureFlow).mockResolvedValue(changed);
