@@ -127,6 +127,25 @@ describe("flowsApi", () => {
     expect(error.code).toBe(code);
   });
 
+  it("asks the engine whether n8n answers (ticket 29)", async () => {
+    respond(200, { n8n: "unreachable", lastCheckAt: "2026-10-17T08:00:00Z" });
+    expect(await flowsApi.health()).toEqual({
+      n8n: "unreachable",
+      lastCheckAt: "2026-10-17T08:00:00Z",
+    });
+    expect(localFetch).toHaveBeenLastCalledWith("/automation-flows/health", undefined);
+  });
+
+  it.each([
+    ["unreachable", "unreachable"],
+    ["not-configured", "not_configured"],
+    ["empty", "ok"],
+  ])("the browser mock's %s state answers the health check", async (state, n8n) => {
+    useBrowserMock();
+    window.history.replaceState({}, "", `/home?section=pipes&tab=flows&flowsState=${state}`);
+    expect((await flowsApi.health()).n8n).toBe(n8n);
+  });
+
   it("keeps the unreachable detail for the message", async () => {
     respond(502, { error: "n8n_unreachable", detail: "connection refused" });
     const error = await flowsApi.list().catch((e) => e);

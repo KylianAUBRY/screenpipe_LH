@@ -14,6 +14,7 @@ import { flowsApi, type FlowsApi, type FlowSummary } from "./api";
 import { ChatButton, FlowsErrorMessage, StatusBadge, useFlowsLoad } from "./common";
 import { FlowReview } from "./flow-review";
 import { lastRunLabel } from "./labels";
+import { N8nUnreachableBanner } from "./n8n-banner";
 
 export function FlowsTab({
   flowId,
@@ -37,10 +38,16 @@ function FlowList({ onOpen, api }: { onOpen: (id: string) => void; api: FlowsApi
     return <p className="text-sm text-muted-foreground">Chargement des Flows…</p>;
   }
   if (flows.state === "error") {
-    return <FlowsErrorMessage error={flows.error} onRetry={reload} api={api} />;
+    return (
+      <div className="space-y-4">
+        <N8nUnreachableBanner api={api} hidden={flows.error.code === "n8n_unreachable"} />
+        <FlowsErrorMessage error={flows.error} onRetry={reload} api={api} />
+      </div>
+    );
   }
   return (
     <div className="space-y-4">
+      <N8nUnreachableBanner api={api} />
       <div className="flex flex-wrap items-center gap-2">
         <ChatButton
           open={() => api.requestCreation()}

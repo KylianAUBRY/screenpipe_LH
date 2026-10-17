@@ -4,6 +4,9 @@
 
 import type { ActivationEvent, FlowStatus, LastExecution } from "./api";
 
+/** Ticket 29: n8n does not answer, so no Flow runs. */
+export const N8N_UNREACHABLE = "n8n injoignable, tes Flows ne tournent pas";
+
 export const STATUS_LABEL: Record<FlowStatus, string> = {
   draft: "Brouillon",
   active: "Active",

@@ -76,6 +76,17 @@ export type Flow = FlowSummary & {
   activationLog: ActivationEvent[];
 };
 
+/**
+ * Whether n8n answers right now (ticket 29, `GET /automation-flows/health`):
+ * "unreachable" is the banner « n8n injoignable, tes Flows ne tournent pas ».
+ * `lastCheckAt`: when the engine's Flow health check last saw every Failed
+ * Run through (it runs at app start, then every 15 minutes).
+ */
+export type N8nHealth = {
+  n8n: "ok" | "unreachable" | "unauthorized" | "failed" | "not_configured";
+  lastCheckAt: string | null;
+};
+
 export type FlowsErrorCode =
   | "n8n_not_configured"
   /** n8n answered but refused the API key of Connections → n8n. */
@@ -166,6 +177,9 @@ export const flowsApi = {
 
   get: (id: string) =>
     request<Flow>(`/automation-flows/${encodeURIComponent(id)}`),
+
+  /** Whether n8n answers right now, for the « n8n injoignable » banner. */
+  health: () => request<N8nHealth>("/automation-flows/health"),
 
   createFromTask: (taskId: string, answers: unknown) =>
     request<Flow>("/automation-flows/from-task", {
