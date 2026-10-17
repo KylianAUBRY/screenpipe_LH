@@ -88,9 +88,9 @@ describe("flowsApi", () => {
     [path, init] = localFetch.mock.lastCall!;
     expect(path).toBe("/automation-flows/wf%2F1/deactivate");
     expect(init.method).toBe("POST");
-    // Switching off needs no credential, only a JSON request.
     expect(sentHeaders(init).get("content-type")).toBe("application/json");
-    expect(sentHeaders(init).has(ACTIVATION_HEADER)).toBe(false);
+    // Not needed to switch off, but the history then says it was the user.
+    expect(sentHeaders(init).get(ACTIVATION_HEADER)).toBe("ui-key");
   });
 
   it("outside the desktop app, activates without a credential and reports the refusal", async () => {
@@ -178,6 +178,18 @@ describe("browser mock", () => {
       ["activated", "user"],
       ["deactivated", "user"],
     ]);
+
+    // Switched off by any other local caller (no UI credential): "api".
+    await flowsApi.activate(fixtureFlow.id, fixtureFlow.versionId);
+    await localFetch(`/automation-flows/${fixtureFlow.id}/deactivate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect((await flowsApi.get(fixtureFlow.id)).activationLog.at(-1)).toMatchObject({
+      event: "deactivated",
+      by: "api",
+    });
     await expect(flowsApi.activate(fixtureFlow.id, "stale-version")).rejects.toMatchObject({
       code: "version_changed",
     });
