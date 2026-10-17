@@ -1,14 +1,16 @@
 # Hackathon build spec
 
 Working document for the team. Not agent context: product direction lives in
-`AGENTS.md`; this file holds build/ops decisions and open items.
+`AGENTS.md`; this file holds build/ops decisions and open items. Contracts and
+the decisions that closed the open items below live in `SPEC.md`.
 
 ## Definition of done (user decision: everything live)
 
 Everything in the hackathon scope must be live for the demo:
 
-- notification -> review screen
-- plain-language summary + real evidence timeline
+- notification -> task page (real evidence timeline + mandatory clarification
+  questions) -> Flow creation -> review screen
+- plain-language summary on the review screen
 - rendered n8n graph with one AI sentence per node
 - View graph (n8n) and View in timeline
 - modification chat (active Flow: pause -> inactive version -> re-review ->
