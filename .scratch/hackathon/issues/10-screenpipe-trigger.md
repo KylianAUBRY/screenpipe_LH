@@ -10,7 +10,7 @@ app, window}`.
 
 **Blocked by:** 07.
 
-**Status:** code done (branch `hackathon/ticket-10`); manual check pending human
+**Status:** done (live-verified on the demo machine 2026-10-17)
 
 - [x] Package tests against a fake ScreenPipe API: the keyword mode emits once per new match and advances its cursor; the window mode fires on change only; the pipe mode fires on a new execution.
   `test/screenpipe-trigger.test.ts` runs `poll` against `fakeScreenpipe`, carrying the node's static
@@ -23,7 +23,7 @@ app, window}`.
   cursor untouched; nothing yet → error saying what to do); errors (HTTP 403 → `NodeApiError`, cursor
   kept; pipe routes' HTTP 200 `{error}` → `NodeApiError`).
   `cd packages/n8n-nodes-screenpipe && bun test`: 38 pass (11 new). `bunx tsc --noEmit -p tsconfig.json`: clean.
-- [ ] Manual check in the local n8n: saying the keyword aloud starts an example workflow. **Pending human** (steps below).
+- [x] Manual check in the local n8n: saying the keyword aloud starts an example workflow. Verified by the orchestrator with `say` through the recorded system audio: « Pamplemousse » fired the keyword mode; the window mode fired 1 s after TextEdit came to the front; the pipe mode fired on execution 171 of `repeated-workflow-detector`; the Flow mode fired on each run of a throwaway Flow (see `.scratch/hackathon/evidence/LIVE-CHECKS.md`).
   Done by the agent: `bun run install-n8n` built and installed the package; n8n 2.42.2 lists
   `CUSTOM.screenPipeTrigger` ("ScreenPipe Trigger", group trigger, `polling: true`, properties
   `pollTimes` (added by n8n), `event`, `keyword`, `appName`, `windowName`, `pipeId`, `flowId`), icon
