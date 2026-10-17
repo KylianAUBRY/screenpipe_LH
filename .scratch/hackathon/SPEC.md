@@ -102,7 +102,8 @@ excluded from `nodes`. `sentence` is the node's `notes`.
 | `POST /automation-flows/:id/activate` | n8n activate; `reviewedVersionId = versionId`; log `activated`. Only called from a user click. |
 | `POST /automation-flows/:id/deactivate` | n8n deactivate; log `deactivated`. |
 
-Errors: `412 {error: "n8n_not_configured"}`, `502 {error: "n8n_unreachable"}`,
+Errors: `412 {error: "n8n_not_configured"}`, `412 {error: "n8n_unauthorized",
+detail}` (n8n answered 401/403 to the API key), `502 {error: "n8n_unreachable"}`,
 `404` for an unknown Flow or task, `400 {error: "invalid_workflow", detail}` for
 a chat change that cannot be applied. Storage: one JSON file in the ScreenPipe
 data dir, keyed by n8n workflow id.

@@ -242,6 +242,8 @@ struct FromTaskRequest {
 #[derive(Debug)]
 enum FlowError {
     NotConfigured,
+    /// n8n answered but refused the API key of the n8n connection (401/403).
+    Unauthorized(String),
     Unreachable(String),
     TaskNotFound,
     FlowNotFound,
@@ -261,6 +263,10 @@ impl IntoResponse for FlowError {
             FlowError::NotConfigured => (
                 StatusCode::PRECONDITION_FAILED,
                 json!({"error": "n8n_not_configured"}),
+            ),
+            FlowError::Unauthorized(detail) => (
+                StatusCode::PRECONDITION_FAILED,
+                json!({"error": "n8n_unauthorized", "detail": detail}),
             ),
             FlowError::Unreachable(detail) => (
                 StatusCode::BAD_GATEWAY,
@@ -336,6 +342,11 @@ impl N8nApi {
         })?;
         let status = response.status().as_u16();
         let value = response.json::<Value>().await.unwrap_or(Value::Null);
+        // A refused key fails every call the same way: report it as a setup
+        // problem of the n8n connection, not as n8n being down.
+        if matches!(status, 401 | 403) {
+            return Err(FlowError::Unauthorized(n8n_answer(status, &value)));
+        }
         Ok((status, value))
     }
 

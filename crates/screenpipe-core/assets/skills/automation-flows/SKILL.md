@@ -48,8 +48,10 @@ the `screenpipe-api` skill (`Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY`).
 `status` is `draft` (never activated), `active`, `paused` or `needs_review`
 (changed since its last activation).
 
-Errors: `412 n8n_not_configured` (the user fills Connexions → n8n), `502
-n8n_unreachable` (n8n is not running), `404 flow_not_found`, `400
+Errors: `412 n8n_not_configured` (the user fills Connexions → n8n), `412
+n8n_unauthorized` (n8n refused the API key: the user pastes a valid key in
+Connexions → n8n), `502 n8n_unreachable` (n8n is not running), `404
+flow_not_found`, `400
 invalid_workflow` (the `detail` says what to fix: fix it and send again).
 
 ## Change a Flow
