@@ -40,6 +40,7 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     openInN8n: vi.fn(async () => {}),
     openTaskPage: vi.fn(async () => {}),
     openN8nConnection: vi.fn(async () => {}),
+    requestChange: vi.fn(async () => {}),
     ...overrides,
   };
 }
@@ -266,6 +267,80 @@ describe("Review Screen", () => {
       expect(api.activate).not.toHaveBeenCalled();
       expect(api.deactivate).not.toHaveBeenCalled();
     }
+  });
+
+  it("opens the chat about this Flow to request a change", async () => {
+    const api = fakeApi({ get: vi.fn(async () => activeFlow) });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Demander une modification" }));
+
+    expect(api.requestChange).toHaveBeenCalledTimes(1);
+    expect(api.requestChange).toHaveBeenCalledWith(
+      expect.objectContaining({ id: fixtureFlow.id, name: fixtureFlow.name }),
+    );
+    // Asking for a change switches nothing by itself.
+    expect(api.activate).not.toHaveBeenCalled();
+    expect(api.deactivate).not.toHaveBeenCalled();
+    expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+  });
+
+  it("says when the chat cannot be opened", async () => {
+    const api = fakeApi({
+      requestChange: vi.fn(async () => {
+        throw new Error("chat did not become ready in home window");
+      }),
+    });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Demander une modification" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(/Impossible d'ouvrir le chat/)).toBeTruthy();
+  });
+
+  it("asks to review a Flow the chat changed until the user activates it again", async () => {
+    const changedByChat: Flow = {
+      ...fixtureFlow,
+      status: "needs_review",
+      versionId: "fixture-version-2",
+      reviewedVersionId: fixtureFlow.versionId,
+      activationLog: [
+        activation,
+        { ...activation, at: "2026-10-17T09:30:00.000Z", event: "paused_for_edit", by: "chat" },
+        {
+          at: "2026-10-17T09:30:01.000Z",
+          event: "modified",
+          versionId: "fixture-version-2",
+          by: "chat",
+        },
+      ],
+    };
+    const reactivated: Flow = {
+      ...changedByChat,
+      status: "active",
+      reviewedVersionId: "fixture-version-2",
+      activationLog: [
+        ...changedByChat.activationLog,
+        { ...activation, at: "2026-10-17T09:35:00.000Z", versionId: "fixture-version-2" },
+      ],
+    };
+    const api = fakeApi({
+      get: vi.fn(async () => changedByChat),
+      activate: vi.fn(async () => reactivated),
+    });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    expect(await screen.findByText(/a changé depuis sa dernière activation/)).toBeTruthy();
+    expect(screen.getByTestId("flow-status").textContent).toBe("À revoir");
+    expect(screen.getByText(/^Mis en pause pour modification par le chat/)).toBeTruthy();
+    expect(screen.getByText(/^Modifié par le chat · .+ · version fixture-/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Activer" }));
+
+    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("Active"));
+    expect(api.activate).toHaveBeenCalledWith(fixtureFlow.id, "fixture-version-2");
+    expect(screen.queryByText(/a changé depuis sa dernière activation/)).toBeNull();
   });
 
   it("shows the n8n message when the Flow cannot be loaded", async () => {

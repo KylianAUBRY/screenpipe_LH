@@ -6,10 +6,11 @@
 
 // Review Screen: what the Flow does, the n8n graph with one sentence per
 // node, links to the graph in n8n and back to the Task Page, status, last
-// run, activation history, and Activate / Deactivate.
+// run, activation history, Activate / Deactivate, and "Demander une
+// modification" (the ScreenPipe chat, ticket 08).
 
-import React from "react";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import React, { useState } from "react";
+import { ArrowLeft, ExternalLink, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Flow, FlowsApi } from "./api";
 import { ACTION_BUTTON, FlowsErrorMessage, SectionLabel, StatusBadge, useFlowsLoad } from "./common";
@@ -44,6 +45,47 @@ export function FlowReview({
         <ReviewContent flow={flow.data} api={api} onChange={replace} />
       )}
     </div>
+  );
+}
+
+/**
+ * Opens the chat about this Flow. The change happens there: the Flow is
+ * switched off, updated, and comes back here needing review.
+ */
+function RequestChange({ flow, api }: { flow: Flow; api: FlowsApi }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  async function open() {
+    setBusy(true);
+    setFailed(false);
+    try {
+      await api.requestChange(flow);
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="outline"
+        className={ACTION_BUTTON}
+        disabled={busy}
+        onClick={() => void open()}
+      >
+        <MessageSquare className="mr-1 h-4 w-4" aria-hidden />
+        Demander une modification
+      </Button>
+      {failed && (
+        <p role="alert" className="w-full border border-border p-3 text-sm">
+          Impossible d&apos;ouvrir le chat. Réessayez.
+        </p>
+      )}
+    </>
   );
 }
 
@@ -86,6 +128,7 @@ function ReviewContent({
               Voir la tâche
             </Button>
           )}
+          <RequestChange flow={flow} api={api} />
         </div>
       </header>
 

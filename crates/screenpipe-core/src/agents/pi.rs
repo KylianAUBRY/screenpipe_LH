@@ -869,6 +869,12 @@ impl PiExecutor {
                 "render-html-report",
                 include_str!("../../assets/skills/render-html-report/SKILL.md"),
             ),
+            // Chat only (not pipes): read and change the user's Automation
+            // Flows; it never switches one on.
+            (
+                "automation-flows",
+                include_str!("../../assets/skills/automation-flows/SKILL.md"),
+            ),
         ];
 
         // Clean up deprecated skills from the 8→2 consolidation.
@@ -934,13 +940,14 @@ impl PiExecutor {
     /// [`Self::USER_SKILL_MARKER`], be deleted by a later sync. The desktop
     /// importer already rejects these names; this guards any folder that reaches
     /// the store another way.
-    const BASELINE_SKILL_NAMES: [&'static str; 6] = [
+    const BASELINE_SKILL_NAMES: [&'static str; 7] = [
         "screenpipe-api",
         "screenpipe-workflow-maintenance",
         "screenpipe-cli",
         "screenpipe-chats",
         "screenpipe-team",
         "render-html-report",
+        "automation-flows",
     ];
 
     /// Mirror the user's imported skills from the global store
@@ -4964,6 +4971,49 @@ mod tests {
             );
         }
         assert!(PiExecutor::BASELINE_SKILL_NAMES.contains(&"screenpipe-workflow-maintenance"));
+    }
+
+    #[test]
+    fn automation_flows_skill_installs_in_chat_only_and_never_switches_a_flow_on() {
+        let chat = tempfile::tempdir().unwrap();
+        let pipe = tempfile::tempdir().unwrap();
+        PiExecutor::ensure_screenpipe_skill(chat.path()).unwrap();
+        let config: crate::pipes::PipeConfig =
+            serde_yaml::from_str("name: test\npermissions:\n  allow: [Api(GET /search)]\n")
+                .unwrap();
+        PiExecutor::ensure_screenpipe_skill_filtered(pipe.path(), &config).unwrap();
+
+        let skill = include_str!("../../assets/skills/automation-flows/SKILL.md");
+        assert_eq!(
+            std::fs::read_to_string(chat.path().join(".pi/skills/automation-flows/SKILL.md"))
+                .unwrap(),
+            skill
+        );
+        // A background pipe never changes the user's Flows.
+        assert!(!pipe.path().join(".pi/skills/automation-flows").exists());
+        assert!(PiExecutor::BASELINE_SKILL_NAMES.contains(&"automation-flows"));
+
+        // Every request the skill shows reads or updates a Flow; none switches
+        // one on or off.
+        let mut in_code = false;
+        let requests: Vec<&str> = skill
+            .lines()
+            .filter(|line| {
+                if line.trim_start().starts_with("```") {
+                    in_code = !in_code;
+                    return false;
+                }
+                in_code || line.starts_with("| `")
+            })
+            .collect();
+        assert!(requests.iter().any(|line| line.contains("-X PUT")));
+        for line in requests {
+            for forbidden in ["activate", "publish", "5678"] {
+                assert!(!line.contains(forbidden), "{forbidden} in {line:?}");
+            }
+        }
+        assert!(skill.contains("**Never activate.**"));
+        assert!(skill.contains("screenpipe://flows/<id>"));
     }
 
     #[test]

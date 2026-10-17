@@ -7,7 +7,9 @@ import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const localFetch = vi.hoisted(() => vi.fn());
+const showChatWithPrefill = vi.hoisted(() => vi.fn(async (_prefill: Record<string, unknown>) => {}));
 vi.mock("@/lib/api", () => ({ localFetch }));
+vi.mock("@/lib/chat-utils", () => ({ showChatWithPrefill }));
 vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
@@ -89,6 +91,19 @@ describe("flowsApi", () => {
     respond(502, { error: "n8n_unreachable", detail: "connection refused" });
     const error = await flowsApi.list().catch((e) => e);
     expect(error.detail).toBe("connection refused");
+  });
+
+  it("requests a change in the Home chat, prefilled with the Flow id, without sending", async () => {
+    await flowsApi.requestChange(fixtureFlow);
+
+    expect(showChatWithPrefill).toHaveBeenCalledTimes(1);
+    const [prefill] = showChatWithPrefill.mock.lastCall!;
+    expect(prefill).toMatchObject({ autoSend: false, useHomeChat: true });
+    expect(prefill.prompt).toContain(`id : ${fixtureFlow.id}`);
+    expect(prefill.prompt).toContain(fixtureFlow.name);
+    expect(prefill.prompt).toContain("automation-flows");
+    // Opening the chat changes nothing in the Flow service.
+    expect(localFetch).not.toHaveBeenCalled();
   });
 });
 

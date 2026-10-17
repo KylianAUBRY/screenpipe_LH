@@ -151,6 +151,27 @@ export const flowsApi = {
   async openN8nConnection() {
     await emit("navigate", { url: "/home?section=connections" });
   },
+
+  /**
+   * "Demander une modification": the ScreenPipe chat, its composer prefilled
+   * with this Flow's id for the `automation-flows` skill. The user writes the
+   * change and sends it; the skill never activates the Flow.
+   */
+  async requestChange(flow: Pick<Flow, "id" | "name">) {
+    const { showChatWithPrefill } = await import("@/lib/chat-utils");
+    await showChatWithPrefill({
+      context: "",
+      prompt: changeRequestPrompt(flow),
+      autoSend: false,
+      useHomeChat: true,
+      source: "automation-flow",
+    });
+  },
 };
+
+/** The prefilled chat prompt; the user completes it with the change. */
+export function changeRequestPrompt(flow: Pick<Flow, "id" | "name">): string {
+  return `Avec le skill automation-flows, modifie l'Automation Flow « ${flow.name} » (id : ${flow.id}). Modification demandée : `;
+}
 
 export type FlowsApi = typeof flowsApi;
