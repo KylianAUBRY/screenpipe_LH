@@ -1060,7 +1060,7 @@ async fn deactivate_unpublishes_and_logs_then_the_status_follows_the_versions() 
     assert_eq!(flow["status"], "active");
 
     // Deactivate: n8n unpublishes, the Flow is Paused, the event is logged.
-    let (status, flow) = app.call("POST", &deactivate, None).await;
+    let (status, flow) = app.ui_call("POST", &deactivate, None).await;
     assert_eq!(status, StatusCode::OK, "{flow}");
     assert_eq!(
         posts_ending_with(&server, "/unpublish").await,
@@ -1101,6 +1101,41 @@ async fn deactivate_unpublishes_and_logs_then_the_status_follows_the_versions() 
     assert_eq!(flow["reviewedVersionId"], "version-2");
     assert_eq!(flow["activationLog"].as_array().unwrap().len(), 3);
     assert_eq!(flow["activationLog"][2]["versionId"], "version-2");
+}
+
+#[tokio::test]
+async fn deactivation_is_logged_as_the_users_only_with_the_ui_credential() {
+    // Switching off stays open to any local caller, but the history says who
+    // it was (ticket 22, item 2).
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let activate = format!("/automation-flows/{id}/activate");
+    let deactivate = format!("/automation-flows/{id}/deactivate");
+    let reviewed = Some(json!({"versionId": "version-1"}));
+
+    // A script, a pipe or the chat agent: no credential, or a wrong one.
+    for headers in [vec![JSON], vec![JSON, (ACTIVATION_HEADER, "guessed")]] {
+        app.ui_call("POST", &activate, reviewed.clone()).await;
+        let (status, flow) = app.send("POST", &deactivate, &headers, None).await;
+        assert_eq!(status, StatusCode::OK, "{flow}");
+        assert_eq!(flow["status"], "paused");
+        assert_eq!(
+            events(&flow).last().unwrap(),
+            &event("deactivated", "version-1", "api")
+        );
+    }
+    // The Review Screen's « Désactiver » carries the UI credential.
+    app.ui_call("POST", &activate, reviewed.clone()).await;
+    let (status, flow) = app.ui_call("POST", &deactivate, None).await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(
+        events(&flow).last().unwrap(),
+        &event("deactivated", "version-1", "user")
+    );
+    assert_eq!(n8n.workflows()[0]["active"], false);
 }
 
 #[tokio::test]
@@ -1842,7 +1877,7 @@ async fn chat_update_of_a_paused_flow_leaves_it_needing_review_without_switching
         reviewed,
     )
     .await;
-    app.call("POST", &format!("/automation-flows/{id}/deactivate"), None)
+    app.ui_call("POST", &format!("/automation-flows/{id}/deactivate"), None)
         .await;
     let writes_before = n8n_writes(&server).await.len();
 

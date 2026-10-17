@@ -759,7 +759,8 @@ struct ActivationEvent {
 
 impl FlowRecord {
     /// Appends an event to the activation history; `by` is "user" for the
-    /// Review Screen's buttons, "chat" for a chat modification.
+    /// Review Screen's buttons, "chat" for a chat modification, "api" for a
+    /// deactivation by any other local caller.
     fn log(&mut self, event: &str, version_id: String, by: &str) {
         self.activation_log.push(ActivationEvent {
             at: chrono::Utc::now().to_rfc3339(),
@@ -1008,6 +1009,16 @@ async fn load_flow(state: &FlowsState, id: &str) -> Result<(N8nApi, FlowStore, V
     Ok((api, store, workflow))
 }
 
+/// Whether the request carries the UI credential ([`FlowActivationKey`]): a
+/// click on the Review Screen. The local API key is shared with the chat
+/// agent, pipes and MCP clients; only the desktop UI holds this credential.
+fn from_user(state: &FlowsState, headers: &HeaderMap) -> bool {
+    headers
+        .get(ACTIVATION_HEADER)
+        .zip(state.activation_key.as_ref())
+        .is_some_and(|(sent, key)| key.matches(sent.as_bytes()))
+}
+
 /// Activation: publishes in n8n exactly the version the user reviewed, records
 /// it as the reviewed version and logs it. Only the Review Screen's
 /// "Activer" button calls this route; nothing in the engine calls it, and it
@@ -1018,13 +1029,7 @@ async fn activate_flow(
     headers: HeaderMap,
     body: Option<Json<ActivateRequest>>,
 ) -> Result<Json<Flow>, FlowError> {
-    // The local API key is shared with the chat agent, pipes and MCP clients;
-    // only the desktop UI holds this credential.
-    let from_user = headers
-        .get(ACTIVATION_HEADER)
-        .zip(state.activation_key.as_ref())
-        .is_some_and(|(sent, key)| key.matches(sent.as_bytes()));
-    if !from_user {
+    if !from_user(&state, &headers) {
         return Err(FlowError::ActivationRequiresUser);
     }
     // Activation publishes exactly what the user read, so it must say what that was.
@@ -1067,10 +1072,18 @@ async fn activate_flow(
 }
 
 /// Switches the n8n workflow off and logs which version stopped running.
+/// Open to any authenticated caller (switching off is always safe); the log
+/// says "user" only for the Review Screen's click, "api" for anyone else.
 async fn deactivate_flow(
     State(state): State<FlowsState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<Flow>, FlowError> {
+    let by = if from_user(&state, &headers) {
+        "user"
+    } else {
+        "api"
+    };
     let _guard = state.write_lock.lock().await;
     let (api, mut store, workflow) = load_flow(&state, &id).await?;
     if workflow["active"] != true {
@@ -1081,7 +1094,7 @@ async fn deactivate_flow(
     let running = running_version(&workflow);
 
     let unpublished = api.switch(&id, "unpublish", None).await?;
-    store.record_mut(&id).log("deactivated", running, "user");
+    store.record_mut(&id).log("deactivated", running, by);
     store.save(&state.screenpipe_dir)?;
 
     let workflow = api.workflow(&id).await?.unwrap_or(unpublished);
