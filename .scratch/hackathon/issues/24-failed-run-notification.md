@@ -12,7 +12,7 @@ attaches it to each Flow it creates, imports or updates. No automatic pause.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** done on `hackathon/ticket-24`; live check pending human.
+**Status:** done — merged into `hackathon/failure-handling` (review fixes `073ee5704`); live check pending human (steps below).
 
 - [x] Flow service tests: create, import and chat update attach the error workflow to the Flow; the error workflow is installed once and never listed as a Flow.
 - [ ] A Run made to fail in the local n8n produces one notification that opens the right Review Screen (manual check, steps below). **Pending human.**

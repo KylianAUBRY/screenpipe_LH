@@ -13,7 +13,7 @@ restarts).
 
 **Blocked by:** 24 (same notification content).
 
-**Status:** done on `hackathon/ticket-29`; live check pending human.
+**Status:** done — merged into `hackathon/failure-handling` (review fixes `073ee5704`); live check pending human (steps below).
 
 - [x] Tests: the check notifies each Failed Run once, remembers its position across restarts, and does nothing when there are no Flows; an unreachable n8n sets the banner state instead of failing (engine tests against the fake n8n; frontend tests for the banner).
 - [x] The check never blocks the app start or the recording hot path (runs in the background, bounded).

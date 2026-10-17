@@ -108,7 +108,7 @@ minutes).
 
 ## Open decisions
 
-- **Failure handling (SPEC.md D16–D20) is ticketed on branch `hackathon/failure-handling`:** ticket 25 (idempotent ticket creation) is merged (`e732dc940`, live check pending human); ticket 24 (Failed Run notification) is merged (`cb2add87e`, live check pending human; its native panel unit test never compiled: no machine-wide sccache here); ticket 27 (Abstention) is merged (`114259cd0`, live check pending human); ticket 29 (health check) is merged (`f245a4aaa`, live check pending human); ticket 26 (Retry) is merged (`f4815db56`, live check pending human); ticket 28 (Activity) is merged (`d89366b5f`, live check pending human). All six built; closing code review next; 26 (Retry) needs 24+25; 27 (Abstention) and 29 (health check) need 24; 28 (Activity) needs 27. Not built yet.
+- **Failure handling (SPEC.md D16–D20) is built on branch `hackathon/failure-handling` (tip after `073ee5704`), not merged into `hackathon/automation-flows` or `main`:** tickets 24 (Failed Run notification), 25 (idempotent creation), 26 (Retry), 27 (Abstention), 28 (Activity), 29 (health check) are merged there with a closing code review (8 findings fixed). Every ticket's live check is pending human (steps in each ticket; needs the dev build, the ScreenPipe API key pasted into `spScreenpipeApi1`, and the workflow re-imported). Not verified: `src-tauri` native notification routing (`native_actions.rs`) never compiled here (no machine-wide sccache); the real n8n 2.42.2 execution-data shape the Activity reads.
 - **Teammate divergence (settled 2026-10-17):** `main` had another Review
   Screen ("Recommendations" tab, questions on the Review Screen, notification
   opens the Review Screen, demo backend) by a teammate, plus the « Find an

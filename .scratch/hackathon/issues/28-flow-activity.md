@@ -11,7 +11,7 @@ workflow's last step exposes a stable outcome record for each item.
 
 **Blocked by:** 27 (the « abstained » outcome must exist).
 
-**Status:** done in code (branch `hackathon/ticket-28`); live check pending human.
+**Status:** done — merged into `hackathon/failure-handling` (review fixes `073ee5704`); live check pending human (steps below).
 
 - [x] Flow service tests against the fake n8n: the Activity route maps executions to outcomes and reasons, newest first, limited in size; a Run without an outcome record shows as failed or unknown, never as success.
 - [x] Frontend tests: each outcome renders with its reason; an empty Activity says so.

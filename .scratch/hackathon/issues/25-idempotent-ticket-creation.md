@@ -12,7 +12,7 @@ in plain language.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** done in code (branch `hackathon/ticket-25`); live check pending human.
+**Status:** done — merged into `hackathon/failure-handling` (review fixes `073ee5704`); live check pending human (steps below).
 
 - [x] Outside-in workflow test: the label is computed deterministically from the Message-ID; the search happens before creation; a found label skips creation; an email without Message-ID falls back to a stable hash of sender + date + subject.
 - [x] Prompt-injection guards and every existing workflow test still pass.

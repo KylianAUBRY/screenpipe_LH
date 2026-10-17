@@ -11,7 +11,7 @@ guard treats a missing or unexpected confidence as low.
 
 **Blocked by:** 24 (reuses the n8n → ScreenPipe notification path).
 
-**Status:** done in code (branch `hackathon/ticket-27`); live check pending human.
+**Status:** done — merged into `hackathon/failure-handling` (review fixes `073ee5704`); live check pending human (steps below).
 
 - [x] Outside-in workflow test: low confidence never reaches Jira and produces the notification payload; a missing or unknown confidence counts as low; high confidence is unchanged.
 - [x] The review material explains the abstention in one sentence on the new node(s).

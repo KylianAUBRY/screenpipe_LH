@@ -11,7 +11,7 @@ with a clear message.
 
 **Blocked by:** 24 (the notification it adds an action to), 25 (makes a retry safe from duplicate tickets).
 
-**Status:** done on `hackathon/ticket-26`; live check pending human.
+**Status:** done — merged into `hackathon/failure-handling` (review fixes `073ee5704`); live check pending human (steps below).
 
 - [x] Flow service tests against the fake n8n: retry of a failed Run calls n8n's retry and returns the new Run; a successful or running Run is refused; an unknown Run gives 404.
 - [x] « Relancer » appears only on a Failed Run and refreshes the Review Screen (frontend tests).
