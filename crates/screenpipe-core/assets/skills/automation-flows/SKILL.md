@@ -109,11 +109,13 @@ off; the user reviews it and switches it on.
      picks them in n8n (« Voir le graphe »); say which nodes need one.
    - AI nodes only where judgment is needed (rule 3); plain n8n nodes for the
      rest.
-   - ScreenPipe nodes (package `n8n-nodes-screenpipe`) start a Flow on what
-     happens on this computer: `n8n-nodes-screenpipe.screenPipeTrigger` (a
-     keyword said, an app or window becoming active, a pipe or Flow running)
-     and `n8n-nodes-screenpipe.screenPipeAiTrigger` (an AI-judged condition);
-     `n8n-nodes-screenpipe.screenPipe` searches the user's ScreenPipe history.
+   - ScreenPipe nodes (package `n8n-nodes-screenpipe`, loaded by this n8n
+     as custom nodes, so their type starts with `CUSTOM.`) start a Flow on
+     what happens on this computer: `CUSTOM.screenPipeTrigger` (a keyword
+     said, an app or window becoming active, a pipe or Flow running) and
+     `CUSTOM.screenPipeAiTrigger` (an AI-judged condition);
+     `CUSTOM.screenPipe` searches the user's ScreenPipe history, and
+     `CUSTOM.screenPipeTool` is the same search as an AI Agent tool.
 3. Write `body.json` as `{"workflow": <workflow>, "summary": "<2 to 4 plain
    French sentences: what the Flow does and how>"}`.
 4. Send it **once**:

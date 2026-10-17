@@ -5024,6 +5024,27 @@ mod tests {
     }
 
     #[test]
+    fn automation_flows_skill_names_the_screenpipe_node_types_n8n_loads() {
+        // The local n8n loads the package as custom extensions, so its node
+        // types are `CUSTOM.<name>`; a wrong prefix makes n8n refuse the
+        // workflow the chat builds.
+        let skill = include_str!("../../assets/skills/automation-flows/SKILL.md");
+        let demo = include_str!(
+            "../../../../infra/automation-flows/workflows/novadesk-support-tickets.json"
+        );
+        assert!(demo.contains("\"CUSTOM.screenPipeTool\""));
+        for node_type in [
+            "CUSTOM.screenPipe`",
+            "CUSTOM.screenPipeTool`",
+            "CUSTOM.screenPipeTrigger`",
+            "CUSTOM.screenPipeAiTrigger`",
+        ] {
+            assert!(skill.contains(node_type), "{node_type} missing from the skill");
+        }
+        assert!(!skill.contains("n8n-nodes-screenpipe.screenPipe"));
+    }
+
+    #[test]
     fn managed_pipe_guidance_only_ships_in_enterprise_team_skill() {
         let consumer_skill = include_str!("../../assets/skills/screenpipe-cli/SKILL.md");
         let enterprise_skill = include_str!("../../assets/skills/screenpipe-team/SKILL.md");
