@@ -252,6 +252,36 @@ describe("Review Screen", () => {
     expect(api.openTaskPage).toHaveBeenCalledWith(fixtureFlow.sourceTaskId);
   });
 
+  it("puts « Review and edit » just left of « Open in n8n », opening the Task Page", async () => {
+    const api = fakeApi();
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    const header = await screen.findByTestId("flow-header");
+    const names = within(header)
+      .getAllByRole("button")
+      .map((button) => button.textContent?.trim());
+    expect(names.indexOf("Review and edit")).toBeGreaterThanOrEqual(0);
+    expect(names.indexOf("Review and edit")).toBe(names.indexOf("Open in n8n") - 1);
+
+    fireEvent.click(within(header).getByRole("button", { name: "Review and edit" }));
+    expect(api.openTaskPage).toHaveBeenCalledWith(fixtureFlow.sourceTaskId);
+  });
+
+  it("offers « Review and edit » only for a Flow made from a detected task", async () => {
+    const chatFlow: Flow = { ...fixtureFlow, sourceTaskId: null };
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => chatFlow) })} />);
+    await screen.findByRole("button", { name: "Open in n8n" });
+    expect(screen.queryByRole("button", { name: "Review and edit" })).toBeNull();
+  });
+
+  it("shows the graph before « Learned from »", async () => {
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi()} />);
+
+    const graph = await screen.findByRole("application", { name: "Flow graph" });
+    const learnedFrom = await screen.findByTestId("flow-learned-from");
+    expect(graph.compareDocumentPosition(learnedFrom) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("hides the task link for a Flow without a source task", async () => {
     const chatFlow: Flow = { ...fixtureFlow, sourceTaskId: null };
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => chatFlow) })} />);

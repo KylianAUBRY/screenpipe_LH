@@ -5,14 +5,15 @@
 "use client";
 
 // Review Screen, top to bottom: a sticky header (name, status, last run,
-// Dismiss · Open in n8n · Turn on / Pause), what went wrong with a click, what
-// the Flow does, the times the user did it by hand ("Learned from"), the n8n
-// graph with one sentence per node, and the history. A page to look at and
+// Dismiss · Review and edit · Open in n8n · Turn on / Pause), what went wrong
+// with a click, what the Flow does, the n8n graph (one name per node, its
+// sentence on hover), the times the user did it by hand ("Learned from"),
+// and the history. A page to look at and
 // switch: the review (questions, choices) happens on the Task Page in
 // Workflows. Plan: .scratch/hackathon/flow-front-merge.md.
 
 import React from "react";
-import { ArrowLeft, ExternalLink, Pause, Power, RotateCcw } from "lucide-react";
+import { ArrowLeft, ExternalLink, Pause, Pencil, Power, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ActivationEvent, Flow, FlowsApi } from "./api";
@@ -114,6 +115,13 @@ function ReviewContent({
               Dismiss
             </Button>
           )}
+          {flow.sourceTaskId && (
+            // Where the Flow is reviewed and changed: its Task Page in Workflows.
+            <Button size="sm" variant="outline" onClick={() => void api.openTaskPage(flow.sourceTaskId!)}>
+              <Pencil className="mr-1 h-4 w-4" aria-hidden />
+              Review and edit
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => void api.openInN8n(flow.n8nUrl)}>
             <ExternalLink className="mr-1 h-4 w-4" aria-hidden />
             Open in n8n
@@ -146,14 +154,14 @@ function ReviewContent({
         <p className="text-sm leading-relaxed">{flow.summary || "No summary."}</p>
       </section>
 
-      <FlowLearnedFrom flow={flow} api={api} />
-
       <section className="space-y-2">
         <SectionLabel>
           How it works <span className="font-mono">{steps.length}</span>
         </SectionLabel>
         <FlowGraph nodes={steps} edges={flow.edges} />
       </section>
+
+      <FlowLearnedFrom flow={flow} api={api} />
 
       <section className="space-y-2">
         <SectionLabel>History</SectionLabel>

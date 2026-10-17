@@ -43,12 +43,25 @@ describe("Review Screen graph", () => {
     }
   });
 
+  it("shows only the title on each card, in large type; the sentence is on hover", async () => {
+    const graph = await renderGraph();
+
+    for (const node of fixtureFlow.nodes) {
+      const card = within(graph).getByTestId(`flow-node-${node.id}`);
+      expect(within(card).getByText(node.name).className).toContain("text-base");
+      // Tooltip for the mouse, hidden text for screen readers.
+      expect(card.getAttribute("title")).toBe(node.sentence);
+      expect(within(card).getByText(node.sentence!).className).toContain("sr-only");
+    }
+  });
+
   it("shows a neutral placeholder for a node without a sentence", async () => {
     const [first, ...rest] = fixtureFlow.nodes;
     const graph = await renderGraph({ ...fixtureFlow, nodes: [{ ...first, sentence: null }, ...rest] });
 
     const card = within(graph).getByTestId(`flow-node-${first.id}`);
     expect(within(card).getByText("No explanation for this step.")).toBeTruthy();
+    expect(card.getAttribute("title")).toBe("No explanation for this step.");
   });
 
   it("keeps each card to what the step does: no n8n type, credential or host", async () => {

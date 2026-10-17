@@ -5,7 +5,8 @@
 "use client";
 
 // Read-only picture of a Flow's n8n workflow for the Review Screen: each node
-// with its one-sentence explanation. Editing happens in n8n ("Open in n8n").
+// by its name, its one-sentence explanation on hover. Editing happens in n8n
+// ("Open in n8n").
 
 import React, { useMemo } from "react";
 import {
@@ -21,14 +22,15 @@ import {
 } from "@xyflow/react";
 import type { Flow, FlowNode } from "./api";
 
-// Cards are narrow so the fitted picture stays readable; a sentence makes
-// them taller than n8n's ~100 px nodes, so rows are spread further apart.
-const NODE_WIDTH = 160;
+// Cards hold the step's name only, so they stay short and the fitted picture
+// zooms in enough to read it; n8n's own row spacing is kept as is.
+const NODE_WIDTH = 180;
 const NODE_GAP = 32;
 const N8N_NODE_SIZE = 100;
-const SPREAD_Y = 1.3;
+const SPREAD_Y = 1;
 // First-render estimate only: the browser measures the real card height.
-const NODE_HEIGHT = 200;
+const NODE_HEIGHT = 72;
+const NO_SENTENCE = "No explanation for this step.";
 
 type StepNode = Node<{ node: FlowNode }, "step">;
 
@@ -47,7 +49,11 @@ const HIDDEN_HANDLE = "!h-px !w-px !min-h-0 !min-w-0 !border-0 !bg-transparent";
 
 function StepCard({ data: { node } }: NodeProps<StepNode>) {
   return (
-    <div data-testid={`flow-node-${node.id}`} className="border border-border bg-background p-3">
+    <div
+      data-testid={`flow-node-${node.id}`}
+      title={node.sentence ?? NO_SENTENCE}
+      className="border border-border bg-background px-3 py-2.5"
+    >
       {HANDLES.map((handle) => (
         <Handle
           key={handle.id}
@@ -58,12 +64,11 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
           className={HIDDEN_HANDLE}
         />
       ))}
-      {/* What the step does, in plain words. The n8n node type and the fixed
-          facts (credentials, hosts) stay in n8n: "Open in n8n" shows them. */}
-      <p className="text-sm font-medium leading-tight">{node.name}</p>
-      <p className="mt-1.5 break-words text-xs leading-snug text-muted-foreground">
-        {node.sentence ?? "No explanation for this step."}
-      </p>
+      {/* The step's name only, large enough to read in the fitted picture.
+          What it does is on hover (title) and for screen readers; the n8n
+          node type and the fixed facts stay in n8n ("Open in n8n"). */}
+      <p className="break-words text-base font-medium leading-snug">{node.name}</p>
+      <p className="sr-only">{node.sentence ?? NO_SENTENCE}</p>
     </div>
   );
 }
