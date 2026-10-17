@@ -40,6 +40,18 @@ _Avoid_: workflow (unqualified), graph
 The page where the user reads what a Flow does and decides to activate it.
 _Avoid_: validation page, creation page
 
+**Run**:
+One execution of a Flow's n8n workflow, started by its trigger. A **Failed Run** is one that stopped on an error.
+_Avoid_: execution (in user-facing text), job
+
+**Abstention**:
+A Run outcome where the AI is not confident enough to decide, so nothing is done and the item is left to the user.
+_Avoid_: skip, unknown
+
+**Activity**:
+The list of what a Flow did, item by item: the outcome of each handled item and the reason for it.
+_Avoid_: logs, history (history is the Activation history)
+
 **Activation**:
 The explicit user action that switches a Flow's n8n workflow on.
 _Avoid_: deploy, enable, accept

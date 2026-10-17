@@ -57,6 +57,7 @@ describe("ScreenPipe AI Trigger: what n8n loads", () => {
       ["conditionPrompt", ""],
       ["lookbackMinutes", 15],
       ["cooldownMinutes", 60],
+      ["model", "chatgpt/gpt-5.6-luna:max"],
     ]);
     // n8n resolves `file:` icons next to the built .node.js; the build copies
     // nodes/ScreenPipe/screenpipe.png, which this node reuses.
@@ -94,7 +95,8 @@ describe("ScreenPipe AI Trigger: deciding with the AI", () => {
     });
     expect(aiRequest).toMatchObject({ method: "POST", path: "/v1/chat/completions", authorization: `Bearer ${API_KEY}` });
     const body = aiRequest.body as { model: string; messages: { role: string; content: string }[] };
-    expect(body.model).toBe("auto");
+    // By default the user's ChatGPT subscription judges, at maximum reasoning, through the same proxy.
+    expect(body.model).toBe("chatgpt/gpt-5.6-luna:max");
     const prompt = body.messages.map((m) => m.content).join("\n");
     expect(prompt).toContain(CONDITION);
     expect(prompt).toContain("[NovaCRM] Export CSV vide — support");
@@ -187,6 +189,31 @@ describe("ScreenPipe AI Trigger: testing in the editor (manual mode)", () => {
     expect(error).toBeInstanceOf(NodeOperationError);
     expect(error.message).toContain("not met");
     expect(error.description).toContain("Only the calendar is open.");
+  });
+
+  test("asks the model the node names", async () => {
+    api = fakeScreenpipe({
+      "/activity-summary": { body: SUMMARY },
+      "/v1/chat/completions": aiAnswer('{"met": true, "reason": "r"}'),
+    });
+
+    await poller({ model: "auto" }).poll();
+
+    expect((api.requests[1].body as { model: string }).model).toBe("auto");
+  });
+
+  test("an OpenAI-shaped error from the proxy shows its message", async () => {
+    api = fakeScreenpipe({
+      "/activity-summary": { body: SUMMARY },
+      "/v1/chat/completions": {
+        status: 503,
+        body: { error: { message: "connect ChatGPT in screenpipe", type: "chatgpt_not_connected" } },
+      },
+    });
+
+    const error = await poller({}, "manual").poll().catch((e) => e);
+
+    expect(`${error.message} ${error.description}`).toContain("HTTP 503: connect ChatGPT in screenpipe");
   });
 
   test("when the AI check fails, the test fails with the cause", async () => {

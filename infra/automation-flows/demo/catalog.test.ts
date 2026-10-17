@@ -8,8 +8,8 @@ import { sanitizeWorkflowAnalysis } from "../../../packages/workflows-ui/src/cat
 import { serializeWorkflowData, stageScreenshots } from "../../../packages/workflows-ui/src/screenshots";
 import { readWorkflowAnswers, writeWorkflowAnswers } from "../../../packages/workflows-ui/src/workflow-answers";
 import { clearAnswers, readCatalog, upsertTask, writeCatalog, type Catalog } from "./catalog";
-import { buildDetectedTask, CLARIFICATION_QUESTIONS, DEMO_TASK_ID, DEMO_TASK_URL, EVIDENCE_IMAGES } from "./detected-task";
-import { evidenceDataUrl, notificationPayload } from "./demo";
+import { buildDetectedTask, CLARIFICATION_QUESTIONS, DEMO_TASK_ID, DEMO_TASK_URL, EVIDENCE_IMAGES } from "../../../apps/screenpipe-app-tauri/lib/automation-flows/demo-task/detected-task";
+import { EVIDENCE_DIR, evidenceDataUrl, notificationPayload } from "./demo";
 
 const now = "2026-10-17T06:00:00Z";
 const task = buildDetectedTask(evidenceDataUrl, now);
@@ -27,7 +27,7 @@ describe("demo Detected Task", () => {
   });
 
   it("embeds small images that survive app persistence and stay visible after sanitizing", () => {
-    const sizes = EVIDENCE_IMAGES.map(name => readFileSync(join(import.meta.dir, "evidence", `${name}.webp`)).length);
+    const sizes = EVIDENCE_IMAGES.map(name => readFileSync(join(EVIDENCE_DIR, `${name}.webp`)).length);
     expect(sizes).toHaveLength(9);
     expect(Math.max(...sizes)).toBeLessThan(80_000);
     const saved = JSON.parse(serializeWorkflowData(upsertTask(null, task, now))) as Catalog;

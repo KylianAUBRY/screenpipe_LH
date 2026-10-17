@@ -44,7 +44,7 @@ export const fixtureFlow: Flow = {
       name: "screenpipe AI model",
       type: "@n8n/n8n-nodes-langchain.lmChatOpenAi",
       position: [180, 220],
-      sentence: "The AI model is the one from your screenpipe subscription, called through screenpipe's local proxy.",
+      sentence: "The AI model is the one from your ChatGPT subscription, called through screenpipe's local proxy.",
       facts: ["n8n credential: ScreenPipe AI proxy"],
     },
     {

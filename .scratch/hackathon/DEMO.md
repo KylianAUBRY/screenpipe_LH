@@ -25,10 +25,13 @@ proofs are in `evidence/LIVE-CHECKS.md`.
 
 ## Between rehearsals (start state)
 
+From the repo root, Bun loads `N8N_API_KEY` (n8n → Settings → n8n API) and
+`SCREENPIPE_LOCAL_API_KEY` (ScreenPipe → Settings → Privacy) from the
+gitignored root `.env`:
+
 ```bash
-export N8N_API_KEY=…            # n8n → Settings → n8n API
 bun infra/automation-flows/demo/reset.ts   # no demo Flow, no answers, no unread email
-SCREENPIPE_LOCAL_API_KEY=… bun infra/automation-flows/demo/demo.ts --no-notify   # re-install the task (9/9 real captures)
+bun infra/automation-flows/demo/demo.ts --no-notify   # re-install the task (9/9 real captures)
 ```
 
 Expected last line of reset: « Reset complete: no demo Flow, no saved
@@ -39,7 +42,7 @@ alert twice within 90 s: wait 90 s after a previous run before `demo.ts`.
 
 | Time | Do | Observed in rehearsals |
 |---|---|---|
-| 0:00 | Problem (one sentence), then run `bun infra/automation-flows/demo/demo.ts` (or have it fired just before). | — |
+| 0:00 | Problem (one sentence), then Automations → « Find an automation » (next to the bell), or run `bun infra/automation-flows/demo/demo.ts` (or have it fired just before). Both install the task and fire the same notification. | button not rehearsed in the native app yet (ticket 24) |
 | 0:10 | Click « View task » on the notification. Task Page: 3 repetitions with the real captures (4:05–4:15), « View in timeline » on a capture. | Task Page in 4–7 s |
 | 0:30 | Type the 2 answers; « Create automation » unlocks only at 2/2. Click it. | Review Screen in ~10 s |
 | 0:50 | Review Screen: summary, « Learned from » captures, graph with one sentence per step; « Open in n8n » (n8n in Safari) for 5 s. | |

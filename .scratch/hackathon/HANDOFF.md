@@ -49,6 +49,7 @@ decisions in `flow-front-merge.md`. Not in `main` until approved, through a PR.
 | 21 | Switching a Flow off waits for the running execution | done, live-verified |
 | 22 | Review fixes, engine (who deactivated, outside activation, credentials, facts, sourceMoment, n8n_failed, no MCP) | done, live-verified |
 | 23 | Review fixes, UI/workflow/nodes (DESIGN.md, reviewed version, timeline link, Jira markup, AI trigger) | done, live-verified |
+| 24 | « Trouver une automatisation » button (scripted detection, next to the bell) | done, browser mock only; native app not run |
 | 12 | Demo assembly + rehearsal | 5 rehearsals; journey 105–110 s; acceptance list checked in `SPEC.md`; see `DEMO.md` |
 
 Also fixed from rehearsals: IMAP catch-up seed (an email arriving around
@@ -128,6 +129,7 @@ minutes).
 
 ## Open decisions
 
+- **Failure handling decided, not yet ticketed:** SPEC.md D16–D20 (failure notification, Retry of a Failed Run, AI Abstention + Activity list, health check at app start and every 15 min, idempotent Retry via a `mail-<hash>` Jira label). Turn them into tickets with `/to-tickets` before building.
 - **Teammate divergence (settled 2026-10-17):** `main` had another Review
   Screen ("Recommendations" tab, questions on the Review Screen, notification
   opens the Review Screen, demo backend) by a teammate, plus the « Find an
@@ -135,7 +137,10 @@ minutes).
   decision: those four commits moved to
   `archive/main-before-automation-flows` (tip `1196dd10a`), and `main` took
   this branch's content unchanged (merge `-s ours`, no force-push, so their
-  commits stay in `main`'s history). Pieces worth porting later from the
-  archive: Flows grouped by state, the « if → then » rules with « de vous »
-  for rules from the user's answers, choice pills for the questions.
+  commits stay in `main`'s history). Ported since: the « Find an automation »
+  button, as « Trouver une automatisation » running the scripted detection
+  (ticket 24; the archive's `repeated-workflow-detector` Pipe was not ported).
+  Pieces worth porting later from the archive: Flows grouped by state, the
+  « if → then » rules with « de vous » for rules from the user's answers,
+  choice pills for the questions.
 - Whether the n8n trigger nodes appear in the 3-minute demo (D12).

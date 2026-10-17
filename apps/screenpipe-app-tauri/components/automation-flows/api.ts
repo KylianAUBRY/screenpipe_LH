@@ -377,6 +377,16 @@ export const flowsApi = {
 export const CREATION_PROMPT =
   "Using the automation-flows skill, create a new Automation Flow. What it should do: ";
 
+/**
+ * The composer text for « Create flow » in the main chat: the creation prompt,
+ * then whatever the user had already typed, kept as the description.
+ */
+export function withCreationPrompt(draft: string): string {
+  const description = draft.trim();
+  if (description.startsWith(CREATION_PROMPT.trim())) return draft;
+  return CREATION_PROMPT + description;
+}
+
 /** The prefilled chat prompt; the user completes it with the change. */
 export function changeRequestPrompt(flow: Pick<Flow, "id" | "name">): string {
   return `Using the automation-flows skill, change the Automation Flow "${flow.name}" (id: ${flow.id}). What to change: `;

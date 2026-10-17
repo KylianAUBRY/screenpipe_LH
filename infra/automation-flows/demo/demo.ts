@@ -12,15 +12,20 @@
 //   bun infra/automation-flows/demo/demo.ts --print      print a catalog holding only the task (browser mock, embedded)
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildDetectedTask, DEMO_RECORDING, DEMO_TASK_ID, DEMO_TASK_URL, EVIDENCE_CAPTURES } from "./detected-task";
+import { buildDetectedTask, DEMO_RECORDING, DEMO_TASK_ID, EVIDENCE_CAPTURES, EVIDENCE_PATH, notificationPayload } from "../../../apps/screenpipe-app-tauri/lib/automation-flows/demo-task/detected-task";
+import { findRecordedFrames } from "../../../apps/screenpipe-app-tauri/lib/automation-flows/demo-task/recorded-evidence";
 import { catalogDir, readCatalog, upsertTask, writeCatalog } from "./catalog";
-import { findRecordedFrames } from "./recorded-evidence";
+
+export { notificationPayload };
 
 const NOTIFY_URL = process.env.SCREENPIPE_NOTIFY_URL ?? "http://localhost:11435/notify";
 const SCREENPIPE_API_URL = process.env.SCREENPIPE_API_URL ?? "http://localhost:3030";
 
+/** The app's `public/` folder serves the key frames at EVIDENCE_PATH. */
+export const EVIDENCE_DIR = join(import.meta.dir, "../../../apps/screenpipe-app-tauri/public", EVIDENCE_PATH);
+
 export function evidenceDataUrl(image: string): string {
-  const bytes = readFileSync(join(import.meta.dir, "evidence", `${image}.webp`));
+  const bytes = readFileSync(join(EVIDENCE_DIR, `${image}.webp`));
   return `data:image/webp;base64,${bytes.toString("base64")}`;
 }
 
@@ -29,22 +34,6 @@ export async function buildDemoTask(now: string, api: { url: string; key?: strin
   const evidence = await findRecordedFrames(EVIDENCE_CAPTURES, { ...api, window: DEMO_RECORDING });
   const frames = Object.fromEntries(evidence.flatMap(lookup => lookup.frame ? [[lookup.image, lookup.frame]] : []));
   return { task: buildDetectedTask(evidenceDataUrl, now, frames), evidence };
-}
-
-/** Same deeplink action shape as the native workflow notification (`notifications/workflow.rs`). */
-export function notificationPayload(now = Date.now()) {
-  return {
-    // Unique per run: the route drops a repeated id ("Notification already sent").
-    id: `automation-flows-demo:${DEMO_TASK_ID}:${now}`,
-    title: "Repetitive task detected",
-    body: "You turned 3 bug emails into NOVA Jira tickets. Answer 2 questions to automate it.",
-    type: "pipe",
-    priority: "normal",
-    transient: false,
-    autoDismissMs: 60_000,
-    source_url: DEMO_TASK_URL,
-    actions: [{ type: "deeplink", label: "View task", url: DEMO_TASK_URL, primary: true }],
-  };
 }
 
 async function notify() {

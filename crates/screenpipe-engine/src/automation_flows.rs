@@ -21,9 +21,12 @@
 //! `automation-flows` skill) switches an active Flow off before updating it
 //! and never switches it on: the Flow then needs review. Switching a Flow off
 //! waits for the execution n8n is running ([`RunningWait`]), so the email it
-//! processes is never lost. The chat never wires n8n credentials.
+//! processes is never lost. The chat never picks n8n credentials, and a
+//! workflow with an invented, switched-off or half-built node is refused
+//! before n8n sees it ([`crate::flow_checks`]).
 
 use crate::atomic_file;
+use crate::flow_checks::{check_and_wire, N8nCredential};
 use crate::routes::workflows::{read_catalog, workflow_id as task_id_of, WorkflowCatalogSource};
 use axum::{
     extract::{Path, Request, State},
@@ -631,6 +634,16 @@ impl N8nApi {
         self.workflow(&id).await?.ok_or(FlowError::FlowNotFound)
     }
 
+    /// The credentials n8n holds (id, name and type; never a secret).
+    async fn credentials(&self) -> Result<Vec<N8nCredential>, FlowError> {
+        Ok(self
+            .all_pages("/credentials", &[("limit", "250")])
+            .await?
+            .iter()
+            .filter_map(N8nCredential::from_n8n)
+            .collect())
+    }
+
     async fn last_execution(&self, workflow_id: &str) -> Option<LastExecution> {
         let page = match self
             .expect_ok(
@@ -795,10 +808,11 @@ fn importable(workflow: &Value) -> Value {
     Value::Object(body)
 }
 
-/// The chat never wires n8n credentials: the user picks them in n8n. Each
-/// node of `body` keeps only the credentials that `current` (the workflow n8n
-/// holds now) gives the node of the same name and type; a new or retyped node,
-/// or any node of a new workflow (`None`), gets none. Never from the request.
+/// The chat never picks n8n credentials. Each node of `body` keeps only the
+/// credentials that `current` (the workflow n8n holds now) gives the node of
+/// the same name and type; a new or retyped node, or any node of a new
+/// workflow (`None`), gets none here. Never from the request: a credential a
+/// node still needs is wired, or the workflow refused, by [`check_nodes`].
 fn keep_user_credentials(body: &mut Value, current: Option<&Value>) {
     let current_nodes = current
         .and_then(|workflow| workflow["nodes"].as_array())
@@ -819,6 +833,13 @@ fn keep_user_credentials(body: &mut Value, current: Option<&Value>) {
             None => fields.remove("credentials"),
         };
     }
+}
+
+/// Refuses a chat workflow whose nodes this n8n cannot run as built, and
+/// wires the credentials ScreenPipe may wire ([`crate::flow_checks`]).
+async fn check_nodes(api: &N8nApi, body: &mut Value) -> Result<(), FlowError> {
+    let credentials = api.credentials().await?;
+    check_and_wire(body, &credentials).map_err(|problems| FlowError::InvalidWorkflow(problems.join("; ")))
 }
 
 /// Why a chat modification cannot be applied as is, if it cannot: it needs
@@ -1427,6 +1448,7 @@ async fn update_flow(
         body["name"] = current["name"].clone();
     }
     keep_user_credentials(&mut body, Some(&current));
+    check_nodes(&api, &mut body).await?;
 
     if current["active"] == true {
         let running = running_version(&current);
@@ -1494,6 +1516,7 @@ async fn create_flow(
     // `importable` drops `active` and `tags`: n8n imports it switched off.
     let mut body = importable(&request.workflow);
     keep_user_credentials(&mut body, None);
+    check_nodes(&api, &mut body).await?;
     let (status, created) = api
         .send(Method::POST, "/workflows", &[], Some(&body))
         .await?;

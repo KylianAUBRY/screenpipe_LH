@@ -64,6 +64,7 @@ import posthog from "posthog-js";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { PipesSection } from "@/components/settings/pipes-section";
 import { FlowsTab } from "@/components/automation-flows/flows-tab";
+import { FindAutomationButton } from "@/components/automation-flows/find-automation-button";
 import { NotificationBell } from "@/components/notification-bell";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
@@ -454,6 +455,7 @@ export function PipeStoreView() {
         {/* Notifications are pipe output, so the bell lives here rather
             than in the global window chrome. */}
         <div className="ml-auto flex items-center">
+          <FindAutomationButton />
           <NotificationBell />
         </div>
       </div>

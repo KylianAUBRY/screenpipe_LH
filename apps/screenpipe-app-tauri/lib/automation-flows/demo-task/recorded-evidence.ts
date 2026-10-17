@@ -14,6 +14,8 @@ export type RecordingsApi = {
   key?: string;
   window: { start: string; end: string };
   timeoutMs?: number;
+  /** The app passes its authenticated local API client; scripts use `fetch` with `key`. */
+  fetch?: (url: string, init: RequestInit) => Promise<Response>;
 };
 
 type SearchRow = { frame_id?: unknown; timestamp?: unknown; app_name?: unknown; window_name?: unknown; browser_url?: unknown };
@@ -45,7 +47,7 @@ async function findCapture(capture: EvidenceCapture, api: RecordingsApi): Promis
     let response: Response | undefined;
     for (let attempt = 0; attempt < 5; attempt++) {
       if (attempt > 0) await new Promise(done => setTimeout(done, 250 * attempt));
-      response = await fetch(`${api.url}/search?${params}`, {
+      response = await (api.fetch ?? fetch)(`${api.url}/search?${params}`, {
         headers: api.key ? { Authorization: `Bearer ${api.key}` } : {},
         signal: AbortSignal.timeout(api.timeoutMs ?? 5_000),
       }).catch(() => { throw new Error(`ScreenPipe is not reachable at ${api.url}`); });

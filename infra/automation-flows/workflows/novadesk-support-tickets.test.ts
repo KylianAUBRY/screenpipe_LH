@@ -98,7 +98,9 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(model.credentials?.openAiApi.id).toBe("spProxyOpenAI001");
     // The proxy only speaks /v1/chat/completions and has no /v1/models.
     expect(model.parameters.responsesApiEnabled).toBe(false);
-    expect(model.parameters.model).toMatchObject({ mode: "id", value: "auto" });
+    // `chatgpt/` models are answered by the user's ChatGPT subscription; the
+    // `:max` suffix is the reasoning effort, which n8n cannot send itself.
+    expect(model.parameters.model).toMatchObject({ mode: "id", value: "chatgpt/gpt-5.6-luna:max" });
     // About 1 call in 10 to ScreenPipe's AI proxy never answers (measured
     // 2026-10-17; normal calls take 1-6 s). The client's timeout covers its own
     // retries, so a hung call fails the step: give up after 20 s and let n8n
