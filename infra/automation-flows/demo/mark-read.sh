@@ -14,7 +14,7 @@ umask 077
 mailbox="${MAILBOX:-INBOX}"
 pnpm_dir="${N8N_PNPM_DIR:-/usr/local/lib/node_modules/n8n/node_modules/.pnpm}"
 
-dir="$(mktemp -d)"
+dir="$(mktemp -d "${TMPDIR:-/tmp}/screenpipe-reset.XXXXXX")"
 trap 'rm -rf "$dir"' EXIT
 trap 'exit 130' INT TERM
 cred="$dir/credential.json"
