@@ -34,7 +34,7 @@
         "text": "=Email reçu sur la boîte support NovaDesk.\nDe : {{ $json.from }}\nObjet : {{ $json.subject }}\nDate : {{ $json.date }}\n\n{{ $json.textPlain || $json.textHtml }}",
         "hasOutputParser": true,
         "options": {
-          "systemMessage": "Tu es l'assistant du support NovaDesk. Pour chaque email reçu sur la boîte support, tu décides s'il faut créer un ticket Jira dans le projet NOVA, en suivant les conventions de l'équipe :\n- type : « Bug » pour un défaut signalé dans un produit (quelque chose ne fonctionne pas comme prévu) ; « Tâche » pour une idée d'amélioration ou une demande de nouvelle fonctionnalité ; « none » pour tout le reste (alerte de sécurité, notification automatique, newsletter, publicité, email sans rapport avec un produit NovaDesk).\n- product : le nom du produit concerné tel qu'écrit dans l'email (par exemple NovaCRM ou NovaPay).\n- summary : un résumé court et factuel du problème ou de l'idée, en français, sans le nom du produit, sur une ligne de moins de 80 caractères.\n- priority : « Highest » si le problème bloque l'utilisateur sans contournement possible, « Medium » si un contournement existe, « Low » pour une idée d'amélioration ; « High » ou « Lowest » seulement si l'email le justifie clairement.\n- label : « back » si le problème vient du serveur, des données, des exports, des calculs ou des paiements ; « front » s'il concerne l'interface, l'affichage, les filtres ou l'ergonomie. Un montant ou une donnée refusée à l'enregistrement est un problème back.\nExemples de tickets déjà créés à la main par l'équipe :\n- Email « Export des contacts vide dans NovaCRM » : Bug, NovaCRM, « Export CSV des contacts filtrés vide (en-têtes seuls) », Highest, back.\n- Email « NovaPay refuse les montants avec centimes » : Bug, NovaPay, « Montant avec virgule refusé dans une note de frais », Medium, back.\n- Email « Idée : filtrer les clients par date de dernière relance » : Tâche, NovaCRM, « Filtre Dernière relance enregistrable dans la liste clients », Low, front.\n- Alerte de sécurité Google : none.\nSi type vaut « none », remplis quand même les autres champs avec des valeurs neutres (product « - », summary « - », priority « Low », label « back »).\nN'invente aucune information absente de l'email."
+          "systemMessage": "Tu es l'assistant du support NovaDesk. Pour chaque email reçu sur la boîte support, tu décides s'il faut créer un ticket Jira dans le projet NOVA, en suivant les conventions de l'équipe :\n- type : « Bug » pour un défaut signalé dans un produit (quelque chose ne fonctionne pas comme prévu) ; « Tâche » pour une idée d'amélioration ou une demande de nouvelle fonctionnalité ; « none » pour tout le reste (alerte de sécurité, notification automatique, newsletter, publicité, email sans rapport avec un produit NovaDesk).\n- product : le nom du produit concerné tel qu'écrit dans l'email (par exemple NovaCRM ou NovaPay).\n- summary : un résumé court et factuel du problème ou de l'idée, en français, sans le nom du produit, sur une ligne de moins de 80 caractères.\n- priority : « Highest » si le problème bloque l'utilisateur sans contournement possible, « Medium » si un contournement existe, « Low » pour une idée d'amélioration ; « High » ou « Lowest » seulement si l'email le justifie clairement.\n- label : « back » si le problème vient du serveur, des données, des exports, des calculs ou des paiements ; « front » s'il concerne l'interface, l'affichage, les filtres ou l'ergonomie. Un montant ou une donnée refusée à l'enregistrement est un problème back.\nExemples de tickets déjà créés à la main par l'équipe :\n- Email « Export des contacts vide dans NovaCRM » : Bug, NovaCRM, « Export CSV des contacts filtrés vide (en-têtes seuls) », Highest, back.\n- Email « NovaPay refuse les montants avec centimes » : Bug, NovaPay, « Montant avec virgule refusé dans une note de frais », Medium, back.\n- Email « Idée : filtrer les clients par date de dernière relance » : Tâche, NovaCRM, « Filtre Dernière relance enregistrable dans la liste clients », Low, front.\n- Alerte de sécurité Google : none.\nSi l'email peut devenir un ticket, appelle d'abord une seule fois l'outil « Historique ScreenPipe » avec le produit et le problème comme mots-clés : il renvoie les captures d'écran des tickets Jira NOVA que l'utilisateur a créés à la main pour des emails similaires ; reprends les conventions que tu y vois (type, forme du titre, priorité, étiquette). S'il ne renvoie rien ou une erreur, applique les conventions ci-dessus.\nSi type vaut « none », remplis quand même les autres champs avec des valeurs neutres (product « - », summary « - », priority « Low », label « back »).\nN'invente aucune information absente de l'email."
         }
       },
       "notes": "Une IA lit l'email et décide s'il faut un ticket (Bug, Tâche ou rien), puis propose le produit, un résumé court, la priorité et l'étiquette back ou front.",
@@ -68,6 +68,29 @@
         "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"type\": {\n      \"type\": \"string\",\n      \"enum\": [\"Bug\", \"Tâche\", \"none\"],\n      \"description\": \"Bug pour un défaut, Tâche pour une idée d'amélioration, none si aucun ticket n'est nécessaire\"\n    },\n    \"product\": {\n      \"type\": \"string\",\n      \"description\": \"Produit concerné, par exemple NovaCRM ou NovaPay\"\n    },\n    \"summary\": {\n      \"type\": \"string\",\n      \"description\": \"Résumé court du problème ou de l'idée, sans le nom du produit\"\n    },\n    \"priority\": {\n      \"type\": \"string\",\n      \"enum\": [\"Highest\", \"High\", \"Medium\", \"Low\", \"Lowest\"],\n      \"description\": \"Priorité Jira\"\n    },\n    \"label\": {\n      \"type\": \"string\",\n      \"enum\": [\"back\", \"front\"],\n      \"description\": \"back pour le serveur et les données, front pour l'interface\"\n    }\n  },\n  \"required\": [\"type\", \"product\", \"summary\", \"priority\", \"label\"],\n  \"additionalProperties\": false\n}"
       },
       "notes": "La réponse de l'IA est limitée à cinq champs fixes (type, produit, résumé, priorité, étiquette) pour que la suite du flux reste déterministe.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6d0f5c1e-0b7a-4c55-9f1e-01a000000009",
+      "name": "Historique ScreenPipe",
+      "type": "CUSTOM.screenPipeTool",
+      "typeVersion": 1,
+      "position": [620, 220],
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Cherche dans l'historique d'écran de l'utilisateur, enregistré par ScreenPipe, les captures des tickets Jira NOVA qu'il a déjà créés à la main pour des emails similaires (type, titre, priorité, étiquette). Entrée : quelques mots-clés, par exemple le produit et le problème.",
+        "operation": "searchContent",
+        "query": "={{ $fromAI('motsCles', 'Produit et problème décrits dans le message, par exemple NovaCRM export contacts', 'string') }}",
+        "contentType": "all",
+        "limit": 5,
+        "filters": {},
+        "maxTextLength": 600
+      },
+      "credentials": {
+        "screenpipeApi": { "id": "spScreenpipeApi1", "name": "ScreenPipe API (local)" }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "Avant de répondre, l'IA consulte dans ScreenPipe les captures des tickets Jira que vous avez créés à la main pour des emails similaires, afin de reprendre les mêmes conventions.",
       "notesInFlow": true
     },
     {
@@ -192,6 +215,9 @@
     },
     "Format de la réponse": {
       "ai_outputParser": [[{ "node": "Analyser l'email (IA)", "type": "ai_outputParser", "index": 0 }]]
+    },
+    "Historique ScreenPipe": {
+      "ai_tool": [[{ "node": "Analyser l'email (IA)", "type": "ai_tool", "index": 0 }]]
     },
     "Analyser l'email (IA)": {
       "main": [[{ "node": "Ticket nécessaire", "type": "main", "index": 0 }]]

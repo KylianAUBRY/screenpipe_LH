@@ -20,6 +20,7 @@ type N8nNode = {
   position: [number, number];
   parameters: Record<string, any>;
   notes?: string;
+  onError?: string;
   credentials?: Record<string, { id: string; name: string }>;
 };
 
@@ -96,6 +97,28 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(schema.properties.priority.enum).toEqual(["Highest", "High", "Medium", "Low", "Lowest"]);
   });
 
+  test("the AI Agent's one tool is ScreenPipe, to see how the user handled similar emails before", () => {
+    const agent = onlyNode("@n8n/n8n-nodes-langchain.agent");
+    const tool = onlyNode("CUSTOM.screenPipeTool"); // packages/n8n-nodes-screenpipe
+    const agentTools = Object.entries(workflow.connections)
+      .filter(([, outputs]) => (outputs.ai_tool ?? []).flat().some((c) => c.node === agent.name))
+      .map(([name]) => name);
+    expect(agentTools).toEqual([tool.name]);
+
+    expect(tool.credentials?.screenpipeApi.id).toBe("spScreenpipeApi1");
+    expect(tool.parameters.operation).toBe("searchContent");
+    // The AI chooses the keywords; the rest is fixed and short.
+    expect(tool.parameters.query).toMatch(/^=\{\{\s*\$fromAI\(/);
+    expect(tool.parameters.limit).toBeLessThanOrEqual(10);
+    expect(tool.parameters.maxTextLength).toBeLessThanOrEqual(1000);
+    expect(tool.parameters.descriptionType).toBe("manual");
+    expect(tool.parameters.toolDescription).toContain("Jira");
+    // A ScreenPipe failure goes back to the AI as text instead of failing the run.
+    expect(tool.onError).toBe("continueRegularOutput");
+    // The agent is told to look first and to follow what it finds.
+    expect(agent.parameters.options.systemMessage).toContain(`« ${tool.name} »`);
+  });
+
   test("stops without a ticket when the AI answers none", () => {
     const agent = onlyNode("@n8n/n8n-nodes-langchain.agent");
     const gate = onlyNode("n8n-nodes-base.if");
@@ -152,6 +175,8 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
       "n8n-nodes-base.set": 3.5,
       "n8n-nodes-base.httpRequest": 4.5,
       "n8n-nodes-base.stickyNote": 1,
+      // Our custom node, loaded from infra/automation-flows/custom-nodes.
+      "CUSTOM.screenPipeTool": 1,
     };
     for (const node of workflow.nodes) {
       expect(verified[node.type], `${node.name}: ${node.type}`).toBe(node.typeVersion);

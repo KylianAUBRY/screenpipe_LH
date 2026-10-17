@@ -24,7 +24,10 @@ fi
 
 # The CLI import cannot stop a trigger that the running n8n server already
 # runs, so refuse to overwrite a workflow that is switched on.
-if docker exec "$container" n8n list:workflow --active=true --onlyId 2>/dev/null | grep -qx "$id"; then
+# Listings are captured before grep: `n8n list | grep -q` under pipefail
+# fails at random (SIGPIPE, exit 141) and would let this guard pass.
+active_ids="$(docker exec "$container" n8n list:workflow --active=true --onlyId 2>/dev/null)"
+if grep -qx "$id" <<<"$active_ids"; then
   echo "error: workflow $id is active; switch it off (ScreenPipe or n8n) before re-importing" >&2
   exit 1
 fi
@@ -36,7 +39,8 @@ docker exec -u root "$container" rm -f "$target"
 
 echo "--- n8n list:workflow"
 docker exec "$container" n8n list:workflow
-if docker exec "$container" n8n list:workflow --active=false --onlyId | grep -qx "$id"; then
+inactive_ids="$(docker exec "$container" n8n list:workflow --active=false --onlyId)"
+if grep -qx "$id" <<<"$inactive_ids"; then
   echo "ok: $id imported, switched off"
 else
   echo "error: $id is not listed as inactive after import" >&2
