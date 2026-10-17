@@ -1,0 +1,57 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({ localFetch: vi.fn(), emit: vi.fn(async () => {}) }));
+vi.mock("@/lib/api", () => ({ localFetch: mocks.localFetch }));
+vi.mock("@tauri-apps/api/event", () => ({ emit: mocks.emit }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
+
+import { createAutomationFlow } from "./automation-flows";
+import { DEMO_TASK_ID, fixtureFlow } from "@/components/automation-flows/fixtures";
+import { mockAutomationFlowsResponse } from "@/components/automation-flows/mock";
+
+const answers = [{ question: "Les idées deviennent-elles des tickets ?", answer: "Oui, en Tâche." }];
+const reviewUrl = `/home?section=pipes&tab=flows&flow=${fixtureFlow.id}`;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  window.history.replaceState({}, "", `/home?mode=workflows&workflow=${DEMO_TASK_ID}`);
+  // The Flow service as the browser mock (`bun run dev:web`) answers it.
+  mocks.localFetch.mockImplementation(async (path: string, init?: RequestInit) =>
+    mockAutomationFlowsResponse(new URL(path, "http://localhost:3030"), init)!);
+});
+
+describe("desktop createAutomationFlow", () => {
+  it("creates the Flow from the task through the Flow service, then opens its Review Screen", async () => {
+    await createAutomationFlow(DEMO_TASK_ID, answers);
+
+    expect(mocks.localFetch).toHaveBeenCalledTimes(1);
+    const [path, init] = mocks.localFetch.mock.calls[0];
+    expect(path).toBe("/automation-flows/from-task");
+    expect(JSON.parse(init.body)).toEqual({ taskId: DEMO_TASK_ID, answers });
+    expect(`${window.location.pathname}${window.location.search}`).toBe(reviewUrl);
+    expect(mocks.emit).toHaveBeenCalledWith("navigate", { url: reviewUrl });
+  });
+
+  it("opens the same Flow when the action is clicked again", async () => {
+    await createAutomationFlow(DEMO_TASK_ID, answers);
+    await createAutomationFlow(DEMO_TASK_ID, answers);
+    expect(mocks.emit.mock.calls).toEqual([["navigate", { url: reviewUrl }], ["navigate", { url: reviewUrl }]]);
+  });
+
+  it.each([
+    ["not-configured", /n8n n'est pas configuré.*Connexions/],
+    ["unreachable", /Impossible de joindre n8n/],
+  ])("explains a %s Flow service and stays on the Task Page", async (state, message) => {
+    window.history.replaceState({}, "", `/home?mode=workflows&flowsState=${state}`);
+    await expect(createAutomationFlow(DEMO_TASK_ID, answers)).rejects.toThrow(message);
+    expect(window.location.search).toBe(`?mode=workflows&flowsState=${state}`);
+    expect(mocks.emit).not.toHaveBeenCalled();
+  });
+
+  it("explains a task that cannot become a Flow yet", async () => {
+    await expect(createAutomationFlow("wf-other-task", answers)).rejects.toThrow("Cette tâche ne peut pas encore devenir une automatisation.");
+    expect(mocks.emit).not.toHaveBeenCalled();
+  });
+});
