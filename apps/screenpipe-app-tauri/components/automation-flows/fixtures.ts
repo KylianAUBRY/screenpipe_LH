@@ -155,6 +155,7 @@ export const fixtureActivity: FlowRun[] = [
     reason: "Échec à l'étape « Créer le ticket Jira » : 503 Service Unavailable",
     email: { sender: "Claire Martin <claire.martin@client.fr>", subject: "Export PDF vide depuis la mise à jour" },
     ticket: null,
+    retried: false,
   },
   {
     executionId: "fixture-run-3",
@@ -163,6 +164,7 @@ export const fixtureActivity: FlowRun[] = [
     reason: "Je ne sais pas si c'est une question d'usage ou un défaut des relances.",
     email: { sender: "Loris Omont <loris.omont@novadesk.fr>", subject: "Les relances, c'est normal ?" },
     ticket: null,
+    retried: false,
   },
   {
     executionId: "fixture-run-2",
@@ -171,6 +173,7 @@ export const fixtureActivity: FlowRun[] = [
     reason: "Alerte de sécurité Google, pas une demande d'un client.",
     email: { sender: "Google <no-reply@accounts.google.com>", subject: "Alerte de sécurité" },
     ticket: null,
+    retried: false,
   },
   {
     executionId: "fixture-run-1",
@@ -179,6 +182,7 @@ export const fixtureActivity: FlowRun[] = [
     reason: "L'export des contacts filtrés renvoie un fichier vide : c'est un défaut de NovaCRM.",
     email: { sender: "Arthur Noteris <arthur.noteris@novadesk.fr>", subject: "Export des contacts vide dans NovaCRM" },
     ticket: "NOVA-28",
+    retried: false,
   },
 ];
 

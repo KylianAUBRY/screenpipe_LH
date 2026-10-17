@@ -7,9 +7,10 @@
 // the page URL to see the other states. A `PUT /automation-flows/<id>` (what
 // the chat skill sends) switches the fixture off and leaves it needing
 // review. Like the engine, activation needs the UI credential and the
-// reviewed version. Never contacts n8n.
+// reviewed version. « Relancer » on the failed run turns it into a ticket.
+// Never contacts n8n.
 
-import type { Flow } from "./api";
+import type { Flow, FlowRun } from "./api";
 import { DEMO_TASK_ID, fixtureActivity, fixtureFlow, summaryOf } from "./fixtures";
 
 /**
@@ -21,10 +22,38 @@ export const BROWSER_MOCK_FLOW_ACTIVATION_KEY = "browser-mock-flow-activation";
 // Activate / Deactivate / Delete change this copy until the page reloads.
 let mockFlow: Flow = structuredClone(fixtureFlow);
 let mockDeleted = false;
+let mockActivity: FlowRun[] = structuredClone(fixtureActivity);
 
 export function resetAutomationFlowsMock() {
   mockFlow = structuredClone(fixtureFlow);
   mockDeleted = false;
+  mockActivity = structuredClone(fixtureActivity);
+}
+
+/** What the engine does on « Relancer » (D17), without n8n: the retry works. */
+function retryMockRun(runId: string): Response {
+  const failed = mockActivity.find((run) => run.executionId === runId);
+  if (!failed) return Response.json({ error: "run_not_found" }, { status: 404 });
+  if (failed.outcome !== "failed" || failed.retried) {
+    return Response.json(
+      { error: "run_not_failed", detail: "this run did not fail, or was already retried" },
+      { status: 409 },
+    );
+  }
+  const retried: FlowRun = {
+    executionId: `${runId}-retry`,
+    startedAt: new Date().toISOString(),
+    outcome: "ticket",
+    reason: "L'export PDF sort une page blanche : c'est un défaut de NovaCRM.",
+    email: failed.email,
+    ticket: "NOVA-30",
+    retried: false,
+  };
+  mockActivity = [
+    retried,
+    ...mockActivity.map((run) => (run.executionId === runId ? { ...run, retried: true } : run)),
+  ];
+  return Response.json(retried);
 }
 
 /** What the engine does on activate / deactivate, without n8n. */
@@ -138,11 +167,16 @@ export function mockAutomationFlowsResponse(
     }
     return Response.json(mockFlow);
   }
-  const [rawId, action] = url.pathname.slice("/automation-flows/".length).split("/");
+  const [rawId, action, rawRun, runAction] = url.pathname
+    .slice("/automation-flows/".length)
+    .split("/");
   const id = decodeURIComponent(rawId);
   const flow = flows.find((candidate) => candidate.id === id);
   if (method === "GET" && flow && !action) return Response.json(flow);
-  if (method === "GET" && flow && action === "activity") return Response.json(fixtureActivity);
+  if (method === "GET" && flow && action === "activity") return Response.json(mockActivity);
+  if (method === "POST" && flow && action === "runs" && rawRun && runAction === "retry") {
+    return retryMockRun(decodeURIComponent(rawRun));
+  }
   if (method === "DELETE" && flow && !action) {
     mockDeleted = true;
     return Response.json({ id, deleted: true });

@@ -46,6 +46,9 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     requestChange: vi.fn(async () => {}),
     requestCreation: vi.fn(async () => {}),
     activity: vi.fn(async () => []),
+    retry: vi.fn(async () => {
+      throw new Error("not expected");
+    }),
     ...overrides,
   };
 }
@@ -327,6 +330,109 @@ describe("Review Screen", () => {
   it("says when the Flow has handled no email yet", async () => {
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi()} />);
     expect(await screen.findByText("Aucun e-mail traité pour l'instant.")).toBeTruthy();
+  });
+
+  describe("Relancer a failed run (D17)", () => {
+    const email = { sender: "Claire Martin <claire.martin@client.fr>", subject: "Export PDF vide" };
+    const failedRun: FlowRun = {
+      executionId: "e4",
+      startedAt: "2026-10-17T12:00:00.000Z",
+      outcome: "failed",
+      reason: "Échec à l'étape « Créer le ticket Jira » : 503 Service Unavailable",
+      email,
+      ticket: null,
+      retried: false,
+    };
+    const ticketRun: FlowRun = {
+      executionId: "e5",
+      startedAt: "2026-10-17T12:30:00.000Z",
+      outcome: "ticket",
+      reason: "L'export PDF est cassé.",
+      email,
+      ticket: "NOVA-30",
+      retried: false,
+    };
+
+    it("retries a failed run from the Activity, then shows the run it became", async () => {
+      const activity = vi
+        .fn<FlowsApi["activity"]>()
+        .mockResolvedValueOnce([failedRun])
+        .mockResolvedValue([ticketRun, { ...failedRun, retried: true }]);
+      const retry = vi.fn<FlowsApi["retry"]>(async () => ticketRun);
+      render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ activity, retry })} />);
+
+      const row = await screen.findByTestId("flow-run-e4");
+      fireEvent.click(within(row).getByRole("button", { name: "Relancer" }));
+
+      expect(retry).toHaveBeenCalledWith(fixtureFlow.id, "e4");
+      const retried = await screen.findByTestId("flow-run-e5");
+      expect(within(retried).getByText("Ticket NOVA-30 créé")).toBeTruthy();
+      const original = screen.getByTestId("flow-run-e4");
+      expect(within(original).getByText("Relancé : Ticket NOVA-30 créé")).toBeTruthy();
+      expect(within(original).queryByRole("button", { name: "Relancer" })).toBeNull();
+    });
+
+    it("says when the retried run failed again, and why", async () => {
+      const again: FlowRun = {
+        ...failedRun,
+        executionId: "e6",
+        reason: "Échec à l'étape « Chercher le ticket de cet email » : 503 Service Unavailable",
+      };
+      const retry = vi.fn<FlowsApi["retry"]>(async () => again);
+      render(
+        <FlowsTab
+          flowId={fixtureFlow.id}
+          onSelectFlow={vi.fn()}
+          api={fakeApi({ activity: vi.fn(async () => [failedRun]), retry })}
+        />,
+      );
+
+      const row = await screen.findByTestId("flow-run-e4");
+      fireEvent.click(within(row).getByRole("button", { name: "Relancer" }));
+
+      expect(
+        await within(row).findByText(
+          "La relance a encore échoué : Échec à l'étape « Chercher le ticket de cet email » : 503 Service Unavailable",
+        ),
+      ).toBeTruthy();
+    });
+
+    it("says why n8n could not retry the run", async () => {
+      const retry = vi
+        .fn<FlowsApi["retry"]>()
+        .mockRejectedValueOnce(new FlowsApiError("n8n_unreachable", "connection refused"))
+        .mockRejectedValueOnce(new FlowsApiError("run_not_failed", "this run did not fail"));
+      render(
+        <FlowsTab
+          flowId={fixtureFlow.id}
+          onSelectFlow={vi.fn()}
+          api={fakeApi({ activity: vi.fn(async () => [failedRun]), retry })}
+        />,
+      );
+
+      const row = await screen.findByTestId("flow-run-e4");
+      fireEvent.click(within(row).getByRole("button", { name: "Relancer" }));
+      expect(await within(row).findByText(/n8n est injoignable/)).toBeTruthy();
+
+      fireEvent.click(within(row).getByRole("button", { name: "Relancer" }));
+      expect(await within(row).findByText(/Cette exécution n'a pas échoué/)).toBeTruthy();
+    });
+
+    it("offers Relancer only on a failed run not retried yet", async () => {
+      render(
+        <FlowsTab
+          flowId={fixtureFlow.id}
+          onSelectFlow={vi.fn()}
+          api={fakeApi({
+            activity: vi.fn(async () => [ticketRun, { ...failedRun, retried: true }]),
+          })}
+        />,
+      );
+
+      const list = await screen.findByRole("list", { name: "Activité du Flow" });
+      expect(within(list).queryByRole("button", { name: "Relancer" })).toBeNull();
+      expect(within(screen.getByTestId("flow-run-e4")).getByText("Relancé")).toBeTruthy();
+    });
   });
 
   it("goes back to the list", async () => {

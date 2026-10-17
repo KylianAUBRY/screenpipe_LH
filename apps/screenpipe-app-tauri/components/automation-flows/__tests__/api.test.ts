@@ -100,6 +100,21 @@ describe("flowsApi", () => {
     expect(sentHeaders(init).get(ACTIVATION_HEADER)).toBe("ui-key");
   });
 
+  it("retries a failed run with a JSON request and answers the run it became (D17)", async () => {
+    const run = { ...fixtureActivity[3], executionId: "e/5" };
+    respond(200, run);
+    expect(await flowsApi.retry("wf/1", "e/4")).toEqual(run);
+    const [path, init] = localFetch.mock.lastCall!;
+    expect(path).toBe("/automation-flows/wf%2F1/runs/e%2F4/retry");
+    expect(init.method).toBe("POST");
+    expect(sentHeaders(init).get("content-type")).toBe("application/json");
+
+    respond(409, { error: "run_not_failed", detail: "this run did not fail" });
+    await expect(flowsApi.retry("wf1", "e4")).rejects.toMatchObject({ code: "run_not_failed" });
+    respond(404, { error: "run_not_found" });
+    await expect(flowsApi.retry("wf1", "e4")).rejects.toMatchObject({ code: "not_found" });
+  });
+
   it("deletes a Flow with a JSON request", async () => {
     respond(200, { id: "wf/1", deleted: true });
     await flowsApi.delete("wf/1");
@@ -217,6 +232,27 @@ describe("browser mock", () => {
     const times = runs.map((run) => Date.parse(run.startedAt));
     expect(times).toEqual([...times].sort((a, b) => b - a));
     await expect(flowsApi.activity("missing")).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("retries the fixture's failed run: it becomes a ticket and is not offered again", async () => {
+    useBrowserMock();
+    const failed = fixtureActivity.find((run) => run.outcome === "failed")!;
+    const run = await flowsApi.retry(fixtureFlow.id, failed.executionId);
+    expect(run.outcome).toBe("ticket");
+    expect(run.email).toEqual(failed.email);
+
+    const runs = await flowsApi.activity(fixtureFlow.id);
+    expect(runs[0]).toEqual(run);
+    expect(runs.find((r) => r.executionId === failed.executionId)?.retried).toBe(true);
+    await expect(flowsApi.retry(fixtureFlow.id, failed.executionId)).rejects.toMatchObject({
+      code: "run_not_failed",
+    });
+    await expect(flowsApi.retry(fixtureFlow.id, "fixture-run-1")).rejects.toMatchObject({
+      code: "run_not_failed",
+    });
+
+    resetAutomationFlowsMock();
+    expect(await flowsApi.activity(fixtureFlow.id)).toEqual(fixtureActivity);
   });
 
   it("activates and deactivates the fixture Flow in memory", async () => {

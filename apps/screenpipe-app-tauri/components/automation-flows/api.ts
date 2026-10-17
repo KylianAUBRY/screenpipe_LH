@@ -74,6 +74,8 @@ export type FlowRun = {
   email: { sender: string; subject: string } | null;
   /** The Jira ticket's key, created by the run or found by its D20 search. */
   ticket: string | null;
+  /** A failed run already run again (D17): « Relancer » is not offered. */
+  retried: boolean;
 };
 
 export type FlowsErrorCode =
@@ -92,6 +94,10 @@ export type FlowsErrorCode =
   | "activation_failed"
   /** Activation without the desktop app's UI credential (e.g. `bun run dev:web:live`). */
   | "activation_requires_user"
+  /** « Relancer » on a run that did not fail (or is still running). */
+  | "run_not_failed"
+  /** n8n is still running the retried run after the engine stopped waiting. */
+  | "retry_still_running"
   | "unknown";
 
 const SERVER_CODES: readonly FlowsErrorCode[] = [
@@ -103,6 +109,8 @@ const SERVER_CODES: readonly FlowsErrorCode[] = [
   "version_changed",
   "activation_failed",
   "activation_requires_user",
+  "run_not_failed",
+  "retry_still_running",
 ];
 
 /** Carries the UI credential on activation (engine: `ACTIVATION_HEADER`). */
@@ -170,6 +178,16 @@ export const flowsApi = {
   /** The Flow's latest handled emails, newest first (D18). */
   activity: (id: string) =>
     request<FlowRun[]>(`/automation-flows/${encodeURIComponent(id)}/activity`),
+
+  /**
+   * « Relancer » (D17): n8n runs the failed run `executionId` again with the
+   * input it kept. Answers the retried run, as the Activity lists it.
+   */
+  retry: (id: string, executionId: string) =>
+    request<FlowRun>(
+      `/automation-flows/${encodeURIComponent(id)}/runs/${encodeURIComponent(executionId)}/retry`,
+      { method: "POST", headers: JSON_HEADERS, body: "{}" },
+    ),
 
   createFromTask: (taskId: string, answers: unknown) =>
     request<Flow>("/automation-flows/from-task", {
