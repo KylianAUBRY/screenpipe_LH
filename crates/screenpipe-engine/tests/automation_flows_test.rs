@@ -10,7 +10,9 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use screenpipe_audio::audio_manager::AudioManagerBuilder;
 use screenpipe_db::DatabaseManager;
-use screenpipe_engine::automation_flows::{FlowActivationKey, RunningWait, ACTIVATION_HEADER};
+use screenpipe_engine::automation_flows::{
+    FailureReports, FlowActivationKey, RunningWait, ACTIVATION_HEADER,
+};
 use screenpipe_engine::SCServer;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -58,9 +60,36 @@ struct N8nState {
 #[derive(Clone, Default)]
 struct FakeN8n(Arc<Mutex<N8nState>>);
 
+/// ScreenPipe's error workflow (D16) starts with n8n's Error Trigger.
+fn is_error_workflow(workflow: &Value) -> bool {
+    workflow["nodes"].as_array().is_some_and(|nodes| {
+        nodes
+            .iter()
+            .any(|node| node["type"] == "n8n-nodes-base.errorTrigger")
+    })
+}
+
 impl FakeN8n {
+    /// The workflows n8n holds, except ScreenPipe's error workflow (D16).
     fn workflows(&self) -> Vec<Value> {
-        self.0.lock().unwrap().workflows.clone()
+        let state = self.0.lock().unwrap();
+        state
+            .workflows
+            .iter()
+            .filter(|w| !is_error_workflow(w))
+            .cloned()
+            .collect()
+    }
+
+    /// ScreenPipe's error workflow(s): what n8n runs when a Flow run fails.
+    fn error_workflows(&self) -> Vec<Value> {
+        let state = self.0.lock().unwrap();
+        state
+            .workflows
+            .iter()
+            .filter(|w| is_error_workflow(w))
+            .cloned()
+            .collect()
     }
 
     fn edit_workflow(&self, id: &str, edit: impl FnOnce(&mut Value)) {
@@ -317,6 +346,17 @@ impl Respond for FakeN8n {
                     None => json_response(404, json!({"message": "Not Found"})),
                 }
             }
+            ("GET", ["executions", id]) => match state.executions.iter().find(|e| e["id"] == *id) {
+                Some(execution) if query("includeData").as_deref() == Some("true") => {
+                    json_response(200, execution.clone())
+                }
+                Some(execution) => {
+                    let mut summary = execution.clone();
+                    summary.as_object_mut().unwrap().remove("data");
+                    json_response(200, summary)
+                }
+                None => json_response(404, json!({"message": "Not Found"})),
+            },
             ("GET", ["tags"]) => json_response(200, json!({"data": state.tags})),
             ("POST", ["tags"]) => {
                 if state.tags.iter().any(|t| t["name"] == body["name"]) {
@@ -379,6 +419,8 @@ struct App {
     dir: tempfile::TempDir,
     /// The credential the desktop app hands only to its Review Screen.
     ui_key: Option<FlowActivationKey>,
+    /// The desktop app's notification server (`POST /notify`).
+    notify: MockServer,
 }
 
 /// The local API key the app, the chat agent (Pi), pipes and MCP clients share.
@@ -433,6 +475,19 @@ impl App {
             interval: Duration::from_millis(10),
             deadline: Duration::from_millis(300),
         };
+        // Failed runs are reported to a fake notification server.
+        let notify = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(json_response(
+                200,
+                json!({"message": "Notification sent successfully"}),
+            ))
+            .mount(&notify)
+            .await;
+        server.flow_failure_reports = FailureReports {
+            notify_url: format!("{}/notify", notify.uri()),
+            screenpipe_url_from_n8n: "http://host.docker.internal:3030".to_string(),
+        };
         if local_api_auth {
             server.api_auth = true;
             server.api_auth_key = Some(LOCAL_API_KEY.to_string());
@@ -442,6 +497,7 @@ impl App {
             router,
             dir,
             ui_key,
+            notify,
         }
     }
 
@@ -542,6 +598,7 @@ async fn workflow_posts(server: &MockServer) -> Vec<Value> {
         .into_iter()
         .filter(|r| r.method.as_str() == "POST" && r.url.path() == "/api/v1/workflows")
         .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .filter(|body| !is_error_workflow(body))
         .collect()
 }
 
@@ -2277,9 +2334,18 @@ async fn chat_update_with_a_node_n8n_cannot_run_is_refused_untouched() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "invalid_workflow");
     let detail = body["detail"].as_str().unwrap();
-    assert!(detail.contains("`n8n-nodes-base.executeCommand` is switched off"), "{detail}");
-    assert!(detail.contains("« Ouvrir un terminal » is connected to no other node"), "{detail}");
-    assert!(detail.contains("`anthropicApi` credential and n8n has none"), "{detail}");
+    assert!(
+        detail.contains("`n8n-nodes-base.executeCommand` is switched off"),
+        "{detail}"
+    );
+    assert!(
+        detail.contains("« Ouvrir un terminal » is connected to no other node"),
+        "{detail}"
+    );
+    assert!(
+        detail.contains("`anthropicApi` credential and n8n has none"),
+        "{detail}"
+    );
     assert!(n8n_writes(&server).await[writes_before..].is_empty());
     assert_eq!(n8n.workflows()[0]["active"], true);
 }
@@ -2566,6 +2632,7 @@ async fn no_flow_is_offered_to_n8n_mcp_clients() {
         .into_iter()
         .filter(|r| r.method.as_str() != "GET" && r.url.path().starts_with("/api/v1/workflows"))
         .filter_map(|r| serde_json::from_slice(&r.body).ok())
+        .filter(|body: &Value| !is_error_workflow(body))
         .collect();
     assert_eq!(
         sent.iter().filter(|body| body["nodes"].is_array()).count(),
@@ -2756,7 +2823,10 @@ async fn the_users_desactiver_switches_off_even_when_an_execution_never_ends() {
     );
     assert_eq!(
         events(&flow),
-        [event("activated", "version-1", "user"), event("deactivated", "version-1", "user")]
+        [
+            event("activated", "version-1", "user"),
+            event("deactivated", "version-1", "user")
+        ]
     );
 }
 
@@ -3211,4 +3281,229 @@ async fn node_lookup_takes_the_local_api_key() {
 
     assert_eq!(refused, StatusCode::FORBIDDEN);
     assert_eq!(allowed, StatusCode::OK, "{body}");
+}
+
+// ---------------------------------------------------------------------------
+// A failed run is reported (D16, flows-round-two ticket 11)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn every_flow_reports_its_failed_runs_through_one_error_workflow() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+
+    let (_, from_task) = app.create_from_task().await;
+    let (status, from_chat) = chat_create(
+        &app,
+        json!({"workflow": chat_workflow(), "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{from_chat}");
+
+    // n8n holds one error workflow: switched off (n8n runs an error workflow
+    // without activation), and never listed as a Flow.
+    let errors = n8n.error_workflows();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let error_workflow = &errors[0];
+    assert_eq!(error_workflow["active"], false);
+    assert_eq!(error_workflow["tags"][0]["name"], "screenpipe-flow-errors");
+    let (_, list) = app.call("GET", "/automation-flows", None).await;
+    let listed: Vec<&Value> = list.as_array().unwrap().iter().map(|f| &f["id"]).collect();
+    assert_eq!(listed, [&from_task["id"], &from_chat["id"]]);
+
+    // It calls ScreenPipe back with the failed run, authenticated with the
+    // only ScreenPipe API credential n8n holds.
+    let report = error_workflow["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["type"] == "n8n-nodes-base.httpRequest")
+        .expect("an HTTP request node");
+    assert_eq!(report["parameters"]["method"], "POST");
+    assert_eq!(
+        report["parameters"]["url"],
+        "=http://host.docker.internal:3030/automation-flows/{{ $json.workflow.id }}/failures"
+    );
+    assert_eq!(
+        report["credentials"],
+        json!({"screenpipeApi": {"id": "spScreenpipeApi1", "name": "ScreenPipe API (local)"}})
+    );
+
+    // Both Flows name it as their error workflow, from their first version.
+    for flow in [&from_task, &from_chat] {
+        let workflow = n8n
+            .workflows()
+            .into_iter()
+            .find(|w| w["id"] == flow["id"])
+            .unwrap();
+        assert_eq!(workflow["settings"]["errorWorkflow"], error_workflow["id"]);
+        assert_eq!(workflow["versionId"], "version-1");
+    }
+
+    // A chat edit that drops the setting keeps reporting failures.
+    let id = from_chat["id"].as_str().unwrap();
+    let edit = edited_workflow(&n8n, id, |w| {
+        w["settings"] = json!({"executionOrder": "v1"});
+    });
+    let (status, body) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": edit})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let updated = n8n.workflows().into_iter().find(|w| w["id"] == id).unwrap();
+    assert_eq!(updated["settings"]["errorWorkflow"], error_workflow["id"]);
+    assert_eq!(n8n.error_workflows().len(), 1);
+}
+
+/// A run of the demo Flow that failed creating the Jira ticket, as n8n keeps
+/// it (`GET /executions/:id?includeData=true`).
+fn failed_run(id: &str, workflow_id: &str) -> Value {
+    json!({
+        "id": id, "workflowId": workflow_id, "status": "error", "finished": false,
+        "startedAt": "2026-10-17T09:00:00.000Z", "stoppedAt": "2026-10-17T09:00:09.000Z",
+        "data": {"resultData": {
+            "runData": {
+                "Nouvel email support": [{"startTime": 1, "data": {"main": [[{"json": {
+                    "from": "Claire Martin <claire.martin@client.fr>",
+                    "subject": "Export PDF vide depuis la mise à jour",
+                    "textPlain": "Bonjour, l'export PDF sort une page blanche."
+                }}]]}}],
+                "Créer le ticket Jira": [{"startTime": 5, "error": {"message": "503 Service Unavailable"}}]
+            },
+            "lastNodeExecuted": "Créer le ticket Jira",
+            "error": {"message": "503 Service Unavailable", "node": {"name": "Créer le ticket Jira"}}
+        }}
+    })
+}
+
+/// What the app's notification server received.
+async fn notifications(app: &App) -> Vec<Value> {
+    app.notify
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method.as_str() == "POST" && r.url.path() == "/notify")
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_failed_run_is_notified_with_its_email_and_the_flow_keeps_running() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("exec-failed", &id));
+    let writes = n8n_writes(&server).await;
+
+    // What ScreenPipe's error workflow sends when n8n runs it.
+    let (status, answer) = app
+        .call(
+            "POST",
+            &format!("/automation-flows/{id}/failures"),
+            Some(json!({"executionId": "exec-failed", "error": "503 Service Unavailable"})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["notified"], true);
+    let sent = notifications(&app).await;
+    assert_eq!(sent.len(), 1);
+    let notice = &sent[0];
+    let name = n8n.workflows()[0]["name"].as_str().unwrap().to_string();
+    assert_eq!(notice["title"], format!("Échec du Flow « {name} »"));
+    let body = notice["body"].as_str().unwrap();
+    assert!(
+        body.contains("Claire Martin <claire.martin@client.fr>"),
+        "{body}"
+    );
+    assert!(
+        body.contains("Export PDF vide depuis la mise à jour"),
+        "{body}"
+    );
+    assert!(body.contains("Créer le ticket Jira"), "{body}");
+    assert!(body.contains("503 Service Unavailable"), "{body}");
+    let review = format!("screenpipe://flows/{id}");
+    assert_eq!(notice["actions"][0]["type"], "deeplink");
+    assert_eq!(notice["actions"][0]["url"], review);
+    assert_eq!(notice["source_url"], review);
+    // One notification per failed run: the notification server drops a
+    // repeated id, so a second report of the same run is never shown twice.
+    assert_eq!(
+        notice["id"],
+        format!("automation-flow-failure:{id}:exec-failed")
+    );
+
+    // Nothing is paused: the Flow stays on, its last run shows the failure.
+    assert_eq!(n8n_writes(&server).await, writes);
+    let (_, flow) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    assert_eq!(flow["status"], "active");
+    assert_eq!(flow["lastExecution"]["status"], "error");
+}
+
+#[tokio::test]
+async fn a_failing_trigger_is_notified_with_its_error() {
+    // An email trigger that cannot reach the inbox fails before any run:
+    // n8n's error workflow then has no execution, only the trigger's error.
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+
+    let (status, answer) = app
+        .call(
+            "POST",
+            &format!("/automation-flows/{id}/failures"),
+            Some(json!({"executionId": null, "error": "Invalid credentials (Failure)"})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let sent = notifications(&app).await;
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0]["body"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid credentials (Failure)"));
+    assert_eq!(
+        sent[0]["actions"][0]["url"],
+        format!("screenpipe://flows/{id}")
+    );
+}
+
+#[tokio::test]
+async fn only_a_run_of_that_flow_is_notified() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run("exec-other", "someOtherWorkflow"));
+
+    for (uri, execution) in [
+        (
+            format!("/automation-flows/{id}/failures"),
+            json!("exec-other"),
+        ),
+        (
+            format!("/automation-flows/{id}/failures"),
+            json!("exec-missing"),
+        ),
+        (
+            "/automation-flows/wf404/failures".to_string(),
+            json!("exec-other"),
+        ),
+    ] {
+        let (status, body) = app
+            .call("POST", &uri, Some(json!({"executionId": execution})))
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri} {execution}: {body}");
+    }
+    assert!(notifications(&app).await.is_empty());
 }

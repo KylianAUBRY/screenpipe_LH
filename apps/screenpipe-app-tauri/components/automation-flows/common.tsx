@@ -126,7 +126,16 @@ function sameData<T>(a: T, b: T): boolean {
  * lights only while an execution runs (docs/DESIGN.md), and the last-run
  * line says so in words.
  */
-export function StatusBadge({ status, running = false }: { status: FlowStatus; running?: boolean }) {
+/** `failed`: the last run failed (D16); the Flow keeps its status, shown red. */
+export function StatusBadge({
+  status,
+  running = false,
+  failed = false,
+}: {
+  status: FlowStatus;
+  running?: boolean;
+  failed?: boolean;
+}) {
   return (
     <span className="inline-flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground">
       <span
@@ -136,7 +145,9 @@ export function StatusBadge({ status, running = false }: { status: FlowStatus; r
           "h-[9px] w-[9px] flex-none border",
           running
             ? "border-phosphor bg-phosphor"
-            : status === "active"
+            : failed
+              ? "border-red-600 bg-red-600 dark:border-red-400 dark:bg-red-400"
+              : status === "active"
               ? "border-foreground bg-foreground"
               : "border-muted-foreground/60",
         )}

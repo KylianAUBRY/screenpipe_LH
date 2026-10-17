@@ -50,6 +50,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
+mod failures;
+pub use failures::{FailureReports, ERROR_WORKFLOW_TAG};
+
 /// n8n tag that marks a workflow as a ScreenPipe Automation Flow.
 pub const FLOW_TAG: &str = "screenpipe-flow";
 const STORE_FILE: &str = "automation-flows.json";
@@ -205,6 +208,8 @@ struct FlowsState {
     /// a task was first seen.
     workflow_catalog: WorkflowCatalogSource,
     running_wait: RunningWait,
+    /// Where a failed run is reported (D16).
+    failure_reports: FailureReports,
     http: reqwest::Client,
     /// Serializes store writes and imports so a double click on "create"
     /// cannot import the same task twice.
@@ -217,6 +222,7 @@ pub fn router<S>(
     activation_key: Option<FlowActivationKey>,
     workflow_catalog_dir: Option<PathBuf>,
     running_wait: RunningWait,
+    failure_reports: FailureReports,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -232,6 +238,7 @@ where
         activation_key,
         workflow_catalog: WorkflowCatalogSource(workflow_catalog_dir),
         running_wait,
+        failure_reports,
         http,
         write_lock: Arc::new(Mutex::new(())),
     };
@@ -244,6 +251,7 @@ where
         .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
         .route("/:id/deactivate", post(deactivate_flow))
+        .route("/:id/failures", post(failures::report_failure))
         .layer(middleware::from_fn(require_json))
         .with_state(state)
 }
@@ -588,12 +596,12 @@ impl N8nApi {
         }
     }
 
-    async fn tag_id(&self) -> Result<String, FlowError> {
-        if let Some(id) = self.find_tag().await? {
+    async fn tag_id(&self, name: &str) -> Result<String, FlowError> {
+        if let Some(id) = self.find_tag(name).await? {
             return Ok(id);
         }
         let (status, value) = self
-            .send(Method::POST, "/tags", &[], Some(&json!({"name": FLOW_TAG})))
+            .send(Method::POST, "/tags", &[], Some(&json!({"name": name})))
             .await?;
         match status {
             200..=299 => value["id"]
@@ -602,18 +610,18 @@ impl N8nApi {
                 .ok_or_else(|| FlowError::N8nFailed("n8n returned a tag without id".into())),
             // Created concurrently by someone else: read it back.
             409 => self
-                .find_tag()
+                .find_tag(name)
                 .await?
                 .ok_or_else(|| upstream_error(status, &value)),
             _ => Err(upstream_error(status, &value)),
         }
     }
 
-    async fn find_tag(&self) -> Result<Option<String>, FlowError> {
+    async fn find_tag(&self, name: &str) -> Result<Option<String>, FlowError> {
         let tags = self.all_pages("/tags", &[("limit", "250")]).await?;
         Ok(tags
             .iter()
-            .find(|tag| tag["name"] == FLOW_TAG)
+            .find(|tag| tag["name"] == name)
             .and_then(|tag| tag["id"].as_str().map(str::to_string)))
     }
 
@@ -622,6 +630,11 @@ impl N8nApi {
         if has_flow_tag(&workflow) {
             return Ok(workflow);
         }
+        self.add_tag(workflow, FLOW_TAG).await
+    }
+
+    /// Adds the tag `name` to the workflow's tags and returns it re-read.
+    async fn add_tag(&self, workflow: Value, name: &str) -> Result<Value, FlowError> {
         let id = workflow_id(&workflow)?;
         let mut tags: Vec<Value> = workflow["tags"]
             .as_array()
@@ -629,7 +642,7 @@ impl N8nApi {
             .flatten()
             .filter_map(|tag| tag["id"].as_str().map(|id| json!({"id": id})))
             .collect();
-        tags.push(json!({"id": self.tag_id().await?}));
+        tags.push(json!({"id": self.tag_id(name).await?}));
         self.expect_ok(
             Method::PUT,
             &format!("/workflows/{id}/tags"),
@@ -1466,6 +1479,7 @@ async fn update_flow(
     }
     keep_user_credentials(&mut body, Some(&current));
     check_nodes(&api, &mut body).await?;
+    failures::name_error_workflow(&state, &api, &mut body).await;
 
     if current["active"] == true {
         let running = running_version(&current);
@@ -1534,6 +1548,7 @@ async fn create_flow(
     let mut body = importable(&request.workflow);
     keep_user_credentials(&mut body, None);
     check_nodes(&api, &mut body).await?;
+    failures::name_error_workflow(&state, &api, &mut body).await;
     let (status, created) = api
         .send(Method::POST, "/workflows", &[], Some(&body))
         .await?;
@@ -1643,13 +1658,10 @@ async fn create_from_task(
         }
         Some(workflow) => workflow,
         None => {
-            api.expect_ok(
-                Method::POST,
-                "/workflows",
-                &[],
-                Some(&importable(&workflow)),
-            )
-            .await?
+            let mut body = importable(&workflow);
+            failures::name_error_workflow(&state, &api, &mut body).await;
+            api.expect_ok(Method::POST, "/workflows", &[], Some(&body))
+                .await?
         }
     };
     let id = workflow_id(&created)?;
