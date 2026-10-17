@@ -4,17 +4,18 @@
 
 "use client";
 
-// Review Screen (read-only for now): what the Flow does, each n8n node with
-// its one-sentence explanation, a link to the graph in n8n and back to the
-// Task Page. The graph picture (ticket 05) and Activate (ticket 04) come later.
+// Review Screen: what the Flow does, the n8n graph with one sentence per
+// node, links to the graph in n8n and back to the Task Page, status, last
+// run, activation history, and Activate / Deactivate.
 
 import React from "react";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Flow, FlowsApi } from "./api";
 import { ACTION_BUTTON, FlowsErrorMessage, SectionLabel, StatusBadge, useFlowsLoad } from "./common";
-import { activationLabel, lastRunLabel, shortNodeType } from "./labels";
 import { FlowActivation } from "./flow-activation";
+import { FlowGraph } from "./flow-graph";
+import { activationLabel, lastRunLabel } from "./labels";
 
 export function FlowReview({
   flowId,
@@ -109,25 +110,7 @@ function ReviewContent({
         <SectionLabel>
           Étapes <span className="font-mono tracking-normal">{steps.length}</span>
         </SectionLabel>
-        <ol className="space-y-2" aria-label="Étapes du Flow">
-          {steps.map((node) => (
-            <li
-              key={node.id}
-              data-testid={`flow-node-${node.id}`}
-              className="border border-border p-3"
-            >
-              <div className="flex items-baseline justify-between gap-3">
-                <span className="text-sm font-medium">{node.name}</span>
-                <span className="font-mono text-xs text-muted-foreground">
-                  {shortNodeType(node.type)}
-                </span>
-              </div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {node.sentence ?? "Pas d'explication pour cette étape."}
-              </p>
-            </li>
-          ))}
-        </ol>
+        <FlowGraph nodes={steps} edges={flow.edges} />
       </section>
 
       <section className="space-y-2">

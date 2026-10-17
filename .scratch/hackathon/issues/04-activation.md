@@ -32,14 +32,15 @@ history (when, what, which version, by whom).
   "Activé par vous · <date> · version <8 chars>".
 - Browser mock (`bun run dev:web`): activate/deactivate switch the fixture Flow in memory.
 
-## Tests (run on `hackathon/ticket-04`)
+## Tests (run on `hackathon/ticket-04` after merging integration tip 1cb60fdcc)
 
 ```
 cargo test -p screenpipe-engine --test automation_flows_test        # 19 passed
 cargo test -p screenpipe-engine --lib automation_flows              # 3 passed
 cd apps/screenpipe-app-tauri
 NODE_OPTIONS=--no-experimental-webstorage bun x vitest run \
-  components/automation-flows components/__tests__/pipe-store-flows-tab.test.tsx   # 34 passed
+  components/automation-flows components/__tests__/pipe-store-flows-tab.test.tsx \
+  components/workflows/task-page-create-flow.test.tsx lib/workflows/automation-flows.test.ts   # 52 passed
 bun x tsc --noEmit                                                  # clean
 ```
 
