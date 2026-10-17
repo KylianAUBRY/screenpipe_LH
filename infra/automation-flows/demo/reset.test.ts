@@ -1,9 +1,10 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readCatalog } from "./catalog";
 import { resetDemo, type CommandRunner } from "./reset";
 
 const KEY = "test-n8n-key";
@@ -118,5 +119,125 @@ describe("demo reset", () => {
     expect(n8n.workflows.size).toBe(0);
     expect(storedFlows(data)).toEqual({});
     expect(lines.join("\n")).toContain("spNovaFlow000001");
+  });
+
+  it("clears the demo Task Page answers and keeps the other tasks' answers", async () => {
+    const n8n = serve([]);
+    const catalog = catalogDir("saved answers");
+
+    const report = await resetDemo({
+      n8n: { url: n8n.url, apiKey: KEY }, dataDir: dataDir({}), catalogDir: catalog, container: "n8n-test", run: inbox(), log: () => {},
+    });
+
+    expect(report.failures).toEqual([]);
+    const answers = readCatalog(catalog)!.analysis.workflows.map(workflow => [workflow.id, workflow.userCorrection]);
+    expect(answers).toEqual([[DEMO_TASK, null], ["wf-other", "keep me"]]);
+  });
+
+  it("marks the unread demo emails read with the IMAP credential stored in n8n, inside the n8n container", async () => {
+    const n8n = serve([]);
+    const commands: string[][] = [];
+    const run: CommandRunner = async argv => { commands.push(argv); return inbox(2)(argv); };
+    const lines: string[] = [];
+
+    const report = await resetDemo({
+      n8n: { url: n8n.url, apiKey: KEY }, dataDir: dataDir({}), catalogDir: catalogDir(), container: "n8n-test", run, log: line => lines.push(line),
+    });
+
+    expect(report.failures).toEqual([]);
+    expect(commands).toHaveLength(1);
+    const [argv] = commands;
+    expect(argv.slice(0, 2)).toEqual(["docker", "exec"]);
+    expect(argv).toContain("n8n-test");
+    expect(argv).toContain("N8N_RUNNERS_BROKER_PORT=5690");
+    expect(argv).toContain("CRED_ID=spNovaImap000001");
+    expect(argv).toContain("MAILBOX=INBOX");
+    expect(lines).toContain("inbox: marked 2 unread emails as read in INBOX (0 unread left)");
+  });
+});
+
+// mark-read.sh runs inside the n8n container. Here it runs locally with a fake
+// `n8n` CLI on PATH and a fake `imapflow` module in place of n8n's.
+const PASSWORD = "app-password-never-printed";
+const FAKE_N8N = `#!/bin/sh
+out=""; id=""; decrypted=""
+for arg in "$@"; do
+  case "$arg" in --output=*) out="\${arg#--output=}";; --id=*) id="\${arg#--id=}";; --decrypted) decrypted=1;; esac
+done
+if [ "$1" != "export:credentials" ] || [ "$id" != "spNovaImap000001" ] || [ -z "$decrypted" ]; then
+  echo "Error exporting credentials. No credentials found with specified filters" >&2; exit 1
+fi
+printf '%s' '[{"id":"spNovaImap000001","type":"imap","data":{"user":"support@example.com","password":"${PASSWORD}","host":"imap.example.com"}}]' > "$out"
+echo "Successfully exported 1 credential."
+`;
+const FAKE_IMAPFLOW = `const fs = require("fs");
+const path = process.env.FAKE_IMAP_STATE;
+const load = () => JSON.parse(fs.readFileSync(path, "utf8"));
+class ImapFlow {
+  constructor(options) { const s = load(); s.options = { ...options, auth: { user: options.auth.user, passwordMatches: options.auth.pass === "${PASSWORD}" } }; fs.writeFileSync(path, JSON.stringify(s)); }
+  on() {}
+  async connect() { if (load().failAuth) { const e = new Error("Command failed"); e.responseText = "[AUTHENTICATIONFAILED] Invalid credentials"; throw e; } }
+  async getMailboxLock(mailbox) { const s = load(); s.mailbox = mailbox; fs.writeFileSync(path, JSON.stringify(s)); return { release() {} }; }
+  async search(query) { return load().messages.filter(m => !m.seen).map(m => m.uid); }
+  async messageFlagsAdd(uids, flags) { const s = load(); for (const m of s.messages) if (uids.includes(m.uid) && flags.includes("\\\\Seen")) m.seen = true; fs.writeFileSync(path, JSON.stringify(s)); }
+  async logout() {}
+}
+module.exports = { ImapFlow };
+`;
+
+async function runMarkRead(state: object, env: Record<string, string> = {}) {
+  const root = mkdtempSync(join(tmpdir(), "demo-mark-read-"));
+  const bin = join(root, "bin");
+  const pnpm = join(root, "pnpm");
+  const tmp = join(root, "tmp");
+  const module = join(pnpm, "imapflow@1.15.0", "node_modules", "imapflow");
+  mkdirSync(bin); mkdirSync(module, { recursive: true }); mkdirSync(tmp);
+  writeFileSync(join(bin, "n8n"), FAKE_N8N, { mode: 0o755 });
+  writeFileSync(join(module, "index.js"), FAKE_IMAPFLOW);
+  const statePath = join(root, "imap-state.json");
+  writeFileSync(statePath, JSON.stringify(state));
+  const child = Bun.spawn(["sh", join(import.meta.dir, "mark-read.sh")], {
+    env: {
+      PATH: `${bin}:${process.env.PATH}`, TMPDIR: tmp, N8N_PNPM_DIR: pnpm, FAKE_IMAP_STATE: statePath,
+      CRED_ID: "spNovaImap000001", MAILBOX: "INBOX", ...env,
+    },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { code, stdout, stderr, imap: JSON.parse(readFileSync(statePath, "utf8")), leftInTmp: readdirSync(tmp) };
+}
+
+describe("mark-read.sh (inside the n8n container)", () => {
+  it("marks every unread message read with the stored credential, defaulting to port 993 over TLS", async () => {
+    const result = await runMarkRead({ messages: [{ uid: 1, seen: true }, { uid: 2, seen: false }, { uid: 3, seen: false }] });
+
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout.trim().split("\n").at(-1)!)).toEqual({ marked: 2, unread: 0 });
+    expect(result.imap.messages.every((message: { seen: boolean }) => message.seen)).toBe(true);
+    expect(result.imap.mailbox).toBe("INBOX");
+    expect(result.imap.options).toMatchObject({
+      host: "imap.example.com", port: 993, secure: true, auth: { user: "support@example.com", passwordMatches: true }, logger: false,
+    });
+    expect(result.leftInTmp).toEqual([]);
+    expect(result.stdout).not.toContain(PASSWORD);
+  });
+
+  it("fails with IMAP's reason, never the password, and still removes the credential", async () => {
+    const result = await runMarkRead({ messages: [{ uid: 1, seen: false }], failAuth: true });
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("AUTHENTICATIONFAILED");
+    expect(`${result.stdout}${result.stderr}`).not.toContain(PASSWORD);
+    expect(result.leftInTmp).toEqual([]);
+  });
+
+  it("fails when n8n cannot export the credential", async () => {
+    const result = await runMarkRead({ messages: [] }, { CRED_ID: "spUnknown0000001" });
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("cannot export the n8n credential spUnknown0000001");
+    expect(result.stderr).toContain("No credentials found");
+    expect(result.leftInTmp).toEqual([]);
   });
 });

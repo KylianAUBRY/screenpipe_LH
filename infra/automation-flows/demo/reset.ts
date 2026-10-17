@@ -5,12 +5,19 @@
 //   bun infra/automation-flows/demo/reset.ts
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { clearAnswers, readCatalog, writeCatalog } from "./catalog";
 import { DEMO_TASK_ID } from "./detected-task";
 
 const STORE_FILE = "automation-flows.json";
-const WORKFLOW_FILE = join(import.meta.dir, "..", "workflows", "novadesk-support-tickets.json");
+// The bundled demo workflow (the engine's from-task fixture).
+const WORKFLOW = JSON.parse(readFileSync(join(import.meta.dir, "..", "workflows", "novadesk-support-tickets.json"), "utf8"));
 /** The copy `import-workflow.sh` installs keeps the bundled workflow's fixed id. */
-export const DEMO_WORKFLOW_ID: string = JSON.parse(readFileSync(WORKFLOW_FILE, "utf8")).id;
+export const DEMO_WORKFLOW_ID: string = WORKFLOW.id;
+// The demo inbox is the one the Flow's email trigger reads.
+const TRIGGER = WORKFLOW.nodes.find((node: { type: string }) => node.type === "n8n-nodes-base.emailReadImap");
+const IMAP_CREDENTIAL_ID: string = TRIGGER.credentials.imap.id;
+const MAILBOX: string = TRIGGER.parameters.mailbox ?? "INBOX";
+const MARK_READ_SCRIPT = readFileSync(join(import.meta.dir, "mark-read.sh"), "utf8");
 
 export type N8nConfig = { url: string; apiKey: string };
 export type CommandRunner = (argv: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
@@ -71,6 +78,20 @@ async function removeWorkflow(n8n: N8nCall, id: string): Promise<string> {
   return `${id} (${workflow.name ?? "unnamed"}): ${done.join(", ")}`;
 }
 
+/** `mark-read.sh` inside the n8n container: the IMAP secret never leaves it. */
+async function markInboxRead({ container, run }: ResetOptions): Promise<string> {
+  const { code, stdout, stderr } = await run([
+    "docker", "exec",
+    "-e", "N8N_RUNNERS_BROKER_PORT=5690", // the n8n server holds the default runner port
+    "-e", `CRED_ID=${IMAP_CREDENTIAL_ID}`,
+    "-e", `MAILBOX=${MAILBOX}`,
+    container, "sh", "-c", MARK_READ_SCRIPT,
+  ]);
+  const last = stdout.trim().split("\n").at(-1) ?? "";
+  const result = code === 0 ? JSON.parse(last) as { marked: number; unread: number } : null;
+  return `marked ${result!.marked} unread emails as read in ${MAILBOX} (${result!.unread} unread left)`;
+}
+
 export async function resetDemo(options: ResetOptions): Promise<ResetReport> {
   const failures: string[] = [];
   const storePath = join(options.dataDir, STORE_FILE);
@@ -90,5 +111,15 @@ export async function resetDemo(options: ResetOptions): Promise<ResetReport> {
   const tmp = `${storePath}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify({ ...store, flows }, null, 2));
   renameSync(tmp, storePath);
+
+  options.log(`inbox: ${await markInboxRead(options)}`);
+
+  const previous = readCatalog(options.catalogDir);
+  if (!previous) throw new Error(`No workflow catalog in ${options.catalogDir}. Run the demo script first.`);
+  const { catalog, changed } = clearAnswers(previous);
+  if (changed) writeCatalog(options.catalogDir, previous, catalog);
+  options.log(changed
+    ? `answers: cleared the answers of ${DEMO_TASK_ID} in ${join(options.catalogDir, "catalog.json")}`
+    : `answers: ${DEMO_TASK_ID} has no saved answers`);
   return { failures };
 }
