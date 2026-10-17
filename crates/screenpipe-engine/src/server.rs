@@ -327,6 +327,10 @@ pub struct SCServer {
     /// Where a failed Flow run is reported (D16): the app's notification
     /// server, and this API as n8n reaches it.
     pub flow_failure_reports: crate::automation_flows::FailureReports,
+    /// When the Flow health check (D19) runs: at start, then every 15
+    /// minutes by default. `None` never runs it in the background (tests);
+    /// `POST /automation-flows/health` still checks on demand.
+    pub flow_health_schedule: Option<crate::automation_flows::HealthSchedule>,
 }
 
 fn should_advertise_mdns(addr: SocketAddr) -> bool {
@@ -430,6 +434,7 @@ impl SCServer {
             flow_activation_key: None,
             flow_running_wait: Default::default(),
             flow_failure_reports: crate::automation_flows::FailureReports::for_api_port(addr.port()),
+            flow_health_schedule: Some(Default::default()),
         }
     }
 
@@ -1501,6 +1506,7 @@ impl SCServer {
                 self.workflow_catalog_dir.clone(),
                 self.flow_running_wait,
                 self.flow_failure_reports.clone(),
+                self.flow_health_schedule,
             ),
         );
 

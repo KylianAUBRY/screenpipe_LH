@@ -11,7 +11,7 @@ use axum::Router;
 use screenpipe_audio::audio_manager::AudioManagerBuilder;
 use screenpipe_db::DatabaseManager;
 use screenpipe_engine::automation_flows::{
-    FailureReports, FlowActivationKey, RunningWait, ACTIVATION_HEADER,
+    FailureReports, FlowActivationKey, HealthSchedule, RunningWait, ACTIVATION_HEADER,
 };
 use screenpipe_engine::SCServer;
 use serde_json::{json, Value};
@@ -238,6 +238,7 @@ impl Respond for FakeN8n {
                 workflow["active"] = json!(false);
                 workflow["isArchived"] = json!(false);
                 workflow["versionId"] = json!("version-1");
+                workflow["updatedAt"] = json!(chrono::Utc::now().to_rfc3339());
                 workflow["activeVersionId"] = Value::Null;
                 workflow["tags"] = json!([]);
                 state.workflows.push(workflow.clone());
@@ -280,6 +281,7 @@ impl Respond for FakeN8n {
                             }
                         }
                         workflow["versionId"] = json!(version);
+                        workflow["updatedAt"] = json!(chrono::Utc::now().to_rfc3339());
                         if workflow["active"] == true && republish {
                             workflow["activeVersionId"] = json!(version);
                         }
@@ -454,7 +456,20 @@ impl App {
         Self::build(None, false).await
     }
 
+    /// The desktop app's engine running its health check on `schedule`.
+    async fn with_health_schedule(schedule: HealthSchedule) -> Self {
+        Self::build_with(Some(FlowActivationKey::generate()), false, Some(schedule)).await
+    }
+
     async fn build(ui_key: Option<FlowActivationKey>, local_api_auth: bool) -> Self {
+        Self::build_with(ui_key, local_api_auth, None).await
+    }
+
+    async fn build_with(
+        ui_key: Option<FlowActivationKey>,
+        local_api_auth: bool,
+        health_schedule: Option<HealthSchedule>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(
             DatabaseManager::new("sqlite::memory:", Default::default())
@@ -500,6 +515,8 @@ impl App {
             notify_url: format!("{}/notify", notify.uri()),
             screenpipe_url_from_n8n: "http://host.docker.internal:3030".to_string(),
         };
+        // The health check runs only when a test asks (or schedules it).
+        server.flow_health_schedule = health_schedule;
         if local_api_auth {
             server.api_auth = true;
             server.api_auth_key = Some(LOCAL_API_KEY.to_string());
@@ -4257,4 +4274,238 @@ async fn a_finished_draft_reports_its_failed_runs_like_any_flow() {
     let draft = n8n.workflows().into_iter().find(|w| w["id"] == id.as_str()).unwrap();
     assert_eq!(draft["settings"]["errorWorkflow"], errors[0]["id"]);
     assert_eq!(flow["versionId"], draft["versionId"]);
+}
+
+// ---------------------------------------------------------------------------
+// Health check (D19)
+// ---------------------------------------------------------------------------
+
+async fn health_check(app: &App) -> Value {
+    let (status, report) = app.call("POST", "/automation-flows/health", None).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    report
+}
+
+#[tokio::test]
+async fn an_unreachable_n8n_is_reported_until_n8n_answers_again() {
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    // Nothing listens there: n8n is down.
+    app.configure_n8n("http://127.0.0.1:9");
+
+    assert_eq!(health_check(&app).await["n8n"], "unreachable");
+    let (status, last) = app.call("GET", "/automation-flows/health", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(last["n8n"], "unreachable");
+    assert!(last["checkedAt"].is_string(), "{last}");
+
+    // n8n is back: the next check says so, and so does the last result.
+    app.configure_n8n(&server.uri());
+    assert_eq!(health_check(&app).await["n8n"], "reachable");
+    let (_, last) = app.call("GET", "/automation-flows/health", None).await;
+    assert_eq!(last["n8n"], "reachable");
+}
+
+/// A failed run of `workflow_id` (the demo email) that stopped `ago` ago.
+fn failed_run_ago(id: &str, workflow_id: &str, ago: chrono::Duration) -> Value {
+    let stopped = chrono::Utc::now() - ago;
+    let mut run = failed_run(id, workflow_id);
+    run["startedAt"] = json!((stopped - chrono::Duration::seconds(9)).to_rfc3339());
+    run["stoppedAt"] = json!(stopped.to_rfc3339());
+    run
+}
+
+fn notice_ids(sent: &[Value]) -> Vec<String> {
+    sent.iter()
+        .map(|n| n["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn failed_runs_since_the_last_check_are_notified_once_each() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    // Failed while the app was down; a run that went through is not a failure.
+    n8n.add_execution(failed_run_ago("exec-down", &id, chrono::Duration::minutes(30)));
+    let mut fine = failed_run_ago("exec-fine", &id, chrono::Duration::minutes(20));
+    fine["status"] = json!("success");
+    n8n.add_execution(fine);
+
+    let report = health_check(&app).await;
+
+    assert_eq!(report["notified"], json!(["exec-down"]), "{report}");
+    let sent = notifications(&app).await;
+    assert_eq!(
+        notice_ids(&sent),
+        [format!("automation-flow-failure:{id}:exec-down")]
+    );
+    let body = sent[0]["body"].as_str().unwrap();
+    assert!(body.contains("Claire Martin <claire.martin@client.fr>"), "{body}");
+    assert!(body.contains("Créer le ticket Jira"), "{body}");
+    assert_eq!(sent[0]["actions"][0]["url"], format!("screenpipe://flows/{id}"));
+
+    // The next check finds nothing new: never twice.
+    assert_eq!(health_check(&app).await["notified"], json!([]));
+    assert_eq!(notifications(&app).await.len(), 1);
+
+    // A run that fails after it is notified at the following check.
+    n8n.add_execution(failed_run_ago("exec-new", &id, chrono::Duration::zero()));
+    assert_eq!(health_check(&app).await["notified"], json!(["exec-new"]));
+    assert_eq!(notifications(&app).await.len(), 2);
+
+    // A check changes nothing in n8n: the Flow keeps running.
+    let flow = n8n.workflows().into_iter().find(|w| w["id"] == id.as_str()).unwrap();
+    assert_eq!(flow["active"], true);
+}
+
+#[tokio::test]
+async fn a_run_the_error_workflow_reported_is_not_notified_again_and_vice_versa() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run_ago("exec-live", &id, chrono::Duration::minutes(5)));
+    let report = |execution: &str| {
+        let uri = format!("/automation-flows/{id}/failures");
+        let body = json!({"executionId": execution, "error": "503 Service Unavailable"});
+        let app = &app;
+        async move { app.call("POST", &uri, Some(body)).await }
+    };
+
+    // Reported live by n8n's error workflow (D16), then seen by the check.
+    let (status, answer) = report("exec-live").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["notified"], true);
+    assert_eq!(health_check(&app).await["notified"], json!([]));
+    assert_eq!(notifications(&app).await.len(), 1);
+
+    // Seen by the check first, then reported late by the error workflow.
+    n8n.add_execution(failed_run_ago("exec-late", &id, chrono::Duration::zero()));
+    assert_eq!(health_check(&app).await["notified"], json!(["exec-late"]));
+    let (_, answer) = report("exec-late").await;
+    assert_eq!(answer["notified"], false, "{answer}");
+    assert_eq!(notifications(&app).await.len(), 2);
+}
+
+#[tokio::test]
+async fn a_failed_run_the_notification_server_missed_is_notified_at_the_next_check() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    n8n.add_execution(failed_run_ago("exec-1", &id, chrono::Duration::minutes(1)));
+    // The app's notification server is not up yet.
+    app.notify.reset().await;
+
+    let report = health_check(&app).await;
+    assert_eq!(report["notified"], json!([]), "{report}");
+    assert_eq!(report["pendingNotifications"], json!(["exec-1"]));
+
+    // The notification server is up (what it refused is forgotten).
+    app.notify.reset().await;
+    Mock::given(any())
+        .respond_with(json_response(
+            200,
+            json!({"message": "Notification sent successfully"}),
+        ))
+        .mount(&app.notify)
+        .await;
+    assert_eq!(health_check(&app).await["notified"], json!(["exec-1"]));
+    assert_eq!(health_check(&app).await["notified"], json!([]));
+    assert_eq!(notifications(&app).await.len(), 1);
+}
+
+#[tokio::test]
+async fn drafts_left_under_construction_for_24_hours_are_deleted() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, abandoned) = start_draft(&app, first_step()).await;
+    let abandoned = abandoned["id"].as_str().unwrap().to_string();
+    let (_, recent) = start_draft(&app, first_step()).await;
+    let recent = recent["id"].as_str().unwrap().to_string();
+    let finished = active_flow(&app).await;
+    let ago = |hours: i64| json!((chrono::Utc::now() - chrono::Duration::hours(hours)).to_rfc3339());
+    n8n.edit_workflow(&abandoned, |w| w["updatedAt"] = ago(25));
+    n8n.edit_workflow(&recent, |w| w["updatedAt"] = ago(23));
+    // A finished Flow untouched for days is not a draft: it stays.
+    n8n.edit_workflow(&finished, |w| w["updatedAt"] = ago(72));
+
+    let report = health_check(&app).await;
+
+    assert_eq!(report["deletedDrafts"], json!([abandoned]), "{report}");
+    let left: Vec<Value> = n8n.workflows().iter().map(|w| w["id"].clone()).collect();
+    assert!(!left.contains(&json!(abandoned)), "{left:?}");
+    assert!(left.contains(&json!(recent)) && left.contains(&json!(finished)), "{left:?}");
+    let store = app.store();
+    assert!(store["flows"].get(&abandoned).is_none(), "{store}");
+    assert_eq!(store["flows"][&recent]["building"], true);
+    assert!(store["flows"].get(&finished).is_some());
+}
+
+/// How many times the fake n8n was asked for the Flows list.
+async fn flow_list_reads(server: &MockServer) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| {
+            r.method.as_str() == "GET"
+                && r.url.path() == "/api/v1/workflows"
+                && r.url
+                    .query_pairs()
+                    .any(|(key, value)| key == "tags" && value == "screenpipe-flow")
+        })
+        .count()
+}
+
+async fn last_health(app: &App) -> Value {
+    app.call("GET", "/automation-flows/health", None).await.1
+}
+
+/// Polls the last health result until `done` holds (at most 5 s).
+async fn wait_for_health(app: &App, done: impl Fn(&Value) -> bool) -> Value {
+    for _ in 0..100 {
+        let last = last_health(app).await;
+        if done(&last) {
+            return last;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("health never matched: {}", last_health(app).await);
+}
+
+#[tokio::test]
+async fn the_check_runs_at_start_then_on_its_schedule_and_sooner_while_n8n_is_down() {
+    let schedule = HealthSchedule {
+        every: Duration::from_millis(300),
+        retry: Duration::from_millis(50),
+    };
+    assert_eq!(
+        HealthSchedule::default().every,
+        Duration::from_secs(15 * 60),
+        "every 15 minutes in the app"
+    );
+    let (server, _n8n) = start_fake_n8n().await;
+    let app = App::with_health_schedule(schedule).await;
+
+    // At start, before anyone asks: no n8n connection yet.
+    let first = wait_for_health(&app, |h| h["checkedAt"].is_string()).await;
+    assert_eq!(first["n8n"], "not_configured");
+
+    // n8n down: the banner's state, re-checked soon.
+    app.configure_n8n("http://127.0.0.1:9");
+    wait_for_health(&app, |h| h["n8n"] == "unreachable").await;
+    app.configure_n8n(&server.uri());
+    wait_for_health(&app, |h| h["n8n"] == "reachable").await;
+
+    // Then on schedule: one more check within a period and a half.
+    let reads = flow_list_reads(&server).await;
+    tokio::time::sleep(Duration::from_millis(450)).await;
+    let later = flow_list_reads(&server).await;
+    assert!(later > reads, "{reads} then {later}");
+    assert!(later <= reads + 2, "{reads} then {later}: not every 300 ms");
 }

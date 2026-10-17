@@ -15,6 +15,7 @@
 //! Screen. Nothing is paused: a passing Jira or proxy outage must not switch
 //! a Flow off.
 
+use super::health::{self, Delivery};
 use super::*;
 
 /// n8n tag of ScreenPipe's error workflow.
@@ -174,9 +175,23 @@ pub(super) async fn report_failure(
         execution.as_ref(),
         report.error.as_deref(),
     );
-    Ok(Json(match notify(&state, &notice).await {
-        Ok(()) => json!({"notified": true}),
-        Err(reason) => {
+    // A run is notified once, whether by this route or the health check (D19).
+    let delivery = match execution.as_ref() {
+        Some(execution) => {
+            let stopped_at = execution["stoppedAt"].as_str();
+            let run = execution["id"].as_str().unwrap_or_default();
+            health::notify_run(&state, run, stopped_at, &notice).await
+        }
+        None => match notify(&state, &notice).await {
+            Ok(()) => Delivery::Shown,
+            Err(Undelivered::Gated(reason)) => Delivery::Gated(reason),
+            Err(Undelivered::Unreachable(reason)) => Delivery::Unreachable(reason),
+        },
+    };
+    Ok(Json(match delivery {
+        Delivery::Shown => json!({"notified": true}),
+        Delivery::AlreadyNotified => json!({"notified": false, "reason": "already notified"}),
+        Delivery::Gated(reason) | Delivery::Unreachable(reason) => {
             tracing::warn!("automation flows: failure of {id} not notified: {reason}");
             json!({"notified": false, "reason": reason})
         }
@@ -250,22 +265,33 @@ pub(super) fn handled_email(result: &Value) -> Option<(String, String)> {
     Some((sender, subject))
 }
 
-/// Sends `notice` to the app's notification server; `Err` says why it is
-/// not shown (unreachable, or a delivery gate: pause, quiet hours, repeat).
-async fn notify(state: &FlowsState, notice: &Value) -> Result<(), String> {
+/// Why a notification is not shown.
+pub(super) enum Undelivered {
+    /// The notification server took it and applied a delivery gate (pause,
+    /// quiet hours, a repeat).
+    Gated(String),
+    /// The notification server did not take it (down, or an error).
+    Unreachable(String),
+}
+
+/// Sends `notice` to the app's notification server.
+pub(super) async fn notify(state: &FlowsState, notice: &Value) -> Result<(), Undelivered> {
     let response = state
         .http
         .post(&state.failure_reports.notify_url)
         .json(notice)
         .send()
         .await
-        .map_err(|e| format!("notification server unreachable: {e}"))?;
+        .map_err(|e| Undelivered::Unreachable(format!("notification server unreachable: {e}")))?;
     let status = response.status();
     let answer: Value = response.json().await.unwrap_or(Value::Null);
     match answer["message"].as_str() {
         Some("Notification sent successfully") if status.is_success() => Ok(()),
-        Some(message) => Err(message.to_string()),
-        None => Err(format!("notification server answered {status}")),
+        Some(message) if status.is_success() => Err(Undelivered::Gated(message.to_string())),
+        Some(message) => Err(Undelivered::Unreachable(message.to_string())),
+        None => Err(Undelivered::Unreachable(format!(
+            "notification server answered {status}"
+        ))),
     }
 }
 
