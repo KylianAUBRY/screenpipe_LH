@@ -126,7 +126,20 @@ function sameData<T>(a: T, b: T): boolean {
  * lights only while an execution runs (docs/DESIGN.md), and the last-run
  * line says so in words.
  */
-export function StatusBadge({ status, running = false }: { status: FlowStatus; running?: boolean }) {
+/**
+ * The Flow's status. `failed` (ticket 24): its latest finished Run failed;
+ * the marker turns red and « En échec » says it in words until a later Run
+ * succeeds. The status itself is unchanged: a failure never pauses a Flow.
+ */
+export function StatusBadge({
+  status,
+  running = false,
+  failed = false,
+}: {
+  status: FlowStatus;
+  running?: boolean;
+  failed?: boolean;
+}) {
   return (
     <span className="inline-flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground">
       <span
@@ -136,12 +149,15 @@ export function StatusBadge({ status, running = false }: { status: FlowStatus; r
           "h-[9px] w-[9px] flex-none border",
           running
             ? "border-phosphor bg-phosphor"
-            : status === "active"
-              ? "border-foreground bg-foreground"
-              : "border-muted-foreground/60",
+            : failed
+              ? "border-red-600 bg-red-600 dark:border-red-500 dark:bg-red-500"
+              : status === "active"
+                ? "border-foreground bg-foreground"
+                : "border-muted-foreground/60",
         )}
       />
       <span data-testid="flow-status">{STATUS_LABEL[status]}</span>
+      {failed && <span className="font-medium text-red-700 dark:text-red-400">En échec</span>}
     </span>
   );
 }

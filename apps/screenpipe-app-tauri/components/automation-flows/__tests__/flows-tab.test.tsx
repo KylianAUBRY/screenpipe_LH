@@ -681,6 +681,62 @@ describe("Freshness", () => {
   });
 });
 
+describe("Failed Runs (ticket 24)", () => {
+  const failedRun = { executionId: "231", startedAt: "2026-10-17T09:05:00.000Z" };
+  const failed: Flow = {
+    ...activeFlow,
+    lastExecution: { status: "error", startedAt: failedRun.startedAt },
+    failedRun,
+  };
+  const marker = (root: HTMLElement) =>
+    within(root).getByTestId("flow-status-marker").getAttribute("class") ?? "";
+
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  afterEach(() => vi.useRealTimers());
+
+  it("shows a Flow in red in the list until a later Run succeeds", async () => {
+    const recovered = {
+      ...summaryOf(failed),
+      lastExecution: { status: "success" as const, startedAt: "2026-10-17T09:10:00.000Z" },
+      failedRun: null,
+    };
+    const list = vi.fn().mockResolvedValueOnce([summaryOf(failed)]).mockResolvedValue([recovered]);
+    render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ list })} />);
+
+    const row = await screen.findByTestId(`flow-row-${fixtureFlow.id}`);
+    expect(marker(row)).toMatch(/red/);
+    // Not by color alone, and the Flow is still on: no automatic pause.
+    expect(within(row).getByText("En échec")).toBeTruthy();
+    expect(within(row).getByText("Active")).toBeTruthy();
+
+    await act(async () => void vi.advanceTimersByTime(REFRESH_INTERVAL_MS));
+
+    await waitFor(() => expect(within(row).queryByText("En échec")).toBeNull());
+    expect(marker(row)).not.toMatch(/red/);
+  });
+
+  it("says on the Review Screen when the last Run failed, while the Flow stays active", async () => {
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => failed) })} />);
+    await screen.findByRole("heading", { name: fixtureFlow.name });
+
+    const header = screen.getByRole("heading", { name: fixtureFlow.name }).parentElement!;
+    expect(marker(header)).toMatch(/red/);
+    const banner = screen.getByTestId("flow-failed-run");
+    expect(banner.textContent).toMatch(/Le dernier passage a échoué le 17\/10\/2026 \d{2}:\d{2}/);
+    expect(banner.textContent).toMatch(/jusqu'au prochain passage réussi/);
+    expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+    expect(screen.getByRole("button", { name: "Désactiver" })).toBeTruthy();
+  });
+
+  it("shows nothing failed for a Flow whose last finished Run succeeded", async () => {
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => activeFlow) })} />);
+    await screen.findByRole("heading", { name: fixtureFlow.name });
+
+    expect(screen.queryByTestId("flow-failed-run")).toBeNull();
+    expect(screen.queryByText("En échec")).toBeNull();
+  });
+});
+
 /** What the webview reports when the app window is hidden or shown again. */
 function setVisibility(state: DocumentVisibilityState) {
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });

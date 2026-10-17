@@ -101,6 +101,27 @@ describe("notification file links", () => {
   });
 });
 
+describe("Failed Run notifications (Automation Flows, ticket 24)", () => {
+  it("opens the Flow's Review Screen in Home, cold or already open", async () => {
+    const showWindowActivated = vi.fn().mockResolvedValue({ status: "ok" });
+    const emitEvent = vi.fn().mockResolvedValue(undefined);
+
+    await routeNotificationDeeplink("screenpipe://flows/spNovaFlow000001", {
+      showWindowActivated,
+      emitEvent,
+      sleepMs: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(showWindowActivated).toHaveBeenCalledWith({
+      Home: { page: "pipes&tab=flows&flow=spNovaFlow000001" },
+    });
+    expect(emitEvent).toHaveBeenCalledWith("navigate", {
+      url: "/home?section=pipes&tab=flows&flow=spNovaFlow000001",
+    });
+    expect(emitEvent).not.toHaveBeenCalledWith("deep-link-received", expect.anything());
+  });
+});
+
 describe("calendar reminder deeplinks", () => {
   it("opens calendar connections directly in Home", async () => {
     const showWindowActivated = vi.fn().mockResolvedValue({ status: "ok" });

@@ -15,6 +15,7 @@ vi.mock("@/lib/utils/tauri", () => ({ commands: { showWindowActivated: mocks.sho
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { canCreateAutomationFlow, createAutomationFlow, flowReviewLink, openFlowReviewLink } from "./automation-flows";
+import { followFlowNavigation } from "./flow-links";
 import { DEMO_TASK_ID, fixtureFlow } from "@/components/automation-flows/fixtures";
 import { mockAutomationFlowsResponse } from "@/components/automation-flows/mock";
 
@@ -115,6 +116,24 @@ describe("Review Screen link from the chat", () => {
     expect(mocks.showWindowActivated).toHaveBeenCalledWith({
       Home: { page: `pipes&tab=flows&flow=${fixtureFlow.id}` },
     });
+  });
+
+  it("opens the Review Screen a navigate event names, in an Automations view already open", async () => {
+    // Home received `navigate` from a Failed Run notification (ticket 24).
+    window.history.replaceState({}, "", "/home?section=pipes&tab=my-pipes");
+    const switched = vi.fn();
+    const listen = (event: Event) => switched((event as CustomEvent).detail);
+    window.addEventListener("switch-pipes-tab", listen);
+    try {
+      followFlowNavigation(new URL(`http://app${reviewUrl}`));
+      followFlowNavigation(new URL("http://app/home?section=pipes&tab=discover"));
+    } finally {
+      window.removeEventListener("switch-pipes-tab", listen);
+    }
+
+    expect(switched.mock.calls).toEqual([[{ tab: "flows", flow: fixtureFlow.id }]]);
+    // An Automations view mounted later reads it from the address.
+    expect(`${window.location.pathname}${window.location.search}`).toBe(reviewUrl);
   });
 
   it.each(["screenpipe://flows/", "screenpipe://frame/12", "https://example.com/flows/x"])(

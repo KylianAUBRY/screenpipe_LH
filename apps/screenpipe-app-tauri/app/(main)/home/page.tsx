@@ -4,6 +4,7 @@
 "use client";
 
 import { rememberWorkflowReview, workflowReviewLink } from "@/lib/workflows/notification";
+import { followFlowNavigation } from "@/lib/workflows/flow-links";
 import React, { useEffect, useState, useRef, Suspense, useCallback } from "react";
 import {
   TimerReset,
@@ -1315,6 +1316,8 @@ function HomeContent() {
         if (mapped === "brain") {
           window.dispatchEvent(new Event(ONBOARDING_BRAIN_HANDOFF_EVENT));
         }
+        // A Flow's Review Screen (Failed Run notification, chat link).
+        if (mapped === "pipes") followFlowNavigation(url);
       }
     }
   });
