@@ -40,7 +40,9 @@ type N8nCall = (method: string, path: string) => Promise<{ status: number; body:
 
 function n8nClient({ url, apiKey }: N8nConfig): N8nCall {
   return async (method, path) => {
-    const response = await fetch(`${url}/api/v1${path}`, { method, headers: { "X-N8N-API-KEY": apiKey } });
+    const response = await fetch(`${url}/api/v1${path}`, {
+      method, headers: { "X-N8N-API-KEY": apiKey }, signal: AbortSignal.timeout(15_000),
+    }).catch(error => { throw new Error(`cannot reach n8n at ${url} (${error instanceof Error ? error.message : error})`); });
     const body = await response.json().catch(() => null);
     return { status: response.status, body };
   };
@@ -87,24 +89,63 @@ async function markInboxRead({ container, run }: ResetOptions): Promise<string> 
     "-e", `MAILBOX=${MAILBOX}`,
     container, "sh", "-c", MARK_READ_SCRIPT,
   ]);
-  const last = stdout.trim().split("\n").at(-1) ?? "";
-  const result = code === 0 ? JSON.parse(last) as { marked: number; unread: number } : null;
-  return `marked ${result!.marked} unread emails as read in ${MAILBOX} (${result!.unread} unread left)`;
+  const tail = (text: string) => text.trim().split("\n").slice(-3).join(" / ");
+  if (code !== 0) throw new Error(`could not mark the demo inbox read (exit ${code}): ${tail(stderr) || tail(stdout)}`);
+  let result: { marked: number; unread: number };
+  try {
+    result = JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
+  } catch {
+    throw new Error(`unexpected answer from the n8n container: ${tail(stdout)}`);
+  }
+  if (result.unread > 0) throw new Error(`marked ${result.marked} emails read but ${result.unread} unread email(s) left in ${MAILBOX}`);
+  return `marked ${result.marked} unread email(s) as read in ${MAILBOX} (0 unread left)`;
 }
 
+function clearTaskAnswers(dir: string): string {
+  const previous = readCatalog(dir);
+  if (!previous) throw new Error(`no workflow catalog in ${dir}; run the demo script first`);
+  const { catalog, changed } = clearAnswers(previous);
+  if (changed) writeCatalog(dir, previous, catalog);
+  return changed
+    ? `cleared the answers of ${DEMO_TASK_ID} in ${join(dir, "catalog.json")}`
+    : `${DEMO_TASK_ID} has no saved answers`;
+}
+
+/** Every step runs even when an earlier one fails; each failure is reported. */
 export async function resetDemo(options: ResetOptions): Promise<ResetReport> {
   const failures: string[] = [];
+  const step = async (name: string, action: () => Promise<string> | string) => {
+    try {
+      options.log(`${name}: ${await action()}`);
+    } catch (error) {
+      const reason = `${name}: ${error instanceof Error ? error.message : String(error)}`;
+      failures.push(reason);
+      options.log(`FAILED ${reason}`);
+    }
+  };
+
   const storePath = join(options.dataDir, STORE_FILE);
   const store: FlowStore = existsSync(storePath) ? JSON.parse(readFileSync(storePath, "utf8")) : {};
   const demoIds = Object.entries(store.flows ?? {})
     .filter(([, record]) => record.sourceTaskId === DEMO_TASK_ID)
     .map(([id]) => id);
 
-  const n8n = n8nClient(options.n8n!);
   const gone: string[] = [];
-  for (const id of new Set([...demoIds, DEMO_WORKFLOW_ID])) {
-    options.log(`n8n: ${await removeWorkflow(n8n, id)}`);
-    gone.push(id);
+  let n8n: N8nCall | null = null;
+  await step("n8n", async () => {
+    if (!options.n8n) throw new Error(`no n8n API key: export N8N_API_KEY (the key saved in ScreenPipe > Connections > n8n)`);
+    const client = n8nClient(options.n8n);
+    const probe = await client("GET", "/workflows?limit=1");
+    if (!ok(probe.status)) throw new Error(`n8n at ${options.n8n.url} refused the request (${answer(probe)})`);
+    n8n = client;
+    return `connected to ${options.n8n.url}`;
+  });
+  for (const id of n8n ? new Set([...demoIds, DEMO_WORKFLOW_ID]) : []) {
+    await step("n8n", async () => {
+      const done = await removeWorkflow(n8n!, id);
+      gone.push(id);
+      return done;
+    });
   }
 
   const flows = Object.fromEntries(Object.entries(store.flows ?? {}).filter(([id]) => !gone.includes(id)));
@@ -112,14 +153,7 @@ export async function resetDemo(options: ResetOptions): Promise<ResetReport> {
   writeFileSync(tmp, JSON.stringify({ ...store, flows }, null, 2));
   renameSync(tmp, storePath);
 
-  options.log(`inbox: ${await markInboxRead(options)}`);
-
-  const previous = readCatalog(options.catalogDir);
-  if (!previous) throw new Error(`No workflow catalog in ${options.catalogDir}. Run the demo script first.`);
-  const { catalog, changed } = clearAnswers(previous);
-  if (changed) writeCatalog(options.catalogDir, previous, catalog);
-  options.log(changed
-    ? `answers: cleared the answers of ${DEMO_TASK_ID} in ${join(options.catalogDir, "catalog.json")}`
-    : `answers: ${DEMO_TASK_ID} has no saved answers`);
+  await step("inbox", () => markInboxRead(options));
+  await step("answers", () => clearTaskAnswers(options.catalogDir));
   return { failures };
 }

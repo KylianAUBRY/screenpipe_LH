@@ -152,7 +152,52 @@ describe("demo reset", () => {
     expect(argv).toContain("N8N_RUNNERS_BROKER_PORT=5690");
     expect(argv).toContain("CRED_ID=spNovaImap000001");
     expect(argv).toContain("MAILBOX=INBOX");
-    expect(lines).toContain("inbox: marked 2 unread emails as read in INBOX (0 unread left)");
+    expect(lines).toContain("inbox: marked 2 unread email(s) as read in INBOX (0 unread left)");
+  });
+
+  it("reports a demo Flow n8n refuses to switch off, keeps its record, and still restores the rest", async () => {
+    const n8n = serve([
+      { id: "wfStuck00000001", name: "NovaDesk", active: true },
+      { id: "wfDemo000000001", name: "NovaDesk 2", active: false },
+    ], { refuse: { "POST unpublish wfStuck00000001": { status: 500, message: "database is locked" } } });
+    const data = dataDir({ wfStuck00000001: record(DEMO_TASK), wfDemo000000001: record(DEMO_TASK) });
+    const catalog = catalogDir("saved answers");
+    let inboxRuns = 0;
+
+    const report = await resetDemo({
+      n8n: { url: n8n.url, apiKey: KEY }, dataDir: data, catalogDir: catalog, container: "n8n-test",
+      run: async argv => { inboxRuns++; return inbox()(argv); }, log: () => {},
+    });
+
+    expect(report.failures).toEqual([expect.stringContaining("wfStuck00000001")]);
+    expect(report.failures[0]).toContain("database is locked");
+    expect(n8n.workflows.get("wfStuck00000001")!.active).toBe(true);
+    expect(Object.keys(storedFlows(data))).toEqual(["wfStuck00000001"]);
+    expect(inboxRuns).toBe(1);
+    expect(readCatalog(catalog)!.analysis.workflows[0].userCorrection).toBeNull();
+  });
+
+  it("reports a missing n8n key or an unreachable n8n, and keeps the Flow records", async () => {
+    const data = dataDir({ wfDemo000000001: record(DEMO_TASK) });
+    const options = { dataDir: data, catalogDir: catalogDir(), container: "n8n-test", run: inbox(), log: () => {} };
+
+    const missing = await resetDemo({ ...options, n8n: null });
+    const down = await resetDemo({ ...options, n8n: { url: "http://127.0.0.1:9", apiKey: KEY } });
+
+    expect(missing.failures).toEqual([expect.stringContaining("N8N_API_KEY")]);
+    expect(down.failures).toEqual([expect.stringContaining("cannot reach n8n at http://127.0.0.1:9")]);
+    expect(Object.keys(storedFlows(data))).toEqual(["wfDemo000000001"]);
+  });
+
+  it("reports an inbox it could not reach or that still has unread demo emails", async () => {
+    const n8n = serve([]);
+    const options = { n8n: { url: n8n.url, apiKey: KEY }, dataDir: dataDir({}), catalogDir: catalogDir(), container: "n8n-test", log: () => {} };
+
+    const noContainer = await resetDemo({ ...options, run: async () => ({ code: 1, stdout: "", stderr: "Error response from daemon: No such container: n8n-test\n" }) });
+    const stillUnread = await resetDemo({ ...options, run: async () => ({ code: 0, stdout: '{"marked":3,"unread":1}\n', stderr: "" }) });
+
+    expect(noContainer.failures).toEqual([expect.stringContaining("No such container: n8n-test")]);
+    expect(stillUnread.failures).toEqual([expect.stringContaining("1 unread email(s) left in INBOX")]);
   });
 });
 
