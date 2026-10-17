@@ -102,6 +102,24 @@ export type ActivityItem = {
   failedStep: string | null;
 };
 
+/** The Run « Relancer » started (ticket 26), as n8n reports it once it answers. */
+export type RetriedRun = {
+  executionId: string;
+  status: LastExecution["status"];
+  startedAt: string | null;
+};
+
+/**
+ * Whether n8n answers right now (ticket 29, `GET /automation-flows/health`):
+ * "unreachable" is the banner « n8n injoignable, tes Flows ne tournent pas ».
+ * `lastCheckAt`: when the engine's Flow health check last saw every Failed
+ * Run through (it runs at app start, then every 15 minutes).
+ */
+export type N8nHealth = {
+  n8n: "ok" | "unreachable" | "unauthorized" | "failed" | "not_configured";
+  lastCheckAt: string | null;
+};
+
 export type FlowsErrorCode =
   | "n8n_not_configured"
   /** n8n answered but refused the API key of Connections → n8n. */
@@ -118,6 +136,8 @@ export type FlowsErrorCode =
   | "activation_failed"
   /** Activation without the desktop app's UI credential (e.g. `bun run dev:web:live`). */
   | "activation_requires_user"
+  /** « Relancer » on a Run that succeeded, still runs or was already retried. */
+  | "run_not_failed"
   | "unknown";
 
 const SERVER_CODES: readonly FlowsErrorCode[] = [
@@ -129,6 +149,7 @@ const SERVER_CODES: readonly FlowsErrorCode[] = [
   "version_changed",
   "activation_failed",
   "activation_requires_user",
+  "run_not_failed",
 ];
 
 /** Carries the UI credential on activation (engine: `ACTIVATION_HEADER`). */
@@ -197,6 +218,9 @@ export const flowsApi = {
   activity: (id: string) =>
     request<ActivityItem[]>(`/automation-flows/${encodeURIComponent(id)}/activity`),
 
+  /** Whether n8n answers right now, for the « n8n injoignable » banner. */
+  health: () => request<N8nHealth>("/automation-flows/health"),
+
   createFromTask: (taskId: string, answers: unknown) =>
     request<Flow>("/automation-flows/from-task", {
       method: "POST",
@@ -229,6 +253,17 @@ export const flowsApi = {
       body: "{}",
     });
   },
+
+  /**
+   * « Relancer » (ticket 26): replays a Failed Run of the Flow with the same
+   * input through n8n's retry. Answers once n8n has the new Run's outcome,
+   * with the Flow as it now stands.
+   */
+  retry: (id: string, executionId: string) =>
+    request<{ run: RetriedRun; flow: Flow }>(
+      `/automation-flows/${encodeURIComponent(id)}/retry`,
+      { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ executionId }) },
+    ),
 
   /** "Voir le graphe": the workflow in the n8n editor. */
   async openInN8n(url: string) {

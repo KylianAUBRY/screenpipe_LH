@@ -24,8 +24,10 @@ import {
 } from "./common";
 import { FlowActivation } from "./flow-activation";
 import { FlowActivity } from "./flow-activity";
+import { FailedRun } from "./flow-failed-run";
 import { FlowGraph } from "./flow-graph";
-import { activationLabel, formatDate, lastRunLabel } from "./labels";
+import { activationLabel, lastRunLabel } from "./labels";
+import { N8nUnreachableBanner } from "./n8n-banner";
 
 export function FlowReview({
   flowId,
@@ -44,6 +46,10 @@ export function FlowReview({
         <ArrowLeft className="mr-1 h-4 w-4" aria-hidden />
         Tous les Flows
       </Button>
+      <N8nUnreachableBanner
+        api={api}
+        hidden={flow.state === "error" && flow.error.code === "n8n_unreachable"}
+      />
       {flow.state === "loading" && (
         <p className="text-sm text-muted-foreground">Chargement du Flow…</p>
       )}
@@ -135,17 +141,7 @@ function ReviewContent({
         </div>
       </header>
 
-      {flow.failedRun && (
-        <p
-          role="status"
-          data-testid="flow-failed-run"
-          className="border border-red-600 p-3 text-sm dark:border-red-500"
-        >
-          Le dernier passage a échoué le {formatDate(flow.failedRun.startedAt)}. Un échec
-          ne met pas le Flow en pause ; il apparaît en rouge jusqu&apos;au prochain passage
-          réussi.
-        </p>
-      )}
+      <FailedRun flow={flow} api={api} onChange={onChange} />
       {flow.status === "needs_review" && (
         <p role="status" className="border border-border bg-accent p-3 text-sm">
           Ce Flow a changé depuis sa dernière activation : relisez-le avant de le

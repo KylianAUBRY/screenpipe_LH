@@ -327,6 +327,9 @@ pub struct SCServer {
     /// Where a Failed Run of a Flow is notified: the desktop app's `/notify`
     /// route. `None` sends nothing.
     pub flow_notify_url: Option<String>,
+    /// When the background Flow health check runs (at start, then every 15
+    /// minutes by default); `None` runs it only on request.
+    pub flow_health_check: Option<crate::automation_flows::FlowHealthCheck>,
 }
 
 fn should_advertise_mdns(addr: SocketAddr) -> bool {
@@ -430,6 +433,7 @@ impl SCServer {
             flow_activation_key: None,
             flow_running_wait: Default::default(),
             flow_notify_url: Some(crate::automation_flows::DEFAULT_NOTIFY_URL.to_string()),
+            flow_health_check: Some(Default::default()),
         }
     }
 
@@ -1501,6 +1505,7 @@ impl SCServer {
                 self.workflow_catalog_dir.clone(),
                 self.flow_running_wait,
                 self.flow_notify_url.clone(),
+                self.flow_health_check,
             ),
         );
 

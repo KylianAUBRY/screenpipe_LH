@@ -21,6 +21,7 @@ function fakeApi(flow: Flow = fixtureFlow): FlowsApi {
     openTaskPage: vi.fn(async () => {}),
     openN8nConnection: vi.fn(async () => {}),
     activity: vi.fn(async () => []),
+    health: vi.fn(async () => ({ n8n: "ok" as const, lastCheckAt: null })),
   };
 }
 

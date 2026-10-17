@@ -10,7 +10,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { FlowsApiError, type FlowsApi, type FlowStatus } from "./api";
-import { STATUS_LABEL } from "./labels";
+import { N8N_UNREACHABLE, STATUS_LABEL } from "./labels";
 
 type Load<T> =
   | { state: "loading" }
@@ -274,7 +274,7 @@ export function FlowsErrorMessage({
   }
   const title =
     error.code === "n8n_unreachable"
-      ? "Impossible de joindre n8n"
+      ? N8N_UNREACHABLE
       : error.code === "not_found"
         ? "Ce Flow n'existe plus dans n8n"
         : "Les Flows n'ont pas pu être chargés";

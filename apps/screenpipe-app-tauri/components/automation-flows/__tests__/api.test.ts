@@ -97,6 +97,25 @@ describe("flowsApi", () => {
     expect(sentHeaders(init).get(ACTIVATION_HEADER)).toBe("ui-key");
   });
 
+  it("retries a Failed Run of a Flow and returns the new Run with the Flow (ticket 26)", async () => {
+    const answer = {
+      run: { executionId: "240", status: "success", startedAt: "2026-10-17T10:00:00.000Z" },
+      flow: fixtureFlow,
+    };
+    respond(200, answer);
+    expect(await flowsApi.retry("wf/1", "231")).toEqual(answer);
+    const [path, init] = localFetch.mock.lastCall!;
+    expect(path).toBe("/automation-flows/wf%2F1/retry");
+    expect(init.method).toBe("POST");
+    expect(sentHeaders(init).get("content-type")).toBe("application/json");
+    expect(JSON.parse(init.body)).toEqual({ executionId: "231" });
+
+    respond(409, { error: "run_not_failed", detail: "this Run succeeded; nothing to retry" });
+    const refused = await flowsApi.retry("wf1", "231").catch((e) => e);
+    expect(refused).toBeInstanceOf(FlowsApiError);
+    expect(refused.code).toBe("run_not_failed");
+  });
+
   it("outside the desktop app, activates without a credential and reports the refusal", async () => {
     getFlowActivationKey.mockRejectedValue(new Error("not in Tauri"));
     respond(403, {
@@ -132,6 +151,25 @@ describe("flowsApi", () => {
     respond(200, fixtureActivity);
     expect(await flowsApi.activity("wf/1")).toEqual(fixtureActivity);
     expect(localFetch).toHaveBeenLastCalledWith("/automation-flows/wf%2F1/activity", undefined);
+  });
+
+  it("asks the engine whether n8n answers (ticket 29)", async () => {
+    respond(200, { n8n: "unreachable", lastCheckAt: "2026-10-17T08:00:00Z" });
+    expect(await flowsApi.health()).toEqual({
+      n8n: "unreachable",
+      lastCheckAt: "2026-10-17T08:00:00Z",
+    });
+    expect(localFetch).toHaveBeenLastCalledWith("/automation-flows/health", undefined);
+  });
+
+  it.each([
+    ["unreachable", "unreachable"],
+    ["not-configured", "not_configured"],
+    ["empty", "ok"],
+  ])("the browser mock's %s state answers the health check", async (state, n8n) => {
+    useBrowserMock();
+    window.history.replaceState({}, "", `/home?section=pipes&tab=flows&flowsState=${state}`);
+    expect((await flowsApi.health()).n8n).toBe(n8n);
   });
 
   it("keeps the unreachable detail for the message", async () => {
@@ -186,6 +224,23 @@ describe("flowsApi", () => {
 });
 
 describe("browser mock", () => {
+  it("shows a Failed Run with ?flowsState=failed and lets « Relancer » replay it once", async () => {
+    useBrowserMock();
+    window.history.replaceState({}, "", "/home?section=pipes&flowsState=failed");
+
+    const failed = await flowsApi.get(fixtureFlow.id);
+    expect(failed.failedRun?.executionId).toBeTruthy();
+    expect((await flowsApi.list())[0].failedRun).toEqual(failed.failedRun);
+
+    const { run, flow } = await flowsApi.retry(fixtureFlow.id, failed.failedRun!.executionId);
+    expect(run.status).toBe("success");
+    expect(flow.failedRun).toBeNull();
+    expect((await flowsApi.get(fixtureFlow.id)).failedRun).toBeNull();
+    // Like the engine: a Run that no longer failed is refused.
+    const refused = await flowsApi.retry(fixtureFlow.id, failed.failedRun!.executionId).catch((e) => e);
+    expect(refused.code).toBe("run_not_failed");
+  });
+
   it("serves the fixture Flow without the native app", async () => {
     useBrowserMock();
     expect(await flowsApi.list()).toEqual([summaryOf(fixtureFlow)]);

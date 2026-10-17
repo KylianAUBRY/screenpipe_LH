@@ -11,6 +11,9 @@ import { FlowsTab } from "../flows-tab";
 import { fixtureActivity } from "../activity-fixture";
 import { fixtureFlow, summaryOf } from "../fixtures";
 
+/** The banner of ticket 29, word for word. */
+const N8N_UNREACHABLE = "n8n injoignable, tes Flows ne tournent pas";
+
 const activation = {
   at: "2026-10-17T09:00:00.000Z",
   event: "activated" as const,
@@ -39,6 +42,10 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     createFromTask: vi.fn(async () => fixtureFlow),
     activate: vi.fn(async () => activeFlow),
     deactivate: vi.fn(async () => pausedFlow),
+    retry: vi.fn(async () => ({
+      run: { executionId: "240", status: "success" as const, startedAt: "2026-10-17T10:00:00.000Z" },
+      flow: activeFlow,
+    })),
     openInN8n: vi.fn(async () => {}),
     openTaskPage: vi.fn(async () => {}),
     openN8nConnection: vi.fn(async () => {}),
@@ -46,6 +53,7 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     requestChange: vi.fn(async () => {}),
     requestCreation: vi.fn(async () => {}),
     activity: vi.fn(async () => []),
+    health: vi.fn(async () => ({ n8n: "ok" as const, lastCheckAt: null })),
     ...overrides,
   };
 }
@@ -143,7 +151,7 @@ describe("Flows list", () => {
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("n8n a refusé la clé API")).toBeTruthy();
     expect(within(alert).getByText(/clé API.*Connexions → n8n/)).toBeTruthy();
-    expect(within(alert).queryByText("Impossible de joindre n8n")).toBeNull();
+    expect(within(alert).queryByText(N8N_UNREACHABLE)).toBeNull();
     fireEvent.click(within(alert).getByRole("button", { name: "Ouvrir Connexions" }));
     expect(api.openN8nConnection).toHaveBeenCalled();
   });
@@ -162,12 +170,69 @@ describe("Flows list", () => {
     render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
 
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("Impossible de joindre n8n")).toBeTruthy();
+    expect(within(alert).getByText(N8N_UNREACHABLE)).toBeTruthy();
     expect(within(alert).getByText(/cannot reach n8n/)).toBeTruthy();
     fireEvent.click(within(alert).getByRole("button", { name: "Réessayer" }));
 
     expect(await screen.findByTestId(`flow-row-${fixtureFlow.id}`)).toBeTruthy();
     expect(calls).toBe(2);
+  });
+});
+
+describe("n8n health banner (ticket 29)", () => {
+  const unreachable = vi.fn(async () => ({ n8n: "unreachable" as const, lastCheckAt: null }));
+
+  it("tells the user on the list that their Flows do not run, keeping the Flows shown", async () => {
+    render(
+      <FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ health: unreachable })} />,
+    );
+
+    const banner = await screen.findByRole("alert");
+    expect(within(banner).getByText(N8N_UNREACHABLE)).toBeTruthy();
+    expect(screen.getByTestId(`flow-row-${fixtureFlow.id}`)).toBeTruthy();
+  });
+
+  it("tells the user on the Review Screen too", async () => {
+    render(
+      <FlowsTab
+        flowId={fixtureFlow.id}
+        onSelectFlow={vi.fn()}
+        api={fakeApi({ health: unreachable })}
+      />,
+    );
+
+    expect(await screen.findByText(N8N_UNREACHABLE)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: fixtureFlow.name })).toBeTruthy();
+  });
+
+  it("shows nothing while n8n answers, or when the engine cannot say", async () => {
+    for (const health of [
+      vi.fn(async () => ({ n8n: "ok" as const, lastCheckAt: null })),
+      vi.fn(async () => {
+        throw new FlowsApiError("unknown", "engine down");
+      }),
+    ]) {
+      render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ health })} />);
+      await screen.findByTestId(`flow-row-${fixtureFlow.id}`);
+      await waitFor(() => expect(health).toHaveBeenCalled());
+      await act(async () => {});
+      expect(screen.queryByText(N8N_UNREACHABLE)).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("says it once when the list itself cannot reach n8n", async () => {
+    const list = vi.fn(async () => {
+      throw new FlowsApiError("n8n_unreachable", "connection refused");
+    });
+    render(
+      <FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ list, health: unreachable })} />,
+    );
+
+    await screen.findByText(/connection refused/);
+    await waitFor(() => expect(unreachable).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.getAllByText(N8N_UNREACHABLE)).toHaveLength(1);
   });
 });
 
@@ -655,7 +720,7 @@ describe("Freshness", () => {
     await act(async () => {});
 
     expect(screen.getByRole("heading", { name: fixtureFlow.name })).toBeTruthy();
-    expect(screen.queryByText("Impossible de joindre n8n")).toBeNull();
+    expect(screen.queryByText(N8N_UNREACHABLE)).toBeNull();
   });
 
   describe("on an interval", () => {
@@ -746,6 +811,105 @@ describe("Failed Runs (ticket 24)", () => {
 
     expect(screen.queryByTestId("flow-failed-run")).toBeNull();
     expect(screen.queryByText("En échec")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Relancer" })).toBeNull();
+  });
+
+  describe("« Relancer » (ticket 26)", () => {
+    const recovered: Flow = {
+      ...activeFlow,
+      lastExecution: { status: "success", startedAt: "2026-10-17T10:00:00.000Z" },
+      failedRun: null,
+    };
+
+    it("replays the Failed Run and shows the new outcome", async () => {
+      const retry = vi.fn(async () => ({
+        run: { executionId: "240", status: "success" as const, startedAt: "2026-10-17T10:00:00.000Z" },
+        flow: recovered,
+      }));
+      const api = fakeApi({ get: vi.fn(async () => failed), retry });
+      render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+      const banner = await screen.findByTestId("flow-failed-run");
+      fireEvent.click(within(banner).getByRole("button", { name: "Relancer" }));
+
+      await waitFor(() => expect(screen.queryByTestId("flow-failed-run")).toBeNull());
+      expect(retry).toHaveBeenCalledWith(fixtureFlow.id, failedRun.executionId);
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("status", { name: "Résultat de la relance" }).textContent).toMatch(
+        /a réussi/,
+      );
+      expect(screen.queryByText("En échec")).toBeNull();
+      expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+    });
+
+    it("keeps the Flow failed when the replay fails again, on the new Run", async () => {
+      const failedAgain: Flow = {
+        ...failed,
+        lastExecution: { status: "error", startedAt: "2026-10-17T10:00:00.000Z" },
+        failedRun: { executionId: "240", startedAt: "2026-10-17T10:00:00.000Z" },
+      };
+      const retry = vi.fn(async () => ({
+        run: { executionId: "240", status: "error" as const, startedAt: "2026-10-17T10:00:00.000Z" },
+        flow: failedAgain,
+      }));
+      render(
+        <FlowsTab
+          flowId={fixtureFlow.id}
+          onSelectFlow={vi.fn()}
+          api={fakeApi({ get: vi.fn(async () => failed), retry })}
+        />,
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: "Relancer" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("status", { name: "Résultat de la relance" }).textContent).toMatch(
+          /a de nouveau échoué/,
+        ),
+      );
+      expect(screen.getByTestId("flow-failed-run")).toBeTruthy();
+      // « Relancer » now replays the new Failed Run.
+      fireEvent.click(screen.getByRole("button", { name: "Relancer" }));
+      await waitFor(() => expect(retry).toHaveBeenCalledTimes(2));
+      expect(retry).toHaveBeenLastCalledWith(fixtureFlow.id, "240");
+    });
+
+    it("says why a retry was refused and shows the Flow as it now is", async () => {
+      const get = vi.fn().mockResolvedValueOnce(failed).mockResolvedValue(recovered);
+      const retry = vi.fn(async () => {
+        throw new FlowsApiError("run_not_failed", "this Run succeeded; nothing to retry");
+      });
+      render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get, retry })} />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Relancer" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toMatch(/Relance impossible/);
+      expect(alert.textContent).toMatch(/n'est plus en échec/);
+      await waitFor(() => expect(screen.queryByTestId("flow-failed-run")).toBeNull());
+    });
+
+    it("cannot replay the same Run twice while n8n works on it", async () => {
+      let finish: (value: { run: never; flow: Flow }) => void = () => {};
+      const retry = vi.fn(
+        () => new Promise<{ run: never; flow: Flow }>((resolve) => (finish = resolve)),
+      );
+      render(
+        <FlowsTab
+          flowId={fixtureFlow.id}
+          onSelectFlow={vi.fn()}
+          api={fakeApi({ get: vi.fn(async () => failed), retry: retry as FlowsApi["retry"] })}
+        />,
+      );
+
+      const button = await screen.findByRole("button", { name: "Relancer" });
+      fireEvent.click(button);
+      await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
+      fireEvent.click(button);
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("flow-failed-run").textContent).toMatch(/Relance en cours/);
+      await act(async () => finish({ run: undefined as never, flow: recovered }));
+    });
   });
 });
 
