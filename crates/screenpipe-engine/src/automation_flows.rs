@@ -16,7 +16,9 @@
 //! Activation is the only way a Flow is switched on: `POST /:id/activate`,
 //! called from the Review Screen's button, publishes exactly the version the
 //! user reviewed (n8n 2.x `publish`/`unpublish`, SPEC D7). Creation always
-//! imports switched off.
+//! imports switched off. A chat modification (`PUT /:id`, from the
+//! `automation-flows` skill) switches an active Flow off before updating it
+//! and never switches it on: the Flow then needs review.
 
 use crate::atomic_file;
 use axum::{
@@ -137,7 +139,8 @@ where
     Router::new()
         .route("/", get(list_flows))
         .route("/from-task", post(create_from_task))
-        .route("/:id", get(get_flow))
+        .route("/:id", get(get_flow).put(update_flow))
+        .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
         .route("/:id/deactivate", post(deactivate_flow))
         .with_state(state)
@@ -205,6 +208,15 @@ struct ActivateRequest {
     version_id: Option<String>,
 }
 
+/// Chat modification: the whole edited n8n workflow (every node keeps a
+/// one-sentence `notes`) and, when the change alters it, the new summary.
+#[derive(Debug, Deserialize)]
+struct UpdateRequest {
+    workflow: Value,
+    #[serde(default)]
+    summary: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FromTaskRequest {
@@ -227,6 +239,9 @@ enum FlowError {
     VersionChanged,
     /// n8n answered but refused to switch the workflow on or off.
     ActivationFailed(String),
+    /// A chat modification the Review Screen could not explain, or that n8n
+    /// rejected; the detail says what to fix.
+    InvalidWorkflow(String),
     Internal(String),
 }
 
@@ -249,6 +264,10 @@ impl IntoResponse for FlowError {
             FlowError::ActivationFailed(detail) => (
                 StatusCode::BAD_GATEWAY,
                 json!({"error": "activation_failed", "detail": detail}),
+            ),
+            FlowError::InvalidWorkflow(detail) => (
+                StatusCode::BAD_REQUEST,
+                json!({"error": "invalid_workflow", "detail": detail}),
             ),
             FlowError::Internal(detail) => {
                 tracing::error!("automation flows: {detail}");
@@ -515,6 +534,30 @@ fn importable(workflow: &Value) -> Value {
     Value::Object(body)
 }
 
+/// Why a chat modification cannot be applied as is, if it cannot: it needs
+/// nodes and connections, and every node except sticky notes needs its
+/// one-sentence `notes` for the Review Screen.
+fn edit_problem(workflow: &Value) -> Option<String> {
+    let Some(nodes) = workflow["nodes"].as_array().filter(|n| !n.is_empty()) else {
+        return Some("the workflow has no nodes".into());
+    };
+    if !workflow["connections"].is_object() {
+        return Some("the workflow has no `connections` object".into());
+    }
+    let missing: Vec<&str> = nodes
+        .iter()
+        .filter(|node| node["type"] != STICKY_NOTE)
+        .filter(|node| node["notes"].as_str().is_none_or(|n| n.trim().is_empty()))
+        .map(|node| node["name"].as_str().unwrap_or("(unnamed)"))
+        .collect();
+    (!missing.is_empty()).then(|| {
+        format!(
+            "every node needs a one-sentence `notes`; missing on: {}",
+            missing.join(", ")
+        )
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Local review record
 // ---------------------------------------------------------------------------
@@ -549,13 +592,14 @@ struct ActivationEvent {
 }
 
 impl FlowRecord {
-    /// Appends a user action to the activation history.
-    fn log(&mut self, event: &str, version_id: String) {
+    /// Appends an event to the activation history; `by` is "user" for the
+    /// Review Screen's buttons, "chat" for a chat modification.
+    fn log(&mut self, event: &str, version_id: String, by: &str) {
         self.activation_log.push(ActivationEvent {
             at: chrono::Utc::now().to_rfc3339(),
             event: event.to_string(),
             version_id,
-            by: "user".to_string(),
+            by: by.to_string(),
         });
     }
 }
@@ -762,6 +806,21 @@ async fn get_flow(
     ))
 }
 
+/// What the chat edits: the n8n workflow reduced to the fields an update
+/// accepts (no on/off switch, no tags), with the summary and the version.
+async fn get_editable_workflow(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, FlowError> {
+    let (_, store, workflow) = load_flow(&state, &id).await?;
+    Ok(Json(json!({
+        "id": id,
+        "versionId": workflow["versionId"],
+        "summary": store.flows.get(&id).map(|r| r.summary.as_str()).unwrap_or_default(),
+        "workflow": importable(&workflow),
+    })))
+}
+
 /// The n8n workflow of Flow `id` (tagged, or known to the local store), with
 /// the n8n client and the local store it was read with.
 async fn load_flow(state: &FlowsState, id: &str) -> Result<(N8nApi, FlowStore, Value), FlowError> {
@@ -817,7 +876,7 @@ async fn activate_flow(
         .to_string();
     let record = store.record_mut(&id);
     record.reviewed_version_id = Some(published_version.clone());
-    record.log("activated", published_version);
+    record.log("activated", published_version, "user");
     store.save(&state.screenpipe_dir)?;
 
     let workflow = api.workflow(&id).await?.unwrap_or(published);
@@ -845,10 +904,80 @@ async fn deactivate_flow(
         .to_string();
 
     let unpublished = api.switch(&id, "unpublish", None).await?;
-    store.record_mut(&id).log("deactivated", running);
+    store.record_mut(&id).log("deactivated", running, "user");
     store.save(&state.screenpipe_dir)?;
 
     let workflow = api.workflow(&id).await?.unwrap_or(unpublished);
+    Ok(Json(
+        build_flow(&api, &workflow, store.flows.get(&id)).await,
+    ))
+}
+
+/// Chat modification (SPEC D7): an active Flow is switched off first, then the
+/// same n8n workflow is updated in place; both events are logged as the
+/// chat's. The new version differs from the reviewed one, so the Flow needs
+/// review until the user activates it again. Never switches anything on.
+async fn update_flow(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateRequest>,
+) -> Result<Json<Flow>, FlowError> {
+    let _guard = state.write_lock.lock().await;
+    let (api, mut store, current) = load_flow(&state, &id).await?;
+    // Checked before anything changes in n8n: a refused edit leaves the Flow
+    // running as reviewed.
+    if let Some(problem) = edit_problem(&request.workflow) {
+        return Err(FlowError::InvalidWorkflow(problem));
+    }
+    let mut body = importable(&request.workflow);
+    if body.get("name").is_none() {
+        body["name"] = current["name"].clone();
+    }
+
+    if current["active"] == true {
+        let running = current["activeVersionId"]
+            .as_str()
+            .or(current["versionId"].as_str())
+            .unwrap_or_default()
+            .to_string();
+        api.switch(&id, "unpublish", None).await?;
+        // Saved at once: the Flow is off even if the update below fails.
+        store
+            .record_mut(&id)
+            .log("paused_for_edit", running, "chat");
+        store.save(&state.screenpipe_dir)?;
+    }
+
+    // `publishIfActive=false`: should n8n still see it published, the edit
+    // stays a draft instead of going live unreviewed.
+    let (status, updated) = api
+        .send(
+            Method::PUT,
+            &format!("/workflows/{id}"),
+            &[("publishIfActive", "false")],
+            Some(&body),
+        )
+        .await?;
+    match status {
+        200..=299 => {}
+        404 => return Err(FlowError::FlowNotFound),
+        400 => return Err(FlowError::InvalidWorkflow(n8n_answer(status, &updated))),
+        _ => return Err(upstream_error(status, &updated)),
+    }
+    let workflow = api.workflow(&id).await?.unwrap_or(updated);
+    let version = workflow["versionId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let record = store.record_mut(&id);
+    if let Some(summary) = request.summary.map(|s| s.trim().to_string()) {
+        if !summary.is_empty() {
+            record.summary = summary;
+        }
+    }
+    record.log("modified", version, "chat");
+    store.save(&state.screenpipe_dir)?;
+
     Ok(Json(
         build_flow(&api, &workflow, store.flows.get(&id)).await,
     ))
