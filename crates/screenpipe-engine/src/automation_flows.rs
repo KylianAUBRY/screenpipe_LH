@@ -21,15 +21,18 @@
 //! `automation-flows` skill) switches an active Flow off before updating it
 //! and never switches it on: the Flow then needs review. Switching a Flow off
 //! waits for the execution n8n is running ([`RunningWait`]), so the email it
-//! processes is never lost. The chat never picks n8n credentials, and a
+//! processes is never lost. Deletion (`DELETE /:id`, the Review Screen, the
+//! Flows list or the chat) switches an active Flow off the same way, then
+//! deletes the n8n workflow and the local record. The chat never picks n8n credentials, and a
 //! workflow with an invented, switched-off or half-built node is refused
 //! before n8n sees it ([`crate::flow_checks`]).
 
 use crate::atomic_file;
 use crate::flow_checks::{check_and_wire, N8nCredential};
+use crate::n8n_nodes;
 use crate::routes::workflows::{read_catalog, workflow_id as task_id_of, WorkflowCatalogSource};
 use axum::{
-    extract::{Path, Request, State},
+    extract::{Path, Query, Request, State},
     http::{header, HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -235,7 +238,9 @@ where
     Router::new()
         .route("/", get(list_flows).post(create_flow))
         .route("/from-task", post(create_from_task))
-        .route("/:id", get(get_flow).put(update_flow))
+        .route("/nodes", get(search_nodes))
+        .route("/nodes/card", get(node_card))
+        .route("/:id", get(get_flow).put(update_flow).delete(delete_flow))
         .route("/:id/workflow", get(get_editable_workflow))
         .route("/:id/activate", post(activate_flow))
         .route("/:id/deactivate", post(deactivate_flow))
@@ -392,6 +397,10 @@ enum FlowError {
     VersionRequired,
     /// A state-changing request that is not `Content-Type: application/json`.
     JsonRequired,
+    /// A node lookup the catalog cannot answer as asked; the detail says why.
+    InvalidQuery(String),
+    /// A node type this n8n does not have.
+    NodeTypeUnknown(String),
 }
 
 impl IntoResponse for FlowError {
@@ -452,6 +461,17 @@ impl IntoResponse for FlowError {
                 json!({
                     "error": "json_required",
                     "detail": "send `Content-Type: application/json`",
+                }),
+            ),
+            FlowError::InvalidQuery(detail) => (
+                StatusCode::BAD_REQUEST,
+                json!({"error": "invalid_query", "detail": detail}),
+            ),
+            FlowError::NodeTypeUnknown(kind) => (
+                StatusCode::NOT_FOUND,
+                json!({
+                    "error": "node_type_unknown",
+                    "detail": format!("`{kind}` is not a node type this n8n has; search the nodes and use a `type` from the results"),
                 }),
             ),
             FlowError::Internal(detail) => {
@@ -723,6 +743,18 @@ impl N8nApi {
             tokio::time::sleep(wait.interval).await;
         }
         self.switch(workflow_id, "unpublish", None).await
+    }
+
+    /// Deletes the workflow for good (n8n's public `DELETE` removes it, it
+    /// does not archive it). Already gone counts as deleted.
+    async fn delete_workflow(&self, workflow_id: &str) -> Result<(), FlowError> {
+        let (status, value) = self
+            .send(Method::DELETE, &format!("/workflows/{workflow_id}"), &[], None)
+            .await?;
+        match status {
+            200..=299 | 404 => Ok(()),
+            _ => Err(upstream_error(status, &value)),
+        }
     }
 
     fn editor_url(&self, workflow_id: &str) -> String {
@@ -1144,6 +1176,55 @@ async fn build_flow(
 // Handlers
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Deserialize)]
+struct NodeSearchQuery {
+    #[serde(default)]
+    q: String,
+}
+
+/// `GET /nodes?q=`: the node types matching every word, at most
+/// [`n8n_nodes::MAX_RESULTS`], switched-off ones flagged. No n8n call.
+async fn search_nodes(Query(query): Query<NodeSearchQuery>) -> Result<Json<Value>, FlowError> {
+    n8n_nodes::search(&query.q)
+        .map(Json)
+        .map_err(FlowError::InvalidQuery)
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeCardQuery {
+    #[serde(rename = "type", default)]
+    kind: String,
+    resource: Option<String>,
+    operation: Option<String>,
+}
+
+/// `GET /nodes/card?type=&resource=&operation=`: one node type's card, with
+/// whether n8n holds none, one or several of each credential it needs.
+async fn node_card(
+    State(state): State<FlowsState>,
+    Query(query): Query<NodeCardQuery>,
+) -> Result<Json<Value>, FlowError> {
+    if query.kind.trim().is_empty() {
+        return Err(FlowError::InvalidQuery(
+            "send `type`: a node type from the search results".into(),
+        ));
+    }
+    let mut chosen = Map::new();
+    for (selector, value) in [("resource", query.resource), ("operation", query.operation)] {
+        if let Some(value) = value.filter(|v| !v.is_empty()) {
+            chosen.insert(selector.to_string(), json!(value));
+        }
+    }
+    let mut card = n8n_nodes::card(&query.kind, &chosen)
+        .map_err(FlowError::InvalidQuery)?
+        .ok_or_else(|| FlowError::NodeTypeUnknown(query.kind.clone()))?;
+    if card.get("switchedOff").is_none() {
+        let api = N8nApi::from_connection(&state).await?;
+        n8n_nodes::add_credential_state(&mut card, &api.credentials().await?);
+    }
+    Ok(Json(card))
+}
+
 async fn list_flows(State(state): State<FlowsState>) -> Result<Json<Vec<FlowSummary>>, FlowError> {
     let api = N8nApi::from_connection(&state).await?;
     let store = FlowStore::load(&state.screenpipe_dir)?;
@@ -1308,6 +1389,59 @@ async fn deactivate_flow(
     Ok(Json(
         build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
     ))
+}
+
+/// Deletion, from the Review Screen, the Flows list or the chat (local API
+/// key, no confirmation: the user's decision). An active Flow is switched off
+/// first, waiting for the email n8n is processing ([`RunningWait`]; still
+/// running at the deadline: `409 flow_running`, nothing changed, even on the
+/// user's click). Then the n8n workflow is deleted for good, not archived, and
+/// the ScreenPipe record (summary, history) removed. A Flow n8n no longer has
+/// is cleared from ScreenPipe all the same.
+async fn delete_flow(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, FlowError> {
+    if !valid_workflow_id(&id) {
+        return Err(FlowError::FlowNotFound);
+    }
+    let by = if from_user(&state, &headers) {
+        "user"
+    } else {
+        "api"
+    };
+    let _guard = state.write_lock.lock().await;
+    let api = N8nApi::from_connection(&state).await?;
+    let mut store = FlowStore::load(&state.screenpipe_dir)?;
+    // Read as n8n holds it, archived included: an archived Flow is deleted too.
+    let (status, value) = api
+        .send(Method::GET, &format!("/workflows/{id}"), &[], None)
+        .await?;
+    let workflow = match status {
+        200..=299 => Some(value),
+        404 => None,
+        _ => return Err(upstream_error(status, &value)),
+    };
+    let is_flow = store.flows.contains_key(&id) || workflow.as_ref().is_some_and(has_flow_tag);
+    if !is_flow {
+        return Err(FlowError::FlowNotFound);
+    }
+
+    if let Some(workflow) = &workflow {
+        if workflow["active"] == true {
+            let running = running_version(workflow);
+            api.unpublish(&id, state.running_wait, false).await?;
+            // Saved at once: the Flow is off even if the deletion below fails.
+            store.record_mut(&id).log("deactivated", running, by);
+            store.save(&state.screenpipe_dir)?;
+        }
+        api.delete_workflow(&id).await?;
+    }
+    if store.flows.remove(&id).is_some() {
+        store.save(&state.screenpipe_dir)?;
+    }
+    Ok(Json(json!({"id": id, "deleted": true})))
 }
 
 /// Chat modification (SPEC D7): an active Flow is switched off first, then the

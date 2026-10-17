@@ -12,6 +12,7 @@ import React from "react";
 import { ChevronRight, Plus } from "lucide-react";
 import { flowsApi, type FlowsApi, type FlowSummary } from "./api";
 import { ChatButton, FlowsErrorMessage, StatusBadge, useFlowsLoad } from "./common";
+import { FlowDelete } from "./flow-delete";
 import { FlowReview } from "./flow-review";
 import { lastRunLabel } from "./labels";
 
@@ -57,7 +58,13 @@ function FlowList({ onOpen, api }: { onOpen: (id: string) => void; api: FlowsApi
       ) : (
         <ul className="divide-y divide-border border border-border" aria-label="Automation Flows">
           {flows.data.map((flow) => (
-            <FlowRow key={flow.id} flow={flow} onOpen={() => onOpen(flow.id)} />
+            <FlowRow
+              key={flow.id}
+              flow={flow}
+              onOpen={() => onOpen(flow.id)}
+              api={api}
+              onDeleted={reload}
+            />
           ))}
         </ul>
       )}
@@ -65,14 +72,24 @@ function FlowList({ onOpen, api }: { onOpen: (id: string) => void; api: FlowsApi
   );
 }
 
-function FlowRow({ flow, onOpen }: { flow: FlowSummary; onOpen: () => void }) {
+function FlowRow({
+  flow,
+  onOpen,
+  api,
+  onDeleted,
+}: {
+  flow: FlowSummary;
+  onOpen: () => void;
+  api: FlowsApi;
+  onDeleted: () => void;
+}) {
   return (
-    <li>
+    <li className="flex flex-wrap items-center gap-2 pr-4">
       <button
         type="button"
         onClick={onOpen}
         data-testid={`flow-row-${flow.id}`}
-        className="flex w-full items-center gap-4 px-4 py-3 text-left hover:bg-accent"
+        className="flex min-w-0 flex-1 items-center gap-4 px-4 py-3 text-left hover:bg-accent"
       >
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{flow.name}</div>
@@ -83,6 +100,7 @@ function FlowRow({ flow, onOpen }: { flow: FlowSummary; onOpen: () => void }) {
         <StatusBadge status={flow.status} running={flow.lastExecution?.status === "running"} />
         <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden />
       </button>
+      <FlowDelete flow={flow} api={api} onDeleted={onDeleted} label={`Supprimer ${flow.name}`} />
     </li>
   );
 }

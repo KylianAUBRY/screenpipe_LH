@@ -68,7 +68,7 @@ export type FlowsErrorCode =
   | "n8n_unreachable"
   /** n8n answered with another error (detail carries its message). */
   | "n8n_failed"
-  /** Switching off (Désactiver, a chat change): n8n is still processing an email; retry in a moment. */
+  /** Switching off (Désactiver, a chat change, a deletion): n8n is still processing an email; retry in a moment. */
   | "flow_running"
   | "not_found"
   /** Activation: the n8n workflow changed since the user loaded it. */
@@ -182,6 +182,18 @@ export const flowsApi = {
       method: "POST",
       headers: await clickHeaders(),
       body: "{}",
+    });
+  },
+
+  /**
+   * « Supprimer »: the engine switches an active Flow off first (waiting for
+   * the email n8n processes), deletes the n8n workflow for good and removes
+   * the ScreenPipe record. May answer `flow_running`: nothing was deleted.
+   */
+  async delete(id: string): Promise<void> {
+    await request<unknown>(`/automation-flows/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: JSON_HEADERS,
     });
   },
 
