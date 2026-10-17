@@ -16,7 +16,7 @@ image. The lookup is deterministic code, no AI.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** built on `hackathon/ticket-15`; live check on the demo machine pending (orchestrator)
+**Status:** done (merged; live-verified on the demo machine 2026-10-17 12:59)
 
 - [x] Tests against a fake ScreenPipe API: found frames are written with their `frameId` and timestamp; a missing frame or an API error keeps the embedded image for that step; the auth header is sent.
   `bun test infra/automation-flows`: 27 pass, 0 fail (5 new in `demo/recorded-evidence.test.ts`, fake `/search` on `Bun.serve`).
@@ -27,7 +27,10 @@ image. The lookup is deterministic code, no AI.
   "Open recording" calls `openCapturedMoment(frameId, timestamp)` only for the found frame. No frontend change was needed: it passed
   as soon as the fixture could carry a recorder frame.
   Wider suites: `bun x vitest run components/workflows lib/workflows`: 513 passed, 1 skipped. `bun x tsc --noEmit -p .`: no errors.
-- [ ] On the demo machine (agent-verified by the orchestrator): the installed task points at real frames of NOVA-25/26/27 and "View in timeline" lands on them.
+- [x] On the demo machine (agent-verified by the orchestrator): the installed task points at real frames of NOVA-25/26/27 and "View in timeline" lands on them.
+  First live run: `Evidence: 0/9`, every search `HTTP 503` — the engine serves only a couple of searches at once and the lookup sent 18 in parallel.
+  Fixed (orchestrator): searches run one at a time and a 503 is retried; new test "finds every capture when ScreenPipe serves one search at a time" (fake server answering 503 beyond one in flight).
+  Second live run: `Evidence: 9/9` — r1 17099/17137/17153, r2 17162/17180/17188, r3 17213/17238/17260 (04:05–04:15). Frame 17099 is the opened "Export des contacts vide dans NovaCRM" email in Gmail, 17153 is NOVA-25 in Jira (checked visually through `GET /frames/:id`).
 
 ## What was built
 

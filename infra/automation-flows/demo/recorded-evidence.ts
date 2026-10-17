@@ -40,10 +40,18 @@ async function findCapture(capture: EvidenceCapture, api: RecordingsApi): Promis
       end_time: new Date(order === "ascending" ? api.window.end : capture.at).toISOString(),
       [capture.quoteIn === "window" ? "window_name" : "q"]: words(capture.quote),
     });
-    const response = await fetch(`${api.url}/search?${params}`, {
-      headers: api.key ? { Authorization: `Bearer ${api.key}` } : {},
-      signal: AbortSignal.timeout(api.timeoutMs ?? 5_000),
-    }).catch(() => { throw new Error(`ScreenPipe is not reachable at ${api.url}`); });
+    // The engine serves only a few searches at once and answers 503 to the
+    // rest: searches go one at a time, and a busy answer is retried.
+    let response: Response | undefined;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt > 0) await new Promise(done => setTimeout(done, 250 * attempt));
+      response = await fetch(`${api.url}/search?${params}`, {
+        headers: api.key ? { Authorization: `Bearer ${api.key}` } : {},
+        signal: AbortSignal.timeout(api.timeoutMs ?? 5_000),
+      }).catch(() => { throw new Error(`ScreenPipe is not reachable at ${api.url}`); });
+      if (response.status !== 503) break;
+    }
+    response = response!;
     if (response.status === 401 || response.status === 403) {
       throw new Error(`ScreenPipe refused the search (HTTP ${response.status}); set SCREENPIPE_LOCAL_API_KEY (Settings > Privacy)`);
     }
@@ -55,7 +63,8 @@ async function findCapture(capture: EvidenceCapture, api: RecordingsApi): Promis
     return row ? { frameId: row.frame_id as number, timestamp: row.timestamp as string } : null;
   };
   const distance = (frame: RecordedFrame) => Math.abs(Date.parse(frame.timestamp) - Date.parse(capture.at));
-  const [before, after] = await Promise.all([side("descending"), side("ascending")]);
+  const before = await side("descending");
+  const after = await side("ascending");
   const frame = before && after ? (distance(after) < distance(before) ? after : before) : before ?? after;
   return frame ? { image: capture.image, frame }
     : { image: capture.image, frame: null, reason: "no matching frame in the recording window" };
@@ -63,8 +72,11 @@ async function findCapture(capture: EvidenceCapture, api: RecordingsApi): Promis
 
 /** Never throws: a capture whose lookup fails comes back without a frame, with the reason. */
 export async function findRecordedFrames(captures: EvidenceCapture[], api: RecordingsApi): Promise<CaptureLookup[]> {
-  const lookups: CaptureLookup[] = await Promise.all(captures.map(capture => findCapture(capture, api).catch((error: unknown) =>
-    ({ image: capture.image, frame: null, reason: error instanceof Error ? error.message : String(error) }))));
+  const lookups: CaptureLookup[] = [];
+  for (const capture of captures) {
+    lookups.push(await findCapture(capture, api).catch((error: unknown) =>
+      ({ image: capture.image, frame: null, reason: error instanceof Error ? error.message : String(error) })));
+  }
   // The Task Page shows a frame once: a frame two captures match goes to the
   // capture whose key frame is nearest; the other keeps its embedded image.
   const distance = (lookup: CaptureLookup, index: number) =>

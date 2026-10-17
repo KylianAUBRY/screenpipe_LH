@@ -12,14 +12,19 @@ type Frame = { frame_id: number; timestamp: string; app_name: string; window_nam
 /** A local ScreenPipe holding `frames`, answering `/search` like the engine:
  * every word of `q` in the frame, every word of `window_name` in its title,
  * inclusive time bounds, ordered, limited. */
-function fakeScreenpipe(frames: Frame[], fail?: (params: URLSearchParams) => number | undefined) {
+function fakeScreenpipe(frames: Frame[], fail?: (params: URLSearchParams) => number | undefined, maxConcurrent = Infinity) {
   const auth: (string | null)[] = [];
+  let inFlight = 0;
   const words = (value: string | null) => (value ?? "").split(/\s+/).filter(Boolean).map(word => word.toLowerCase());
   const server = Bun.serve({
     port: 0,
-    fetch(request) {
+    async fetch(request) {
       const url = new URL(request.url);
       auth.push(request.headers.get("authorization"));
+      // Like the engine's search limiter: busy beyond maxConcurrent searches.
+      if (inFlight >= maxConcurrent) return Response.json({ error: "too many concurrent searches" }, { status: 503 });
+      inFlight++;
+      try { await Bun.sleep(5); } finally { inFlight--; }
       if (url.pathname !== "/search") return new Response("not found", { status: 404 });
       const params = url.searchParams;
       const status = fail?.(params);
@@ -76,6 +81,14 @@ describe("demo task evidence from this machine's recordings", () => {
     }
     expect(api.auth.length).toBeGreaterThan(0);
     expect(api.auth.every(header => header === `Bearer ${KEY}`)).toBe(true);
+  });
+
+  it("finds every capture when ScreenPipe serves one search at a time and answers 503 to the others", async () => {
+    const api = fakeScreenpipe([R1_EMAIL, R1_FORM, R1_TICKET], undefined, 1);
+    const { task, evidence } = await buildDemoTask(now, { url: api.url, key: KEY });
+
+    expect(task.stages[0].screenshots!.map(image => image.frameId)).toEqual([7101, 7140, 7152]);
+    expect(evidence.filter(lookup => lookup.reason?.includes("503"))).toEqual([]);
   });
 
   it("picks the opened email and the Jira window, inside the recording, at the frame nearest each key frame", async () => {
