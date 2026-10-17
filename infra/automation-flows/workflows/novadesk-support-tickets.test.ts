@@ -96,6 +96,10 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     // The proxy only speaks /v1/chat/completions and has no /v1/models.
     expect(model.parameters.responsesApiEnabled).toBe(false);
     expect(model.parameters.model).toMatchObject({ mode: "id", value: "auto" });
+    // A proxy call that never answers must not hold the email for the client's
+    // 10-minute default (rehearsals 3 and 5): give up after 30 s and try again.
+    expect(model.parameters.options.timeout).toBeLessThanOrEqual(30_000);
+    expect(model.parameters.options.maxRetries).toBeGreaterThanOrEqual(2);
 
     const parser = onlyNode("@n8n/n8n-nodes-langchain.outputParserStructured");
     expect(subNodeOf(parser.name, "ai_outputParser")).toBe(agent.name);

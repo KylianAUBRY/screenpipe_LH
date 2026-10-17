@@ -49,7 +49,7 @@
       "parameters": {
         "model": { "__rl": true, "mode": "id", "value": "auto" },
         "responsesApiEnabled": false,
-        "options": {}
+        "options": { "timeout": 30000, "maxRetries": 2 }
       },
       "credentials": {
         "openAiApi": { "id": "spProxyOpenAI001", "name": "ScreenPipe AI proxy" }
