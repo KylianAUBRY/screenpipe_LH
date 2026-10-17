@@ -1,6 +1,6 @@
 ---
 name: automation-flows
-description: List, read and change the user's ScreenPipe Automation Flows (n8n workflows the user reviews and switches on in ScreenPipe) through the local /automation-flows API. Use when the user asks to change, explain or list an Automation Flow, or when a message names an Automation Flow id.
+description: List, read, create and change the user's ScreenPipe Automation Flows (n8n workflows the user reviews and switches on in ScreenPipe) through the local /automation-flows API. Use when the user asks to create, change, explain or list an Automation Flow, or when a message names an Automation Flow id.
 ---
 
 # Automation Flows
@@ -14,8 +14,9 @@ reads a Flow on its Review Screen and is the only one who switches it on.
 
 1. **Never activate.** Never call `/automation-flows/<id>/activate` or
    `/automation-flows/<id>/deactivate`, never call n8n directly, never ask for
-   the n8n API key. Sending a change switches an active Flow off by itself; the
-   user switches it on again after reviewing it.
+   the n8n API key. A new Flow is created switched off. Sending a change
+   switches an active Flow off by itself; the user switches it on again after
+   reviewing it.
 2. **One sentence per node.** Every node except sticky notes
    (`n8n-nodes-base.stickyNote`) has `notes`: one short French sentence that
    says, in plain language, what the step does for the user. Rewrite the note of
@@ -42,6 +43,7 @@ the `screenpipe-api` skill (`Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY`).
 | `GET /automation-flows/<id>` | the Review Screen view: `status`, `summary`, `nodes[].sentence`, `activationLog` |
 | `GET /automation-flows/<id>/workflow` | `{id, versionId, summary, workflow}`: the n8n workflow to edit |
 | `PUT /automation-flows/<id>` with `{workflow, summary?}` | the updated Flow |
+| `POST /automation-flows` with `{workflow, summary}` | the new Flow (`201`, `draft`, switched off) |
 
 `status` is `draft` (never activated), `active`, `paused` or `needs_review`
 (changed since its last activation).
@@ -86,7 +88,45 @@ the `auto` label.
 
 ## Create a Flow
 
-<!-- automation-flows: creation section, ticket 09 (POST /automation-flows). -->
-Not available yet. If the user asks for a new Flow, say that Flows are created
-for now from a detected task's page (Automatisations), and offer to change an
-existing Flow instead.
+For « crée un nouvel Automation Flow » (the Flows list's « Ajouter » button)
+or any request for a new automation. ScreenPipe imports it into n8n switched
+off; the user reviews it and switches it on.
+
+1. Understand the automation: what starts it (trigger), what it does, where
+   the result goes. Ask one short question only if the trigger or the
+   destination is missing; otherwise build it.
+2. Build the n8n workflow JSON with a script file (write tool, then
+   `bun build-flow.js`), never by typing the JSON inline:
+   - `name`: short, in French, says what the Flow does.
+   - `nodes`: the trigger first; each node has `id` (a fresh UUID), `name`
+     (unique, French), `type`, `typeVersion`, `position` (`[x, y]`, left to
+     right, 220 apart), `parameters` and `notes` (rule 2).
+   - `connections`: keyed by node **name**:
+     `{"<from>": {"main": [[{"node": "<to>", "type": "main", "index": 0}]]}}`.
+   - `settings`: `{"executionOrder": "v1"}`.
+   - No `id`, `active`, `tags` or `versionId`: they are refused or ignored.
+   - No `credentials`: you cannot see the user's n8n credentials. The user
+     picks them in n8n (« Voir le graphe »); say which nodes need one.
+   - AI nodes only where judgment is needed (rule 3); plain n8n nodes for the
+     rest.
+   - ScreenPipe nodes (package `n8n-nodes-screenpipe`) start a Flow on what
+     happens on this computer: `n8n-nodes-screenpipe.screenPipeTrigger` (a
+     keyword said, an app or window becoming active, a pipe or Flow running)
+     and `n8n-nodes-screenpipe.screenPipeAiTrigger` (an AI-judged condition);
+     `n8n-nodes-screenpipe.screenPipe` searches the user's ScreenPipe history.
+3. Write `body.json` as `{"workflow": <workflow>, "summary": "<2 to 4 plain
+   French sentences: what the Flow does and how>"}`.
+4. Send it **once**:
+   ```bash
+   curl --fail-with-body -X POST -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+     -H "Content-Type: application/json" --data @body.json \
+     "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/automation-flows"
+   ```
+   On `400 invalid_workflow`, fix what `detail` says and send again. On any
+   other failure, `GET /automation-flows` first: if a Flow with that name now
+   exists, it was created; do not send a second one.
+5. Check the answer: `status` is `draft` and every node has its `sentence`.
+6. Reply in French: what the Flow will do in one to three short points, the
+   nodes that need a credential in n8n, that the Flow is switched off until
+   the user reviews and activates it, and the Review Screen link with the
+   returned `id`.

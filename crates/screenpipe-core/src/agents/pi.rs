@@ -5007,6 +5007,13 @@ mod tests {
             })
             .collect();
         assert!(requests.iter().any(|line| line.contains("-X PUT")));
+        // Creation (ticket 09) posts the whole workflow to the Flow service,
+        // which imports it switched off.
+        assert!(requests.iter().any(|line| line.contains("-X POST")));
+        assert!(requests
+            .iter()
+            .any(|line| line.starts_with("| `POST /automation-flows` ")));
+        assert!(!skill.contains("Not available yet"));
         for line in requests {
             for forbidden in ["activate", "publish", "5678"] {
                 assert!(!line.contains(forbidden), "{forbidden} in {line:?}");

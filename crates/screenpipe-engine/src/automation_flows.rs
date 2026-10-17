@@ -16,7 +16,8 @@
 //! Activation is the only way a Flow is switched on: `POST /:id/activate`,
 //! called from the Review Screen's button, publishes exactly the version the
 //! user reviewed (n8n 2.x `publish`/`unpublish`, SPEC D7). Creation always
-//! imports switched off. A chat modification (`PUT /:id`, from the
+//! imports switched off, from a Detected Task (`POST /from-task`) or from the
+//! chat (`POST /`, the `automation-flows` skill). A chat modification (`PUT /:id`, from the
 //! `automation-flows` skill) switches an active Flow off before updating it
 //! and never switches it on: the Flow then needs review.
 
@@ -137,7 +138,7 @@ where
         write_lock: Arc::new(Mutex::new(())),
     };
     Router::new()
-        .route("/", get(list_flows))
+        .route("/", get(list_flows).post(create_flow))
         .route("/from-task", post(create_from_task))
         .route("/:id", get(get_flow).put(update_flow))
         .route("/:id/workflow", get(get_editable_workflow))
@@ -215,6 +216,15 @@ struct UpdateRequest {
     workflow: Value,
     #[serde(default)]
     summary: Option<String>,
+}
+
+/// Chat creation: a whole n8n workflow (every node has a one-sentence
+/// `notes`) and the plain-language summary of the Review Screen.
+#[derive(Debug, Deserialize)]
+struct CreateRequest {
+    workflow: Value,
+    #[serde(default)]
+    summary: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -555,6 +565,23 @@ fn edit_problem(workflow: &Value) -> Option<String> {
             "every node needs a one-sentence `notes`; missing on: {}",
             missing.join(", ")
         )
+    })
+}
+
+/// Why a chat creation cannot be imported, if it cannot: what a modification
+/// needs, plus a name for n8n and a summary for the Review Screen.
+fn creation_problem(request: &CreateRequest) -> Option<String> {
+    edit_problem(&request.workflow).or_else(|| {
+        if request.workflow["name"]
+            .as_str()
+            .is_none_or(|name| name.trim().is_empty())
+        {
+            Some("the workflow needs a `name`".into())
+        } else if request.summary.trim().is_empty() {
+            Some("a plain-language `summary` is required".into())
+        } else {
+            None
+        }
     })
 }
 
@@ -982,6 +1009,58 @@ async fn update_flow(
     Ok(Json(
         build_flow(&api, &workflow, store.flows.get(&id)).await,
     ))
+}
+
+/// Chat creation (`automation-flows` skill, "Ajouter"): imports the workflow
+/// switched off and tagged and records its summary. It is a Draft until the
+/// user activates it from the Review Screen. Refused before anything is
+/// created when the Review Screen could not explain it.
+async fn create_flow(
+    State(state): State<FlowsState>,
+    Json(request): Json<CreateRequest>,
+) -> Result<(StatusCode, Json<Flow>), FlowError> {
+    let api = N8nApi::from_connection(&state).await?;
+    if let Some(problem) = creation_problem(&request) {
+        return Err(FlowError::InvalidWorkflow(problem));
+    }
+    let _guard = state.write_lock.lock().await;
+    let dir = &state.screenpipe_dir;
+    // Read before importing: an unreadable store must not leave a workflow
+    // in n8n that no Flow record explains.
+    let mut store = FlowStore::load(dir)?;
+
+    // `importable` drops `active` and `tags`: n8n imports it switched off.
+    let (status, created) = api
+        .send(
+            Method::POST,
+            "/workflows",
+            &[],
+            Some(&importable(&request.workflow)),
+        )
+        .await?;
+    match status {
+        200..=299 => {}
+        400 => return Err(FlowError::InvalidWorkflow(n8n_answer(status, &created))),
+        _ => return Err(upstream_error(status, &created)),
+    }
+    let id = workflow_id(&created)?;
+    // Recorded before tagging: a failed tag call leaves a Flow the Review
+    // Screen still knows (`load_flow` accepts known ids).
+    store.flows.insert(
+        id.clone(),
+        FlowRecord {
+            source_task_id: None,
+            summary: request.summary.trim().to_string(),
+            answers: Value::Null,
+            reviewed_version_id: None,
+            activation_log: Vec::new(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        },
+    );
+    store.save(dir)?;
+    let workflow = api.ensure_tagged(created).await?;
+    let flow = build_flow(&api, &workflow, store.flows.get(&id)).await;
+    Ok((StatusCode::CREATED, Json(flow)))
 }
 
 /// Demo: imports the task's bundled n8n workflow switched off and tagged (or

@@ -41,6 +41,7 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     openTaskPage: vi.fn(async () => {}),
     openN8nConnection: vi.fn(async () => {}),
     requestChange: vi.fn(async () => {}),
+    requestCreation: vi.fn(async () => {}),
     ...overrides,
   };
 }
@@ -78,6 +79,35 @@ describe("Flows list", () => {
   it("says when there is no Flow yet", async () => {
     render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ list: vi.fn(async () => []) })} />);
     expect(await screen.findByText(/Aucun Flow pour l'instant/)).toBeTruthy();
+  });
+
+  it.each([
+    ["with Flows", [summaryOf(fixtureFlow)]],
+    ["without Flows", []],
+  ])("opens the chat to create a Flow from Ajouter (%s)", async (_, flows) => {
+    const api = fakeApi({ list: vi.fn(async () => flows) });
+    render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ajouter" }));
+
+    expect(api.requestCreation).toHaveBeenCalledTimes(1);
+    // Opening the chat creates or switches nothing by itself.
+    expect(api.createFromTask).not.toHaveBeenCalled();
+    expect(api.activate).not.toHaveBeenCalled();
+  });
+
+  it("says when the creation chat cannot be opened", async () => {
+    const api = fakeApi({
+      requestCreation: vi.fn(async () => {
+        throw new Error("chat did not become ready in home window");
+      }),
+    });
+    render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ajouter" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(/Impossible d'ouvrir le chat/)).toBeTruthy();
   });
 
   it("explains that n8n is not configured and links to Connections", async () => {

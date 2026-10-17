@@ -167,7 +167,28 @@ export const flowsApi = {
       source: "automation-flow",
     });
   },
+
+  /**
+   * "Ajouter": the ScreenPipe chat, its composer prefilled to create a Flow
+   * with the `automation-flows` skill. The user describes the automation and
+   * sends it; the skill imports it switched off and ends with its Review
+   * Screen link.
+   */
+  async requestCreation() {
+    const { showChatWithPrefill } = await import("@/lib/chat-utils");
+    await showChatWithPrefill({
+      context: "",
+      prompt: CREATION_PROMPT,
+      autoSend: false,
+      useHomeChat: true,
+      source: "automation-flow",
+    });
+  },
 };
+
+/** The prefilled chat prompt; the user completes it with the automation. */
+export const CREATION_PROMPT =
+  "Avec le skill automation-flows, crée un nouvel Automation Flow. Ce qu'il doit faire : ";
 
 /** The prefilled chat prompt; the user completes it with the change. */
 export function changeRequestPrompt(flow: Pick<Flow, "id" | "name">): string {

@@ -81,6 +81,55 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
 /** Uppercase mono action buttons. */
 export const ACTION_BUTTON = "uppercase tracking-[0.08em]";
 
+/**
+ * Opens the ScreenPipe chat ("Ajouter", "Demander une modification"). The
+ * work happens there; the button only says when the chat could not open.
+ */
+export function ChatButton({
+  open,
+  icon,
+  children,
+}: {
+  open: () => Promise<void>;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  async function onClick() {
+    setBusy(true);
+    setFailed(false);
+    try {
+      await open();
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="outline"
+        className={ACTION_BUTTON}
+        disabled={busy}
+        onClick={() => void onClick()}
+      >
+        {icon}
+        {children}
+      </Button>
+      {failed && (
+        <p role="alert" className="w-full border border-border p-3 text-sm">
+          Impossible d&apos;ouvrir le chat. Réessayez.
+        </p>
+      )}
+    </>
+  );
+}
+
 export function FlowsErrorMessage({
   error,
   onRetry,

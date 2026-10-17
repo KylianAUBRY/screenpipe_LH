@@ -37,6 +37,8 @@ struct N8nState {
     updates: u32,
     /// When set, updating a workflow answers 400 with this message.
     refuse_update: Option<String>,
+    /// When set, creating a workflow answers 400 with this message.
+    refuse_create: Option<String>,
     /// When set, publishing answers 400 with this message (e.g. a trigger
     /// whose credentials n8n cannot use).
     refuse_publish: Option<String>,
@@ -123,6 +125,9 @@ impl Respond for FakeN8n {
                         400,
                         json!({"message": "request/body must NOT have additional properties"}),
                     );
+                }
+                if let Some(message) = &state.refuse_create {
+                    return json_response(400, json!({"message": message}));
                 }
                 state.next_id += 1;
                 let mut workflow = body.clone();
@@ -413,6 +418,11 @@ async fn not_configured_returns_412() {
             "PUT",
             "/automation-flows/wf1",
             Some(json!({"workflow": {"nodes": [], "connections": {}}})),
+        ),
+        (
+            "POST",
+            "/automation-flows",
+            Some(json!({"workflow": chat_workflow(), "summary": "Résumé."})),
         ),
     ] {
         let (status, body) = app.call(method, uri, body).await;
@@ -1434,4 +1444,154 @@ async fn chat_update_of_a_paused_flow_leaves_it_needing_review_without_switching
             event("modified", &new_version, "chat"),
         ]
     );
+}
+
+// ---------------------------------------------------------------------------
+// Chat creation (ticket 09)
+// ---------------------------------------------------------------------------
+
+/// A small workflow as the chat builds it: every node has its sentence.
+fn chat_workflow() -> Value {
+    json!({
+        "name": "Résumé des réunions",
+        "nodes": [
+            {
+                "id": "n1", "name": "Chaque soir", "type": "n8n-nodes-base.scheduleTrigger",
+                "typeVersion": 1.2, "position": [0, 0], "parameters": {},
+                "notes": "Le Flow démarre chaque soir à 18 h."
+            },
+            {
+                "id": "n2", "name": "Préparer le résumé", "type": "n8n-nodes-base.set",
+                "typeVersion": 3.4, "position": [220, 0], "parameters": {},
+                "notes": "Le résumé de la journée est préparé."
+            }
+        ],
+        "connections": {
+            "Chaque soir": {"main": [[{"node": "Préparer le résumé", "type": "main", "index": 0}]]}
+        },
+        "settings": {"executionOrder": "v1"}
+    })
+}
+
+async fn chat_create(app: &App, body: Value) -> (StatusCode, Value) {
+    app.call("POST", "/automation-flows", Some(body)).await
+}
+
+#[tokio::test]
+async fn chat_create_imports_switched_off_and_tagged_and_stores_the_summary() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    // Even a workflow that asks to be switched on is imported switched off.
+    let mut workflow = chat_workflow();
+    workflow["active"] = json!(true);
+
+    let (status, flow) = chat_create(
+        &app,
+        json!({"workflow": workflow, "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{flow}");
+    let workflows = n8n.workflows();
+    assert_eq!(workflows.len(), 1);
+    assert_eq!(workflows[0]["active"], false);
+    assert_eq!(workflows[0]["tags"][0]["name"], "screenpipe-flow");
+    assert_eq!(workflows[0]["name"], "Résumé des réunions");
+    let posts = workflow_posts(&server).await;
+    assert_eq!(posts.len(), 1);
+    assert!(posts[0].get("active").is_none(), "never sent switched on");
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+
+    let id = workflows[0]["id"].as_str().unwrap();
+    assert_eq!(flow["id"], id);
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(flow["sourceTaskId"], Value::Null);
+    assert_eq!(flow["summary"], "Chaque soir, un résumé.");
+    assert_eq!(flow["activationLog"], json!([]));
+    let sentences: Vec<&str> = flow["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["sentence"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        sentences,
+        [
+            "Le Flow démarre chaque soir à 18 h.",
+            "Le résumé de la journée est préparé."
+        ]
+    );
+    assert_eq!(flow["edges"], json!([{"from": "n1", "to": "n2"}]));
+    assert_eq!(app.store()["flows"][id]["summary"], "Chaque soir, un résumé.");
+
+    // It is listed as a Draft, like any Flow.
+    let (_, list) = app.call("GET", "/automation-flows", None).await;
+    assert_eq!(list[0]["id"], id);
+    assert_eq!(list[0]["status"], "draft");
+}
+
+#[tokio::test]
+async fn chat_create_refuses_a_workflow_the_review_screen_cannot_explain() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let summary = "Chaque soir, un résumé.";
+    let without_notes = {
+        let mut workflow = chat_workflow();
+        workflow["nodes"][1]["notes"] = json!(" ");
+        workflow
+    };
+    let without_name = {
+        let mut workflow = chat_workflow();
+        workflow.as_object_mut().unwrap().remove("name");
+        workflow
+    };
+
+    for (case, body, detail) in [
+        (
+            "no nodes",
+            json!({"workflow": {"name": "Vide", "nodes": [], "connections": {}}, "summary": summary}),
+            "no nodes",
+        ),
+        (
+            "a node without sentence",
+            json!({"workflow": without_notes, "summary": summary}),
+            "Préparer le résumé",
+        ),
+        (
+            "no name",
+            json!({"workflow": without_name, "summary": summary}),
+            "name",
+        ),
+        (
+            "no summary",
+            json!({"workflow": chat_workflow(), "summary": "  "}),
+            "summary",
+        ),
+    ] {
+        let (status, body) = chat_create(&app, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{case}: {body}");
+        assert_eq!(body["error"], "invalid_workflow", "{case}");
+        assert!(
+            body["detail"].as_str().unwrap().contains(detail),
+            "{case}: {body}"
+        );
+    }
+
+    // n8n's own refusal reaches the chat, so it can fix the workflow.
+    n8n.0.lock().unwrap().refuse_create =
+        Some("request/body/nodes/0 must have required property 'typeVersion'".into());
+    let (status, body) = chat_create(
+        &app,
+        json!({"workflow": chat_workflow(), "summary": summary}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_workflow");
+    assert!(body["detail"].as_str().unwrap().contains("typeVersion"));
+
+    // Nothing was created anywhere.
+    assert!(n8n.workflows().is_empty());
+    assert!(!app.dir.path().join("automation-flows.json").exists());
 }
