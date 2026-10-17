@@ -20,6 +20,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
 import { CREATION_PROMPT, flowsApi, FlowsApiError, withCreationPrompt } from "../api";
 import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "../fixtures";
+import { fixtureActivity } from "../activity-fixture";
 import { mockAutomationFlowsResponse, resetAutomationFlowsMock } from "../mock";
 import { createBrowserIpcMock } from "@/lib/dev/browser-tauri-mock";
 
@@ -144,6 +145,12 @@ describe("flowsApi", () => {
     const error = await flowsApi.list().catch((e) => e);
     expect(error).toBeInstanceOf(FlowsApiError);
     expect(error.code).toBe(code);
+  });
+
+  it("reads a Flow's Activity (ticket 28)", async () => {
+    respond(200, fixtureActivity);
+    expect(await flowsApi.activity("wf/1")).toEqual(fixtureActivity);
+    expect(localFetch).toHaveBeenLastCalledWith("/automation-flows/wf%2F1/activity", undefined);
   });
 
   it("asks the engine whether n8n answers (ticket 29)", async () => {
@@ -339,6 +346,12 @@ describe("browser mock", () => {
         sentence: node.notes,
       })),
     );
+  });
+
+  it("serves the fixture Flow's Activity", async () => {
+    useBrowserMock();
+    expect(await flowsApi.activity(fixtureFlow.id)).toEqual(fixtureActivity);
+    await expect(flowsApi.activity("missing")).rejects.toMatchObject({ code: "not_found" });
   });
 
   it("leaves other engine routes alone", () => {

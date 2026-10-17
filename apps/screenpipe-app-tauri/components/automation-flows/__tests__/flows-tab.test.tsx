@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FlowsApiError, type Flow, type FlowsApi } from "../api";
 import { REFRESH_INTERVAL_MS } from "../common";
 import { FlowsTab } from "../flows-tab";
+import { fixtureActivity } from "../activity-fixture";
 import { fixtureFlow, summaryOf } from "../fixtures";
 
 /** The banner of ticket 29, word for word. */
@@ -51,6 +52,7 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     openTimeline: vi.fn(async () => {}),
     requestChange: vi.fn(async () => {}),
     requestCreation: vi.fn(async () => {}),
+    activity: vi.fn(async () => []),
     health: vi.fn(async () => ({ n8n: "ok" as const, lastCheckAt: null })),
     ...overrides,
   };
@@ -331,6 +333,16 @@ describe("Review Screen", () => {
     expect(screen.getByTestId("flow-status").textContent).toBe("À revoir");
     expect(screen.getByText(/^Activé par vous/)).toBeTruthy();
     expect(screen.getByText(/^Mis en pause pour modification par le chat/)).toBeTruthy();
+  });
+
+  it("shows the Flow's Activity before its activation history (ticket 28)", async () => {
+    const activity = vi.fn(async () => fixtureActivity);
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ activity })} />);
+
+    const section = await screen.findByRole("region", { name: "Activité" });
+    expect(await within(section).findByText("Ticket NOVA-51 créé")).toBeTruthy();
+    expect(within(section).getByText("Ignoré")).toBeTruthy();
+    expect(activity).toHaveBeenCalledWith(fixtureFlow.id);
   });
 
   it("goes back to the list", async () => {

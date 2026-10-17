@@ -10,6 +10,7 @@
 // review. Like the engine, activation needs the UI credential and the
 // reviewed version. Never contacts n8n.
 
+import { fixtureActivity } from "./activity-fixture";
 import type { Flow } from "./api";
 import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "./fixtures";
 
@@ -187,6 +188,7 @@ export function mockAutomationFlowsResponse(
   const id = decodeURIComponent(rawId);
   const flow = flows.find((candidate) => candidate.id === id);
   if (method === "GET" && flow && !action) return Response.json(flow);
+  if (method === "GET" && flow && action === "activity") return Response.json(fixtureActivity);
   if (method === "PUT" && flow && !action) {
     return changeMockFlow(JSON.parse(String(init?.body ?? "{}")));
   }

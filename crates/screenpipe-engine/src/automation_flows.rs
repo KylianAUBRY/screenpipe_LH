@@ -277,6 +277,7 @@ where
         .route("/abstentions", post(abstained))
         .route("/:id", get(get_flow).put(update_flow))
         .route("/:id/workflow", get(get_editable_workflow))
+        .route("/:id/activity", get(flow_activity))
         .route("/:id/activate", post(activate_flow))
         .route("/:id/deactivate", post(deactivate_flow))
         .route("/:id/retry", post(retry_run))
@@ -2189,6 +2190,314 @@ async fn abstained(
     store.notified_abstentions.drain(..excess);
     store.save(&state.screenpipe_dir)?;
     answer(true, None)
+}
+
+// ---------------------------------------------------------------------------
+// Activity (SPEC D18, ticket 28)
+// ---------------------------------------------------------------------------
+
+/// How many recent Runs the Activity reads from n8n.
+const ACTIVITY_RUNS: &str = "10";
+/// How many lines the Activity shows at most.
+const ACTIVITY_ITEMS: usize = 50;
+/// Bounds the walk from an item back to the email it came from.
+const MAX_STEPS: usize = 100;
+
+/// One line of a Flow's Activity: one handled item (an email) of a Run,
+/// what became of it and why. Never the email body nor an error message.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivityItem {
+    run_id: String,
+    started_at: Option<String>,
+    from: Option<String>,
+    subject: Option<String>,
+    /// `ticket_created`, `already_exists`, `ignored`, `abstained`,
+    /// `failed`, or `unknown` (the Run left no outcome for the item).
+    outcome: &'static str,
+    ticket_key: Option<String>,
+    /// The AI's reason for its decision, one line, cut.
+    reason: Option<String>,
+    /// The step a failed Run stopped on.
+    failed_step: Option<String>,
+}
+
+/// The Flow's Activity: the items of its recent Runs, newest Run first,
+/// read from n8n's executions. Each item's outcome is read from the last
+/// step it reached: a step may name it (`outcome`, as the demo's « À trier à
+/// la main » does), a created Jira issue gives its key, a Jira search that
+/// found the email's ticket means it already exists, and an item left on a
+/// condition's false output was ignored. Anything else is `unknown` (or
+/// `failed` in a failed Run), never a success.
+async fn flow_activity(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<ActivityItem>>, FlowError> {
+    let (api, _, _) = load_flow(&state, &id).await?;
+    let page = api
+        .expect_ok(
+            Method::GET,
+            "/executions",
+            &[
+                ("workflowId", id.as_str()),
+                ("includeData", "true"),
+                ("limit", ACTIVITY_RUNS),
+            ],
+            None,
+        )
+        .await?;
+    let mut runs: Vec<&Value> = page["data"].as_array().into_iter().flatten().collect();
+    // Newest first (n8n lists them so; a stable sort keeps its order on ties).
+    runs.sort_by(|a, b| b["startedAt"].as_str().cmp(&a["startedAt"].as_str()));
+    let items = runs
+        .into_iter()
+        .flat_map(run_activity)
+        .take(ACTIVITY_ITEMS)
+        .collect();
+    Ok(Json(items))
+}
+
+/// An item in n8n's `runData`: step, run of that step, output, position.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ItemRef {
+    node: String,
+    run: usize,
+    output: usize,
+    index: usize,
+}
+
+fn index_of(value: &Value, default: usize) -> usize {
+    value
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(default)
+}
+
+fn item_json<'a>(run_data: &'a Value, item: &ItemRef) -> &'a Value {
+    &run_data[&item.node][item.run]["data"]["main"][item.output][item.index]["json"]
+}
+
+/// The item this one was made from (n8n's `pairedItem` and the step's
+/// `source`), or `None` for an item a start step (the trigger) emitted.
+fn parent_item(run_data: &Value, item: &ItemRef) -> Option<ItemRef> {
+    let task = &run_data[&item.node][item.run];
+    let raw = &task["data"]["main"][item.output][item.index]["pairedItem"];
+    let paired = match raw {
+        Value::Array(all) => all.first().unwrap_or(&Value::Null),
+        other => other,
+    };
+    let (index, input) = match paired {
+        Value::Number(_) => (index_of(paired, item.index), 0),
+        Value::Object(_) => (
+            index_of(&paired["item"], item.index),
+            index_of(&paired["input"], 0),
+        ),
+        _ => (item.index, 0),
+    };
+    let source = task["source"].as_array()?.get(input)?;
+    Some(ItemRef {
+        node: source["previousNode"].as_str()?.to_string(),
+        run: index_of(&source["previousNodeRun"], 0),
+        output: index_of(&source["previousNodeOutput"], 0),
+        index,
+    })
+}
+
+/// Every item of every step's `main` outputs.
+fn all_items(run_data: &Value) -> Vec<ItemRef> {
+    let mut items = Vec::new();
+    for (node, runs) in run_data.as_object().into_iter().flatten() {
+        for (run, task) in runs.as_array().into_iter().flatten().enumerate() {
+            for (output, list) in task["data"]["main"].as_array().into_iter().flatten().enumerate() {
+                for index in 0..list.as_array().map_or(0, Vec::len) {
+                    items.push(ItemRef {
+                        node: node.clone(),
+                        run,
+                        output,
+                        index,
+                    });
+                }
+            }
+        }
+    }
+    items
+}
+
+/// Whether a step ran with the items of `node`'s output (it then holds a
+/// `source` naming it). AI sub-steps (model, parser, tools) do not count.
+fn consumed(run_data: &Value, node: &str, run: usize, output: usize) -> bool {
+    run_data
+        .as_object()
+        .into_iter()
+        .flatten()
+        .flat_map(|(_, runs)| runs.as_array().into_iter().flatten())
+        .filter(|task| task["data"].is_null() || task["data"].get("main").is_some())
+        .flat_map(|task| task["source"].as_array().into_iter().flatten())
+        .any(|source| {
+            source["previousNode"] == node
+                && index_of(&source["previousNodeRun"], 0) == run
+                && index_of(&source["previousNodeOutput"], 0) == output
+        })
+}
+
+/// A Jira issue key such as `NOVA-51`.
+fn issue_key(value: &Value) -> Option<String> {
+    let key = value.as_str()?;
+    let (project, number) = key.split_once('-')?;
+    let valid = project.len() <= 20
+        && project.starts_with(|c: char| c.is_ascii_uppercase())
+        && project
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && !number.is_empty()
+        && number.len() <= 10
+        && number.chars().all(|c| c.is_ascii_digit());
+    valid.then(|| key.to_string())
+}
+
+/// What the last step an item reached says about it.
+fn outcome_of(item: &ItemRef, json: &Value) -> (&'static str, Option<String>) {
+    let named = match json["outcome"].as_str() {
+        Some("ticket_created") => Some("ticket_created"),
+        Some("already_exists") => Some("already_exists"),
+        Some("ignored") => Some("ignored"),
+        Some("abstained") => Some("abstained"),
+        _ => None,
+    };
+    if let Some(outcome) = named {
+        return (outcome, issue_key(&json["ticketKey"]));
+    }
+    if let Some(key) = issue_key(&json["key"]) {
+        return ("ticket_created", Some(key));
+    }
+    if let Some(key) = issue_key(&json["issues"][0]["key"]) {
+        return ("already_exists", Some(key));
+    }
+    if item.output > 0 {
+        // Left on a condition's false output: the Flow chose to do nothing.
+        return ("ignored", None);
+    }
+    ("unknown", None)
+}
+
+/// Text from an email or the AI for the Activity: one line, at most `max`
+/// characters (the app shows it as text, so nothing is escaped here).
+fn one_line(text: &str, max: usize) -> Option<String> {
+    let line: String = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    if line.is_empty() {
+        return None;
+    }
+    let mut cut: String = line.chars().take(max).collect();
+    if line.chars().count() > max {
+        cut.push('…');
+    }
+    Some(cut)
+}
+
+/// Sender and subject of a start item, when it is an email.
+fn email_fields(json: &Value) -> (Option<String>, Option<String>) {
+    let from = &json["from"];
+    let from = from
+        .as_str()
+        .or(from["text"].as_str())
+        .or(from["value"][0]["address"].as_str())
+        .and_then(|from| one_line(from, 120));
+    let subject = json["subject"].as_str().and_then(|s| one_line(s, 160));
+    (from, subject)
+}
+
+type Outcome = (&'static str, Option<String>, Option<String>);
+
+/// The Activity lines of one Run: one per item its start step emitted.
+fn run_activity(execution: &Value) -> Vec<ActivityItem> {
+    let run_id = execution_id(execution).unwrap_or_default();
+    let started_at = execution["startedAt"].as_str().map(str::to_string);
+    let result = &execution["data"]["resultData"];
+    let run_data = &result["runData"];
+    let failed = matches!(execution["status"].as_str(), Some("error" | "crashed"));
+    let failed_step = failed
+        .then(|| {
+            result["error"]["node"]["name"]
+                .as_str()
+                .or(result["lastNodeExecuted"].as_str())
+                .and_then(|step| one_line(step, 120))
+        })
+        .flatten();
+
+    let items = all_items(run_data);
+    // Each start item's outcome, from the last step its items reached, with
+    // the AI's reason found on the way back.
+    let mut outcomes: HashMap<ItemRef, Outcome> = HashMap::new();
+    for item in items
+        .iter()
+        .filter(|item| !consumed(run_data, &item.node, item.run, item.output))
+    {
+        let (outcome, key) = outcome_of(item, item_json(run_data, item));
+        let mut reason = None;
+        let mut current = item.clone();
+        for _ in 0..MAX_STEPS {
+            if reason.is_none() {
+                reason = item_json(run_data, &current)["output"]["reason"]
+                    .as_str()
+                    .and_then(|r| one_line(r, 240));
+            }
+            match parent_item(run_data, &current) {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        let decided = outcomes
+            .get(&current)
+            .is_some_and(|(outcome, _, _)| *outcome != "unknown");
+        if !decided {
+            outcomes.insert(current, (outcome, key, reason));
+        }
+    }
+
+    let line = |from, subject, found: Option<&Outcome>| {
+        let (outcome, ticket_key, reason) = match found {
+            Some((outcome, key, reason)) if *outcome != "unknown" => {
+                (*outcome, key.clone(), reason.clone())
+            }
+            _ if failed => ("failed", None, None),
+            _ => ("unknown", None, None),
+        };
+        ActivityItem {
+            run_id: run_id.clone(),
+            started_at: started_at.clone(),
+            from,
+            subject,
+            outcome,
+            ticket_key,
+            reason,
+            failed_step: if outcome == "failed" {
+                failed_step.clone()
+            } else {
+                None
+            },
+        }
+    };
+    let starts: Vec<&ItemRef> = items
+        .iter()
+        .filter(|item| parent_item(run_data, item).is_none())
+        .collect();
+    if starts.is_empty() {
+        // No item recorded (data too large, or the Run stopped at its start).
+        return vec![line(None, None, None)];
+    }
+    starts
+        .into_iter()
+        .map(|start| {
+            let (from, subject) = email_fields(item_json(run_data, start));
+            line(from, subject, outcomes.get(start))
+        })
+        .collect()
 }
 
 /// Hands a notification to the desktop app's `/notify`.

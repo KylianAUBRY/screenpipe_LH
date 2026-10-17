@@ -76,6 +76,32 @@ export type Flow = FlowSummary & {
   activationLog: ActivationEvent[];
 };
 
+/**
+ * What became of one handled item (an email) of a Run (ticket 28):
+ * `unknown` when the Run left no outcome for it, never read as a success.
+ */
+export type ActivityOutcome =
+  | "ticket_created"
+  | "already_exists"
+  | "ignored"
+  | "abstained"
+  | "failed"
+  | "unknown";
+
+/** One line of a Flow's Activity; never the email body or an error message. */
+export type ActivityItem = {
+  runId: string;
+  startedAt: string | null;
+  from: string | null;
+  subject: string | null;
+  outcome: ActivityOutcome;
+  ticketKey: string | null;
+  /** The AI's reason for its decision, one line, cut. */
+  reason: string | null;
+  /** The step a failed Run stopped on. */
+  failedStep: string | null;
+};
+
 /** The Run « Relancer » started (ticket 26), as n8n reports it once it answers. */
 export type RetriedRun = {
   executionId: string;
@@ -187,6 +213,10 @@ export const flowsApi = {
 
   get: (id: string) =>
     request<Flow>(`/automation-flows/${encodeURIComponent(id)}`),
+
+  /** The Flow's Activity: its recent Runs' items, newest Run first. */
+  activity: (id: string) =>
+    request<ActivityItem[]>(`/automation-flows/${encodeURIComponent(id)}/activity`),
 
   /** Whether n8n answers right now, for the « n8n injoignable » banner. */
   health: () => request<N8nHealth>("/automation-flows/health"),

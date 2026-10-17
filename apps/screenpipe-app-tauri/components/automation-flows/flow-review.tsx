@@ -7,8 +7,8 @@
 // Review Screen: what the Flow does, the n8n graph with one sentence (and the
 // fixed facts) per node, links to the graph in n8n, back to the Task Page and
 // to the moment in the timeline where the task was seen, status, last run,
-// activation history, Activate / Deactivate, and "Demander une modification"
-// (the Screenpipe chat, ticket 08).
+// activation history, Activate / Deactivate, "Demander une modification"
+// (the Screenpipe chat, ticket 08) and the Flow's Activity (ticket 28).
 
 import React from "react";
 import { ArrowLeft, Clock, ExternalLink, MessageSquare } from "lucide-react";
@@ -23,6 +23,7 @@ import {
   useFlowsLoad,
 } from "./common";
 import { FlowActivation } from "./flow-activation";
+import { FlowActivity } from "./flow-activity";
 import { FailedRun } from "./flow-failed-run";
 import { FlowGraph } from "./flow-graph";
 import { activationLabel, lastRunLabel } from "./labels";
@@ -164,6 +165,8 @@ function ReviewContent({
         </SectionLabel>
         <FlowGraph nodes={steps} edges={flow.edges} />
       </section>
+
+      <FlowActivity flowId={flow.id} api={api} />
 
       <section className="space-y-2">
         <SectionLabel>Historique d&apos;activation</SectionLabel>
