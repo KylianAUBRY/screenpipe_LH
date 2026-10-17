@@ -484,3 +484,51 @@ describe("ComposerControlsRow", () => {
     }
   });
 });
+
+describe("ComposerControlsRow « Create flow »", () => {
+  const props = (canChat: boolean, createFlow?: React.ComponentProps<typeof ComposerControlsRow>["createFlow"]) => ({
+    canChat,
+    filters: {
+      activeFilterCount: 0,
+      activeFilters: [],
+      activeFilterLabels: [],
+      hasActiveFilters: false,
+      appFilterOpen: false,
+      onFilterMenuOpenChange: vi.fn(),
+    } as any,
+    modelControls: {
+      settings: { aiPresets: [] },
+      activePreset: null,
+      activePipeExecution: null,
+      currentQueueSessionId: null,
+      onSelectPreset: vi.fn(),
+      onPresetSaved: vi.fn(),
+    },
+    codingWorkspace: idleCodingWorkspace,
+    isStreaming: false,
+    createFlow,
+    sendButton: { isStopMode: false, hasPendingDocs: false, sendDisabled: false, onStop: vi.fn() },
+  });
+  const composer = (onValueChange = vi.fn()) => ({
+    value: "",
+    inputRef: React.createRef<HTMLTextAreaElement>(),
+    onValueChange,
+  });
+
+  it("is shown only where the composer wires it", () => {
+    const { rerender } = render(<ComposerControlsRow {...props(true)} />);
+    expect(screen.queryByTestId("chat-create-flow")).not.toBeInTheDocument();
+
+    const onValueChange = vi.fn();
+    rerender(<ComposerControlsRow {...props(true, composer(onValueChange))} />);
+    fireEvent.click(screen.getByTestId("chat-create-flow"));
+    expect(onValueChange).toHaveBeenCalledWith(
+      expect.stringContaining("Avec le skill automation-flows"),
+    );
+  });
+
+  it("is disabled while the chat cannot take a message", () => {
+    render(<ComposerControlsRow {...props(false, composer())} />);
+    expect(screen.getByTestId("chat-create-flow")).toBeDisabled();
+  });
+});
