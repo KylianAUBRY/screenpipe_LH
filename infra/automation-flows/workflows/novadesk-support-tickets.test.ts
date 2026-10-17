@@ -535,7 +535,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(review.workflowId).toBe(workflow.id);
     expect(review.sourceTaskId).toBe("wf-novadesk-support-tickets");
     expect(typeof review.summary).toBe("string");
-    for (const word of ["email", "IA", "Jira", "NOVA", "Screenpipe", "confiance", "« À trier à la main »"]) {
+    for (const word of ["email", "IA", "Jira", "NOVA", "Screenpipe", "confiance", "« À trier à la main »", "doublon"]) {
       expect(review.summary).toContain(word);
     }
     expect(review.summary.length).toBeLessThan(1200);
