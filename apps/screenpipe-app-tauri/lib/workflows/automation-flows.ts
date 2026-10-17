@@ -15,6 +15,7 @@ import { flowsApi, FlowsApiError, type FlowsErrorCode } from "@/components/autom
 const CREATION_FAILED = "Impossible de créer l'automatisation. Vos réponses sont conservées. Réessayez.";
 const CREATION_ERROR: Record<FlowsErrorCode, string> = {
   n8n_not_configured: "n8n n'est pas configuré. Renseignez l'URL de l'API n8n et une clé API dans Connexions → n8n, puis réessayez.",
+  n8n_unauthorized: "n8n a refusé la clé API. Vérifiez la clé API dans Connexions → n8n, puis réessayez.",
   n8n_unreachable: "Impossible de joindre n8n. Vérifiez qu'il tourne, puis réessayez.",
   not_found: "Cette tâche ne peut pas encore devenir une automatisation.",
   // Activation-only codes; creation never returns them.

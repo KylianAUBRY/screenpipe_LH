@@ -44,6 +44,9 @@ struct N8nState {
     /// When set, publishing answers 400 with this message (e.g. a trigger
     /// whose credentials n8n cannot use).
     refuse_publish: Option<String>,
+    /// When set, the workflow list answers at most this many per page (n8n
+    /// pages by `limit` and an opaque `cursor`).
+    page_size: Option<usize>,
 }
 
 #[derive(Clone, Default)]
@@ -119,7 +122,16 @@ impl Respond for FakeN8n {
                     })
                     .cloned()
                     .collect();
-                json_response(200, json!({"data": data, "nextCursor": null}))
+                let start: usize = query("cursor")
+                    .and_then(|cursor| cursor.strip_prefix("after-")?.parse().ok())
+                    .unwrap_or(0);
+                let limit: usize = query("limit").and_then(|l| l.parse().ok()).unwrap_or(100);
+                let end = (start + state.page_size.unwrap_or(limit).min(limit)).min(data.len());
+                let next = (end < data.len()).then(|| format!("after-{end}"));
+                json_response(
+                    200,
+                    json!({"data": data[start.min(end)..end], "nextCursor": next}),
+                )
             }
             ("POST", ["workflows"]) => {
                 if body.get("active").is_some() || body.get("tags").is_some() {
@@ -337,8 +349,12 @@ impl App {
     /// Fill in ScreenPipe's n8n connection (no SecretStore in tests, so the
     /// connection manager reads the legacy connections file).
     fn configure_n8n(&self, api_url: &str) {
+        self.configure_n8n_key(api_url, API_KEY);
+    }
+
+    fn configure_n8n_key(&self, api_url: &str, api_key: &str) {
         let connections = json!({
-            "n8n": {"enabled": true, "credentials": {"api_url": api_url, "api_key": API_KEY}}
+            "n8n": {"enabled": true, "credentials": {"api_url": api_url, "api_key": api_key}}
         });
         std::fs::write(
             self.dir.path().join("connections.json"),
@@ -508,6 +524,49 @@ async fn n8n_down_returns_502() {
 }
 
 #[tokio::test]
+async fn refused_api_key_returns_412_unauthorized_not_unreachable() {
+    // n8n answers, but not to this key: the user fixes Connexions → n8n.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n_key(&server.uri(), "revoked-key");
+
+    for (method, uri, body) in [
+        ("GET", "/automation-flows", None),
+        ("GET", "/automation-flows/wf1", None),
+        (
+            "POST",
+            "/automation-flows/from-task",
+            Some(json!({"taskId": TASK_ID, "answers": {}})),
+        ),
+        (
+            "POST",
+            "/automation-flows",
+            Some(json!({"workflow": chat_workflow(), "summary": "Résumé."})),
+        ),
+    ] {
+        let (status, body) = app.call(method, uri, body).await;
+        assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{method} {uri}");
+        assert_eq!(body["error"], "n8n_unauthorized", "{method} {uri}");
+        assert!(
+            body["detail"].as_str().unwrap().contains("401"),
+            "{method} {uri}: {body}"
+        );
+    }
+    assert!(n8n.workflows().is_empty());
+
+    // A key n8n knows but that may not do this (403) is the same problem.
+    let forbidden = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(json_response(403, json!({"message": "Forbidden"})))
+        .mount(&forbidden)
+        .await;
+    app.configure_n8n(&forbidden.uri());
+    let (status, body) = app.call("GET", "/automation-flows", None).await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(body["error"], "n8n_unauthorized");
+}
+
+#[tokio::test]
 async fn create_from_task_imports_switched_off_and_tagged() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;
@@ -590,6 +649,49 @@ async fn create_adopts_the_workflow_already_imported_by_the_import_script() {
     assert_eq!(
         app.store()["flows"]["spNovaFlow000001"]["sourceTaskId"],
         TASK_ID
+    );
+}
+
+#[tokio::test]
+async fn create_switches_off_a_pre_imported_copy_that_was_left_on() {
+    // The golden-path check publishes the imported copy in the n8n editor;
+    // creating the Flow afterwards must still hand the user a switched-off
+    // Draft that only their click on "Activer" turns on.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let mut imported: Value = serde_json::from_str(include_str!(
+        "../../../infra/automation-flows/workflows/novadesk-support-tickets.json"
+    ))
+    .unwrap();
+    imported["active"] = json!(true);
+    imported["versionId"] = json!("imported-version");
+    imported["activeVersionId"] = json!("imported-version");
+    imported["tags"] = json!([{"id": "tag-imported", "name": "screenpipe-flow"}]);
+    n8n.add_workflow(imported);
+
+    let (status, flow) = app.create_from_task().await;
+
+    assert!(status.is_success(), "{status} {flow}");
+    assert_eq!(flow["id"], "spNovaFlow000001");
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(
+        flow["activationLog"],
+        json!([]),
+        "nothing logged as activated"
+    );
+    assert_eq!(n8n.workflows()[0]["active"], false);
+    assert_eq!(
+        posts_ending_with(&server, "/unpublish").await,
+        vec![(
+            "/api/v1/workflows/spNovaFlow000001/unpublish".to_string(),
+            Value::Null
+        )]
+    );
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    assert_eq!(
+        app.store()["flows"]["spNovaFlow000001"]["activationLog"],
+        json!([])
     );
 }
 
@@ -741,6 +843,50 @@ async fn list_shows_only_flows_with_status_and_last_run() {
             "status": "draft",
             "lastExecution": {"status": "error", "startedAt": null}
         }])
+    );
+}
+
+#[tokio::test]
+async fn list_follows_n8n_pages_to_show_every_flow() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    n8n.0.lock().unwrap().page_size = Some(2);
+    for i in 1..=5 {
+        n8n.add_workflow(json!({
+            "id": format!("flow{i}"), "name": format!("Flow {i}"), "active": false,
+            "versionId": "v", "tags": [{"id": "t", "name": "screenpipe-flow"}],
+            "nodes": [], "connections": {}
+        }));
+    }
+    n8n.add_workflow(json!({
+        "id": "other", "name": "Unrelated", "active": false, "versionId": "v",
+        "tags": [], "nodes": [], "connections": {}
+    }));
+
+    let (status, list) = app.call("GET", "/automation-flows", None).await;
+
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let ids: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|flow| flow["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["flow1", "flow2", "flow3", "flow4", "flow5"]);
+    // Every page keeps the tag filter.
+    let pages: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method.as_str() == "GET" && r.url.path() == "/api/v1/workflows")
+        .map(|r| r.url.query().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(pages.len(), 3, "{pages:?}");
+    assert!(
+        pages.iter().all(|q| q.contains("tags=screenpipe-flow")),
+        "{pages:?}"
     );
 }
 

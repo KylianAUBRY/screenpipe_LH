@@ -102,7 +102,8 @@ excluded from `nodes`. `sentence` is the node's `notes`.
 | `POST /automation-flows/:id/activate` `{versionId}` | Only from the user's click (ticket 14): needs header `x-screenpipe-flow-activation` with the app's UI credential (`403 activation_requires_user` otherwise) and the reviewed `versionId` (`400 version_required` when missing, `409 version_changed` when n8n moved on). n8n publish of that version; `reviewedVersionId = versionId`; log `activated`. |
 | `POST /automation-flows/:id/deactivate` | n8n unpublish; log `deactivated`. Open to any authenticated caller. |
 
-Errors: `412 {error: "n8n_not_configured"}`, `502 {error: "n8n_unreachable"}`,
+Errors: `412 {error: "n8n_not_configured"}`, `412 {error: "n8n_unauthorized",
+detail}` (n8n answered 401/403 to the API key), `502 {error: "n8n_unreachable"}`,
 `404` for an unknown Flow or task, `400 {error: "invalid_workflow", detail}` for
 a chat change that cannot be applied, `415 {error: "json_required"}` for a
 POST/PUT without `Content-Type: application/json`. Storage: one JSON file in
