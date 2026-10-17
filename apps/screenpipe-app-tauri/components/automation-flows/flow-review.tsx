@@ -9,11 +9,18 @@
 // run, activation history, Activate / Deactivate, and "Demander une
 // modification" (the ScreenPipe chat, ticket 08).
 
-import React, { useState } from "react";
+import React from "react";
 import { ArrowLeft, ExternalLink, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Flow, FlowsApi } from "./api";
-import { ACTION_BUTTON, FlowsErrorMessage, SectionLabel, StatusBadge, useFlowsLoad } from "./common";
+import {
+  ACTION_BUTTON,
+  ChatButton,
+  FlowsErrorMessage,
+  SectionLabel,
+  StatusBadge,
+  useFlowsLoad,
+} from "./common";
 import { FlowActivation } from "./flow-activation";
 import { FlowGraph } from "./flow-graph";
 import { activationLabel, lastRunLabel } from "./labels";
@@ -53,39 +60,13 @@ export function FlowReview({
  * switched off, updated, and comes back here needing review.
  */
 function RequestChange({ flow, api }: { flow: Flow; api: FlowsApi }) {
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
-
-  async function open() {
-    setBusy(true);
-    setFailed(false);
-    try {
-      await api.requestChange(flow);
-    } catch {
-      setFailed(true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
-    <>
-      <Button
-        size="sm"
-        variant="outline"
-        className={ACTION_BUTTON}
-        disabled={busy}
-        onClick={() => void open()}
-      >
-        <MessageSquare className="mr-1 h-4 w-4" aria-hidden />
-        Demander une modification
-      </Button>
-      {failed && (
-        <p role="alert" className="w-full border border-border p-3 text-sm">
-          Impossible d&apos;ouvrir le chat. Réessayez.
-        </p>
-      )}
-    </>
+    <ChatButton
+      open={() => api.requestChange(flow)}
+      icon={<MessageSquare className="mr-1 h-4 w-4" aria-hidden />}
+    >
+      Demander une modification
+    </ChatButton>
   );
 }
 

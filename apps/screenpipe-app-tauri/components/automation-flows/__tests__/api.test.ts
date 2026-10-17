@@ -34,6 +34,7 @@ function respond(status: number, body: unknown) {
 
 beforeEach(() => {
   localFetch.mockReset();
+  showChatWithPrefill.mockClear();
   resetAutomationFlowsMock();
   window.history.replaceState({}, "", "/home?section=pipes");
 });
@@ -103,6 +104,17 @@ describe("flowsApi", () => {
     expect(prefill.prompt).toContain(fixtureFlow.name);
     expect(prefill.prompt).toContain("automation-flows");
     // Opening the chat changes nothing in the Flow service.
+    expect(localFetch).not.toHaveBeenCalled();
+  });
+
+  it("requests a new Flow in the Home chat, prefilled for the skill, without sending", async () => {
+    await flowsApi.requestCreation();
+
+    expect(showChatWithPrefill).toHaveBeenCalledTimes(1);
+    const [prefill] = showChatWithPrefill.mock.lastCall!;
+    expect(prefill).toMatchObject({ autoSend: false, useHomeChat: true, context: "" });
+    expect(prefill.prompt).toContain("automation-flows");
+    expect(prefill.prompt).toContain("crée");
     expect(localFetch).not.toHaveBeenCalled();
   });
 });

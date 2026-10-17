@@ -9,9 +9,9 @@
 // app only through `flowsApi` (./api.ts). Plain styling, built to be replaced.
 
 import React from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { flowsApi, type FlowsApi, type FlowSummary } from "./api";
-import { FlowsErrorMessage, StatusBadge, useFlowsLoad } from "./common";
+import { ChatButton, FlowsErrorMessage, StatusBadge, useFlowsLoad } from "./common";
 import { FlowReview } from "./flow-review";
 import { lastRunLabel } from "./labels";
 
@@ -39,20 +39,29 @@ function FlowList({ onOpen, api }: { onOpen: (id: string) => void; api: FlowsApi
   if (flows.state === "error") {
     return <FlowsErrorMessage error={flows.error} onRetry={reload} api={api} />;
   }
-  if (flows.data.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Aucun Flow pour l&apos;instant. Un Flow apparaît ici quand vous le créez
-        depuis une tâche détectée.
-      </p>
-    );
-  }
   return (
-    <ul className="divide-y divide-border border border-border" aria-label="Automation Flows">
-      {flows.data.map((flow) => (
-        <FlowRow key={flow.id} flow={flow} onOpen={() => onOpen(flow.id)} />
-      ))}
-    </ul>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <ChatButton
+          open={() => api.requestCreation()}
+          icon={<Plus className="mr-1 h-4 w-4" aria-hidden />}
+        >
+          Ajouter
+        </ChatButton>
+      </div>
+      {flows.data.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Aucun Flow pour l&apos;instant. Un Flow apparaît ici quand vous le créez
+          depuis une tâche détectée ou avec « Ajouter ».
+        </p>
+      ) : (
+        <ul className="divide-y divide-border border border-border" aria-label="Automation Flows">
+          {flows.data.map((flow) => (
+            <FlowRow key={flow.id} flow={flow} onOpen={() => onOpen(flow.id)} />
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
