@@ -567,6 +567,42 @@ async fn refused_api_key_returns_412_unauthorized_not_unreachable() {
 }
 
 #[tokio::test]
+async fn any_other_n8n_failure_is_named_n8n_failed_not_unreachable() {
+    // n8n answers, with the right key, but fails (ticket 22, item 7).
+    let failing = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(json_response(500, json!({"message": "database is locked"})))
+        .mount(&failing)
+        .await;
+    let app = App::new().await;
+    app.configure_n8n(&failing.uri());
+
+    for (method, uri, body) in [
+        ("GET", "/automation-flows", None),
+        ("GET", "/automation-flows/wf1", None),
+        (
+            "POST",
+            "/automation-flows/from-task",
+            Some(json!({"taskId": TASK_ID, "answers": {}})),
+        ),
+        (
+            "POST",
+            "/automation-flows",
+            Some(json!({"workflow": chat_workflow(), "summary": "Résumé."})),
+        ),
+    ] {
+        let (status, body) = app.call(method, uri, body).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{method} {uri}: {body}");
+        assert_eq!(body["error"], "n8n_failed", "{method} {uri}: {body}");
+        let detail = body["detail"].as_str().unwrap();
+        assert!(
+            detail.contains("500") && detail.contains("database is locked"),
+            "{method} {uri}: {body}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn create_from_task_imports_switched_off_and_tagged() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;

@@ -319,7 +319,10 @@ enum FlowError {
     NotConfigured,
     /// n8n answered but refused the API key of the n8n connection (401/403).
     Unauthorized(String),
+    /// No answer from n8n: connection refused, DNS, timeout.
     Unreachable(String),
+    /// n8n answered with any other non-2xx; the detail carries its message.
+    N8nFailed(String),
     TaskNotFound,
     FlowNotFound,
     /// The n8n workflow is no longer the version the user reviewed.
@@ -352,6 +355,10 @@ impl IntoResponse for FlowError {
             FlowError::Unreachable(detail) => (
                 StatusCode::BAD_GATEWAY,
                 json!({"error": "n8n_unreachable", "detail": detail}),
+            ),
+            FlowError::N8nFailed(detail) => (
+                StatusCode::BAD_GATEWAY,
+                json!({"error": "n8n_failed", "detail": detail}),
             ),
             FlowError::TaskNotFound => (StatusCode::NOT_FOUND, json!({"error": "task_not_found"})),
             FlowError::FlowNotFound => (StatusCode::NOT_FOUND, json!({"error": "flow_not_found"})),
@@ -512,7 +519,7 @@ impl N8nApi {
             200..=299 => value["id"]
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| FlowError::Unreachable("n8n returned a tag without id".into())),
+                .ok_or_else(|| FlowError::N8nFailed("n8n returned a tag without id".into())),
             // Created concurrently by someone else: read it back.
             409 => self
                 .find_tag()
@@ -612,8 +619,9 @@ impl N8nApi {
     }
 }
 
+/// n8n answered, but not with success: not a reachability problem.
 fn upstream_error(status: u16, body: &Value) -> FlowError {
-    FlowError::Unreachable(n8n_answer(status, body))
+    FlowError::N8nFailed(n8n_answer(status, body))
 }
 
 /// "n8n answered 400: <n8n's message>", for the user.
@@ -628,7 +636,7 @@ fn workflow_id(workflow: &Value) -> Result<String, FlowError> {
     workflow["id"]
         .as_str()
         .map(str::to_string)
-        .ok_or_else(|| FlowError::Unreachable("n8n returned a workflow without id".into()))
+        .ok_or_else(|| FlowError::N8nFailed("n8n returned a workflow without id".into()))
 }
 
 fn has_flow_tag(workflow: &Value) -> bool {
