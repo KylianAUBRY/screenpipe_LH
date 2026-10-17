@@ -17,6 +17,9 @@ const CREATION_ERROR: Record<FlowsErrorCode, string> = {
   n8n_not_configured: "n8n n'est pas configuré. Renseignez l'URL de l'API n8n et une clé API dans Connexions → n8n, puis réessayez.",
   n8n_unauthorized: "n8n a refusé la clé API. Vérifiez la clé API dans Connexions → n8n, puis réessayez.",
   n8n_unreachable: "Impossible de joindre n8n. Vérifiez qu'il tourne, puis réessayez.",
+  n8n_failed: "n8n a rencontré une erreur. Réessayez dans un instant.",
+  // A copy of the Flow left on in n8n is still processing an email.
+  flow_running: "n8n traite encore un e-mail avec ce Flow. Réessayez dans un instant.",
   not_found: "Cette tâche ne peut pas encore devenir une automatisation.",
   // Activation-only codes; creation never returns them.
   version_changed: CREATION_FAILED,

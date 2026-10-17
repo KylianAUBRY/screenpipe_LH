@@ -113,6 +113,8 @@ describe("flowsApi", () => {
     [412, { error: "n8n_not_configured" }, "n8n_not_configured"],
     [412, { error: "n8n_unauthorized", detail: "n8n answered 401: unauthorized" }, "n8n_unauthorized"],
     [502, { error: "n8n_unreachable", detail: "connection refused" }, "n8n_unreachable"],
+    [502, { error: "n8n_failed", detail: "n8n answered 500: database is locked" }, "n8n_failed"],
+    [409, { error: "flow_running", detail: "n8n is still running this Flow" }, "flow_running"],
     [404, { error: "flow_not_found" }, "not_found"],
     [500, { error: "internal" }, "unknown"],
   ])("turns HTTP %i into a typed error", async (status, body, code) => {

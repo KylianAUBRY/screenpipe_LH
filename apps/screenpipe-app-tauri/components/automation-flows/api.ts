@@ -58,6 +58,10 @@ export type FlowsErrorCode =
   /** n8n answered but refused the API key of Connections → n8n. */
   | "n8n_unauthorized"
   | "n8n_unreachable"
+  /** n8n answered with another error (detail carries its message). */
+  | "n8n_failed"
+  /** Switching off (Désactiver, a chat change): n8n is still processing an email; retry in a moment. */
+  | "flow_running"
   | "not_found"
   /** Activation: the n8n workflow changed since the user loaded it. */
   | "version_changed"
@@ -71,6 +75,8 @@ const SERVER_CODES: readonly FlowsErrorCode[] = [
   "n8n_not_configured",
   "n8n_unauthorized",
   "n8n_unreachable",
+  "n8n_failed",
+  "flow_running",
   "version_changed",
   "activation_failed",
   "activation_requires_user",
