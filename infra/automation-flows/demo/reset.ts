@@ -9,6 +9,7 @@ import { clearAnswers, readCatalog, writeCatalog } from "./catalog";
 import { DEMO_TASK_ID } from "./detected-task";
 
 const STORE_FILE = "automation-flows.json";
+const FLOW_TAG = "screenpipe-flow"; // engine `FLOW_TAG`
 // The bundled demo workflow (the engine's from-task fixture).
 const WORKFLOW = JSON.parse(readFileSync(join(import.meta.dir, "..", "workflows", "novadesk-support-tickets.json"), "utf8"));
 /** The copy `import-workflow.sh` installs keeps the bundled workflow's fixed id. */
@@ -170,6 +171,18 @@ export async function resetDemo(options: ResetOptions): Promise<ResetReport> {
       const done = await removeWorkflow(client, id);
       gone.push(id);
       return done;
+    });
+  }
+
+  if (n8n) {
+    const client = n8n;
+    await step("n8n", async () => {
+      const listed = await client("GET", `/workflows?tags=${FLOW_TAG}&limit=250`);
+      if (!ok(listed.status)) throw new Error(`cannot list the Flows: ${answer(listed)}`);
+      const others = (listed.body?.data ?? []) as N8nWorkflow[];
+      if (others.length === 0) return "the Flows list is empty";
+      const names = others.map(w => `${w.id} (${w.name ?? "unnamed"}, ${w.active ? "active" : "off"})`);
+      return `${others.length} other Flow(s) left untouched: ${names.join(", ")}`;
     });
   }
 

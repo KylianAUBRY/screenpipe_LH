@@ -213,6 +213,33 @@ describe("demo reset", () => {
     expect(readFileSync(join(data, "automation-flows.json"), "utf8")).toBe("{ not json");
     expect(n8n.workflows.size).toBe(0);
   });
+
+  it("reports a missing Task Page catalog", async () => {
+    const n8n = serve([]);
+
+    const report = await resetDemo({
+      n8n: { url: n8n.url, apiKey: KEY }, dataDir: dataDir({}), catalogDir: mkdtempSync(join(tmpdir(), "demo-reset-empty-")),
+      container: "n8n-test", run: inbox(), log: () => {},
+    });
+
+    expect(report.failures).toEqual([expect.stringContaining("run the demo script first")]);
+  });
+
+  it("names the other Flows still in n8n, which it never touches", async () => {
+    const n8n = serve([
+      { id: "spNovaFlow000001", name: "NovaDesk", active: false, tags: [{ name: "screenpipe-flow" }] },
+      { id: "wfChat000000001", name: "Résumé hebdo", active: true, tags: [{ name: "screenpipe-flow" }] },
+    ]);
+    const lines: string[] = [];
+
+    const report = await resetDemo({
+      n8n: { url: n8n.url, apiKey: KEY }, dataDir: dataDir({}), catalogDir: catalogDir(), container: "n8n-test", run: inbox(), log: line => lines.push(line),
+    });
+
+    expect(report.failures).toEqual([]);
+    expect(lines).toContain("n8n: 1 other Flow(s) left untouched: wfChat000000001 (Résumé hebdo, active)");
+    expect(n8n.workflows.get("wfChat000000001")!.active).toBe(true);
+  });
 });
 
 // mark-read.sh runs inside the n8n container. Here it runs locally with a fake
