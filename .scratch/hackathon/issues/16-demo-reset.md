@@ -24,10 +24,10 @@ from the repo.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** done on `hackathon/ticket-16` (tests pass); live check on the demo machine pending (orchestrator).
+**Status:** done (merged; live-verified on the demo machine 2026-10-17)
 
 - [x] Tests against fake n8n / ScreenPipe servers: demo Flows are switched off then deleted and their records removed; other workflows untouched; answers cleared; a failure exits non-zero with the reason.
-- [ ] On the demo machine (agent-verified by the orchestrator): after a full rehearsal, reset leaves an empty Flows list, empty answers and zero unread demo emails, and the next "Créer l'automatisation" works.
+- [x] On the demo machine (agent-verified by the orchestrator): after a full rehearsal, reset leaves an empty Flows list, empty answers and zero unread demo emails, and the next "Créer l'automatisation" works. Live run: `spNovaFlow000001` switched off, archived, deleted; record removed; 0 unread; exit 0 (see `.scratch/hackathon/evidence/LIVE-CHECKS.md`; re-creation re-checked in the ticket 12 rehearsals).
 
 ## What was built
 

@@ -46,6 +46,10 @@ export type WorkflowsPlatform = {
    * Task and open its Review Screen. Present only on such hosts; with it, the
    * Task Page requires every Clarification Question before creation. */
   createAutomationFlow?: (taskId: string, answers: import("./workflow-answers").WorkflowAnswer[]) => Promise<void>;
+  /** Which Detected Tasks `createAutomationFlow` can turn into a Flow. Any other
+   * task keeps the ordinary Task Page (optional answers, no creation action).
+   * Absent: every task. */
+  canCreateAutomationFlow?: (taskId: string) => boolean;
   modelPreference?: import("./model-choice").WorkflowModelPreference;
   /** The existing scheduled-task runtime owns reconciliation and persistence. */
   managesAnalysis?: boolean;

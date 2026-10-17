@@ -16,11 +16,11 @@ answers, streaming, errors) passes through unchanged.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** engine fix done; live checks pending human
+**Status:** done (live-verified on the demo machine 2026-10-17)
 
 - [x] Engine tests through the proxy route with a fake upstream: tool calls without ids get unique ids and type "function"; existing ids are kept; finish_reason is set only when missing; a plain answer and an error answer are byte-for-byte unchanged; streaming is untouched. (`cargo test -p screenpipe-engine --lib routes::cloud_proxy`: 6 passed. Seam: `chat_completions_with_base` in `routes/cloud_proxy.rs` with a wiremock upstream; `server.rs` untouched.)
-- [ ] The two-turn probe from ticket 07 (tool call, then tool result) returns 200 through the proxy when the app runs the dev build containing the fix.
-- [ ] The demo n8n workflow with the ScreenPipe tool runs end to end on a synthetic email (manual-trigger probe), ending with `{type, product, summary, priority, label}`.
+- [x] The two-turn probe from ticket 07 (tool call, then tool result) returns 200 through the proxy when the app runs the dev build containing the fix. Dev build: tool calls come back with `id: call_…`, `type: function`, `finish_reason: tool_calls` (installed app: `id: null`, `type: tool_use`); the demo agent's tool round trips complete in live runs (see `.scratch/hackathon/evidence/LIVE-CHECKS.md`).
+- [x] The demo n8n workflow with the ScreenPipe tool runs end to end on a synthetic email (manual-trigger probe), ending with `{type, product, summary, priority, label}`. Bug, none and prompt-injection emails, then real emails (n8n executions 9 and 10).
 
 Note: the running ScreenPipe is the installed app, which does not contain
 engine changes. Live checks need the dev build (`bun run dev:tauri` from the

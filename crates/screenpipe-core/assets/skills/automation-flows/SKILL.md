@@ -16,7 +16,9 @@ reads a Flow on its Review Screen and is the only one who switches it on.
    `/automation-flows/<id>/deactivate`, never call n8n directly, never ask for
    the n8n API key. A new Flow is created switched off. Sending a change
    switches an active Flow off by itself; the user switches it on again after
-   reviewing it.
+   reviewing it. ScreenPipe refuses any activation that does not come from the
+   user's click on the Review Screen (`403 activation_requires_user`): if the
+   user asks you to activate a Flow, give them the Review Screen link instead.
 2. **One sentence per node.** Every node except sticky notes
    (`n8n-nodes-base.stickyNote`) has `notes`: one short French sentence that
    says, in plain language, what the step does for the user. Rewrite the note of

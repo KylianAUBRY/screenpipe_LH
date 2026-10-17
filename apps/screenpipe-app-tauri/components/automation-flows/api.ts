@@ -62,6 +62,8 @@ export type FlowsErrorCode =
   | "version_changed"
   /** Activation/deactivation: n8n answered but refused (detail says why). */
   | "activation_failed"
+  /** Activation without the desktop app's UI credential (e.g. `bun run dev:web:live`). */
+  | "activation_requires_user"
   | "unknown";
 
 const SERVER_CODES: readonly FlowsErrorCode[] = [
@@ -70,7 +72,28 @@ const SERVER_CODES: readonly FlowsErrorCode[] = [
   "n8n_unreachable",
   "version_changed",
   "activation_failed",
+  "activation_requires_user",
 ];
+
+/** Carries the UI credential on activation (engine: `ACTIVATION_HEADER`). */
+export const ACTIVATION_HEADER = "x-screenpipe-flow-activation";
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+/**
+ * The credential the desktop app hands only to its webview, through a Tauri
+ * command. The chat agent, pipes and MCP clients share the local API key but
+ * never hold this one, so the engine activates only on this screen's click.
+ * `null` outside the desktop app: the engine then refuses the activation.
+ */
+async function activationKey(): Promise<string | null> {
+  try {
+    const { commands } = await import("@/lib/utils/tauri");
+    return (await commands.getFlowActivationKey()) || null;
+  } catch {
+    return null;
+  }
+}
 
 export class FlowsApiError extends Error {
   constructor(
@@ -111,24 +134,29 @@ export const flowsApi = {
   createFromTask: (taskId: string, answers: unknown) =>
     request<Flow>("/automation-flows/from-task", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ taskId, answers }),
     }),
 
   /**
    * Activation: switches the n8n workflow on at `versionId`, the version the
-   * user reviewed. Only ever called from the user's click on "Activer".
+   * user reviewed. Only ever called from the user's click on "Activer"; the
+   * engine refuses it without the UI credential.
    */
-  activate: (id: string, versionId: string) =>
-    request<Flow>(`/automation-flows/${encodeURIComponent(id)}/activate`, {
+  async activate(id: string, versionId: string) {
+    const key = await activationKey();
+    return request<Flow>(`/automation-flows/${encodeURIComponent(id)}/activate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: key ? { ...JSON_HEADERS, [ACTIVATION_HEADER]: key } : JSON_HEADERS,
       body: JSON.stringify({ versionId }),
-    }),
+    });
+  },
 
   deactivate: (id: string) =>
     request<Flow>(`/automation-flows/${encodeURIComponent(id)}/deactivate`, {
       method: "POST",
+      headers: JSON_HEADERS,
+      body: "{}",
     }),
 
   /** "Voir le graphe": the workflow in the n8n editor. */

@@ -21,8 +21,17 @@ const CREATION_ERROR: Record<FlowsErrorCode, string> = {
   // Activation-only codes; creation never returns them.
   version_changed: CREATION_FAILED,
   activation_failed: CREATION_FAILED,
+  activation_requires_user: CREATION_FAILED,
   unknown: CREATION_FAILED,
 };
+
+// The Detected Tasks the Flow service can create a Flow from: the engine's
+// bundled DEMO_TASKS (crates/screenpipe-engine/src/automation_flows.rs; a test
+// fails when the two drift apart). Every other task keeps the ordinary Task Page.
+const CREATABLE_TASK_IDS = new Set(["wf-novadesk-support-tickets"]);
+
+export const canCreateAutomationFlow: NonNullable<WorkflowsPlatform["canCreateAutomationFlow"]> = taskId =>
+  CREATABLE_TASK_IDS.has(taskId);
 
 export const createAutomationFlow: NonNullable<WorkflowsPlatform["createAutomationFlow"]> = async (taskId, answers) => {
   let flowId: string;
