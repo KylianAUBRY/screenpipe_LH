@@ -683,6 +683,32 @@ fn importable(workflow: &Value) -> Value {
     Value::Object(body)
 }
 
+/// The chat never wires n8n credentials: the user picks them in n8n. Each
+/// node of `body` keeps only the credentials that `current` (the workflow n8n
+/// holds now) gives the node of the same name and type; a new or retyped node,
+/// or any node of a new workflow (`None`), gets none. Never from the request.
+fn keep_user_credentials(body: &mut Value, current: Option<&Value>) {
+    let current_nodes = current
+        .and_then(|workflow| workflow["nodes"].as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for node in body["nodes"].as_array_mut().into_iter().flatten() {
+        let kept = current_nodes
+            .iter()
+            .find(|old| old["name"] == node["name"] && old["type"] == node["type"])
+            .and_then(|old| old.get("credentials"))
+            .filter(|credentials| !credentials.is_null())
+            .cloned();
+        let Some(fields) = node.as_object_mut() else {
+            continue;
+        };
+        match kept {
+            Some(credentials) => fields.insert("credentials".into(), credentials),
+            None => fields.remove("credentials"),
+        };
+    }
+}
+
 /// Why a chat modification cannot be applied as is, if it cannot: it needs
 /// nodes and connections, and every node except sticky notes needs its
 /// one-sentence `notes` for the Review Screen.
@@ -1138,6 +1164,7 @@ async fn update_flow(
     if body.get("name").is_none() {
         body["name"] = current["name"].clone();
     }
+    keep_user_credentials(&mut body, Some(&current));
 
     if current["active"] == true {
         let running = running_version(&current);
@@ -1203,13 +1230,10 @@ async fn create_flow(
     let mut store = FlowStore::load(dir)?;
 
     // `importable` drops `active` and `tags`: n8n imports it switched off.
+    let mut body = importable(&request.workflow);
+    keep_user_credentials(&mut body, None);
     let (status, created) = api
-        .send(
-            Method::POST,
-            "/workflows",
-            &[],
-            Some(&importable(&request.workflow)),
-        )
+        .send(Method::POST, "/workflows", &[], Some(&body))
         .await?;
     match status {
         200..=299 => {}

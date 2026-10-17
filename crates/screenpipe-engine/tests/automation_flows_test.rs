@@ -1882,6 +1882,76 @@ async fn chat_update_refused_by_n8n_leaves_the_flow_switched_off() {
     );
 }
 
+/// The `credentials` of the node named `name` in a workflow, or `Null`.
+fn credentials_of(workflow: &Value, name: &str) -> Value {
+    workflow["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == name)
+        .unwrap_or_else(|| panic!("node {name}"))
+        .get("credentials")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[tokio::test]
+async fn chat_update_keeps_the_users_credentials_and_never_takes_the_chats() {
+    // Ticket 22, item 4: credentials come from the workflow n8n holds, for the
+    // nodes that keep their name and type; never from the request.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let jira = "Créer le ticket Jira";
+    let imap = "Nouvel email support";
+    let user_jira = credentials_of(&n8n.workflows()[0], jira);
+    let user_imap = credentials_of(&n8n.workflows()[0], imap);
+    assert!(user_jira.is_object() && user_imap.is_object());
+
+    let workflow = edited_workflow(&n8n, &id, |workflow| {
+        let nodes = workflow["nodes"].as_array_mut().unwrap();
+        for node in nodes.iter_mut() {
+            if node["name"] == jira {
+                // Same name and type, credentials swapped by the chat.
+                node["credentials"] = json!({
+                    "jiraSoftwareCloudApi": {"id": "attackerJira0001", "name": "Autre Jira"}
+                });
+            } else if node["name"] == imap {
+                // Same name and type, credentials dropped by the chat.
+                node.as_object_mut().unwrap().remove("credentials");
+            }
+        }
+        // A new node and a retyped node bring credentials of their own.
+        nodes.push(json!({
+            "id": "new-node", "name": "Prévenir l'équipe", "type": "n8n-nodes-base.slack",
+            "typeVersion": 2.3, "position": [1300, 0], "parameters": {},
+            "notes": "L'équipe est prévenue sur Slack.",
+            "credentials": {"slackApi": {"id": "slack0000000001", "name": "Slack"}}
+        }));
+        let model = nodes
+            .iter_mut()
+            .find(|n| n["name"] == "Modèle IA ScreenPipe")
+            .unwrap();
+        model["type"] = json!("@n8n/n8n-nodes-langchain.lmChatAnthropic");
+    });
+    let (status, flow) = app
+        .call(
+            "PUT",
+            &format!("/automation-flows/{id}"),
+            Some(json!({"workflow": workflow})),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    let stored = n8n.workflows()[0].clone();
+    assert_eq!(credentials_of(&stored, jira), user_jira);
+    assert_eq!(credentials_of(&stored, imap), user_imap);
+    assert_eq!(credentials_of(&stored, "Prévenir l'équipe"), Value::Null);
+    assert_eq!(credentials_of(&stored, "Modèle IA ScreenPipe"), Value::Null);
+}
+
 #[tokio::test]
 async fn chat_update_of_a_draft_keeps_it_a_draft_and_its_summary() {
     let (server, n8n) = start_fake_n8n().await;
@@ -2044,6 +2114,36 @@ async fn chat_create_imports_switched_off_and_tagged_and_stores_the_summary() {
     let (_, list) = app.call("GET", "/automation-flows", None).await;
     assert_eq!(list[0]["id"], id);
     assert_eq!(list[0]["status"], "draft");
+}
+
+#[tokio::test]
+async fn chat_create_cannot_wire_the_users_n8n_credentials() {
+    // The user picks credentials in n8n (ticket 22, item 4): a chat workflow
+    // naming one, e.g. the Jira credential id it read elsewhere, gets none.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let mut workflow = chat_workflow();
+    workflow["nodes"][1]["credentials"] =
+        json!({"jiraSoftwareCloudApi": {"id": "spNovaJira000001", "name": "NovaDesk Jira"}});
+
+    let (status, flow) = chat_create(
+        &app,
+        json!({"workflow": workflow, "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{flow}");
+    let posts = workflow_posts(&server).await;
+    assert_eq!(posts.len(), 1);
+    for node in posts[0]["nodes"].as_array().unwrap() {
+        assert!(node.get("credentials").is_none(), "{node}");
+    }
+    assert!(n8n.workflows()[0]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|node| node.get("credentials").is_none()));
 }
 
 #[tokio::test]
