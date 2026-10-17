@@ -10,6 +10,21 @@ import { LiveVoiceFill } from "./live-voice-fill";
 import styles from "./workflow-question.module.css";
 
 const EXTRA = "Anything else we should know?";
+/** Unsaved answers, kept per task for this app session so leaving the page loses nothing. */
+const draftKey = (workflow: WorkflowMap) => `screenpipe:workflow-answers:${workflow.id ?? workflow.title}`;
+function readDraft(key: string): Record<string, string> {
+  try {
+    const value: unknown = JSON.parse(sessionStorage.getItem(key) || "null");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  } catch { return {}; }
+}
+function writeDraft(key: string, draft: Record<string, string>) {
+  try {
+    if (Object.keys(draft).length) sessionStorage.setItem(key, JSON.stringify(draft));
+    else sessionStorage.removeItem(key);
+  } catch { /* Answering still works when storage is unavailable. */ }
+}
 export function WorkflowQuestions({ workflow, save, voice, active = true, createFlow }: {
   workflow: WorkflowMap;
   save?: (correction: string) => Promise<WorkflowMap>;
@@ -21,11 +36,16 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
   const questions = [...new Set((workflow.openQuestions ?? []).map(q => q.trim()).filter(q => q && q !== EXTRA))];
   const fields = [...questions, EXTRA];
   const initial = () => Object.fromEntries(readWorkflowAnswers(workflow.userCorrection).map(a => [a.question, a.answer]));
-  const [answers, setAnswers] = useState<Record<string, string>>(initial);
+  const [restored] = useState(() => readDraft(draftKey(workflow)));
+  const [answers, setAnswers] = useState<Record<string, string>>(() => ({ ...initial(), ...restored }));
   const [saved, setSaved] = useState<Record<string, string>>(initial);
   const fieldsRef = useRef(fields); fieldsRef.current = fields;
   const baseline = useRef(saved);
-  const locked = useRef(new Set(Object.keys(saved).filter(q => saved[q])));
+  const locked = useRef(new Set([...Object.keys(saved).filter(q => saved[q]), ...Object.keys(restored)]));
+  const key = draftKey(workflow);
+  useEffect(() => {
+    if (save) writeDraft(key, Object.fromEntries(Object.entries(answers).filter(([q, a]) => a !== (saved[q] ?? ""))));
+  }, [answers, saved, key, save]);
   const beforeVoice = useRef<Record<string, string>>({});
   const [voiceFields, setVoiceFields] = useState<Set<string>>(new Set());
   useEffect(() => {

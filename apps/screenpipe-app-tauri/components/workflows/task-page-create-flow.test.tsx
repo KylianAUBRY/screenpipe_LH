@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { serializeWorkflowData, WorkflowsApp, type WorkflowsPlatform } from "@screenpipe/workflows-ui";
 import { createFixtureWorkflowsPlatform } from "@screenpipe/workflows-ui/fixture";
@@ -14,7 +14,7 @@ const at = "2026-10-17T02:05:41Z";
 const CREATE = "Créer l'automatisation";
 
 async function openTaskPage(extra: Partial<WorkflowsPlatform> = {}, taskId = DEMO_TASK_ID) {
-  window.localStorage.clear();
+  window.localStorage.clear(); window.sessionStorage.clear();
   window.history.replaceState(null, "", "/home?mode=workflows");
   const task = { ...buildDetectedTask(() => "data:image/webp;base64,AAAA", at), id: taskId };
   const catalog = JSON.parse(serializeWorkflowData(upsertTask(null, task, at)));
@@ -92,6 +92,19 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
       { question: CLARIFICATION_QUESTIONS[0], answer: "Oui, en Tâche." },
       { question: CLARIFICATION_QUESTIONS[1], answer: "Bloquant = Highest." },
     ]);
+  });
+
+  it("keeps an answer being typed when the user leaves the page and comes back, without saving", async () => {
+    const platform = await openTaskPage({ createAutomationFlow: vi.fn(async () => {}), canCreateAutomationFlow: id => id === DEMO_TASK_ID });
+    const save = vi.spyOn(platform, "saveWorkflowAnswers");
+    answer(CLARIFICATION_QUESTIONS[0], "Oui, en Tâche.");
+    cleanup();
+    await act(async () => {
+      render(<WorkflowsApp platform={platform} storageKey={null} reviewRequest={{ key: "back", workflowId: DEMO_TASK_ID }} />);
+    });
+    expect(await screen.findByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] })).toHaveValue("Oui, en Tâche.");
+    expect(screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[1] })).toHaveValue("");
+    expect(save).not.toHaveBeenCalled();
   });
 
   it("shows why creation failed, keeps the answers and allows a retry", async () => {
