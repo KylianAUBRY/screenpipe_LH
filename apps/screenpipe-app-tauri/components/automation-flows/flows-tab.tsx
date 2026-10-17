@@ -14,6 +14,7 @@ import { flowsApi, type FlowsApi, type FlowSummary } from "./api";
 import { ChatButton, FlowsErrorMessage, StatusBadge, useFlowsLoad } from "./common";
 import { FlowDelete } from "./flow-delete";
 import { FlowReview } from "./flow-review";
+import { FlowsHealthBanner } from "./health-banner";
 import { lastRunLabel } from "./labels";
 import { cn } from "@/lib/utils";
 
@@ -26,10 +27,16 @@ export function FlowsTab({
   onSelectFlow: (id: string | null) => void;
   api?: FlowsApi;
 }) {
-  if (flowId) {
-    return <FlowReview flowId={flowId} onBack={() => onSelectFlow(null)} api={api} />;
-  }
-  return <FlowList onOpen={onSelectFlow} api={api} />;
+  return (
+    <div className="space-y-4">
+      <FlowsHealthBanner api={api} />
+      {flowId ? (
+        <FlowReview flowId={flowId} onBack={() => onSelectFlow(null)} api={api} />
+      ) : (
+        <FlowList onOpen={onSelectFlow} api={api} />
+      )}
+    </div>
+  );
 }
 
 function FlowList({ onOpen, api }: { onOpen: (id: string) => void; api: FlowsApi }) {

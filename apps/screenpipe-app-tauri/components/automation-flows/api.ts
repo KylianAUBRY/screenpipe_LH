@@ -78,6 +78,21 @@ export type FlowRun = {
   retried: boolean;
 };
 
+/**
+ * The engine's last Flow health check (D19), run at start and every 15
+ * minutes (every 30 s while n8n is down). `unreachable` shows the banner.
+ */
+export type FlowsHealth = {
+  checkedAt: string | null;
+  n8n: "reachable" | "unreachable" | "unauthorized" | "not_configured" | "failed" | "unknown";
+  /** Failed runs (n8n execution ids) this check notified. */
+  notified: string[];
+  /** Failed runs the notification server could not take yet. */
+  pendingNotifications: string[];
+  /** Drafts under construction for 24 hours, deleted by this check. */
+  deletedDrafts: string[];
+};
+
 export type FlowsErrorCode =
   | "n8n_not_configured"
   /** n8n answered but refused the API key of Connections → n8n. */
@@ -188,6 +203,9 @@ export const flowsApi = {
       `/automation-flows/${encodeURIComponent(id)}/runs/${encodeURIComponent(executionId)}/retry`,
       { method: "POST", headers: JSON_HEADERS, body: "{}" },
     ),
+
+  /** The last health check; reading it never contacts n8n. */
+  health: () => request<FlowsHealth>("/automation-flows/health"),
 
   createFromTask: (taskId: string, answers: unknown) =>
     request<Flow>("/automation-flows/from-task", {

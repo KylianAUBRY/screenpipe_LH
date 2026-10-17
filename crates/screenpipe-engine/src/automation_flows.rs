@@ -52,8 +52,10 @@ use tokio::sync::Mutex;
 
 mod activity;
 mod failures;
+mod health;
 mod retry;
 pub use failures::{FailureReports, ERROR_WORKFLOW_TAG};
+pub use health::HealthSchedule;
 
 /// n8n tag that marks a workflow as a ScreenPipe Automation Flow.
 pub const FLOW_TAG: &str = "screenpipe-flow";
@@ -219,8 +221,24 @@ struct FlowsState {
     /// Serializes store writes and imports so a double click on "create"
     /// cannot import the same task twice.
     write_lock: Arc<Mutex<()>>,
+    /// The health check's last result and ledger lock (D19).
+    health: Arc<health::Health>,
+    /// The periodic health check, stopped when the router is dropped (an
+    /// engine restart builds a new one). The task's own copy holds `None`.
+    health_task: Option<Arc<AbortOnDrop>>,
 }
 
+/// Aborts a background task when the last owner drops it.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// The `/automation-flows` routes. With a `health_schedule`, the health
+/// check (D19) runs at once and then on that schedule while the router lives.
 pub fn router<S>(
     screenpipe_dir: PathBuf,
     secret_store: Option<Arc<SecretStore>>,
@@ -228,6 +246,7 @@ pub fn router<S>(
     workflow_catalog_dir: Option<PathBuf>,
     running_wait: RunningWait,
     failure_reports: FailureReports,
+    health_schedule: Option<HealthSchedule>,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -237,7 +256,7 @@ where
         .timeout(Duration::from_secs(20))
         .build()
         .unwrap_or_default();
-    let state = FlowsState {
+    let mut state = FlowsState {
         screenpipe_dir,
         secret_store,
         activation_key,
@@ -246,8 +265,20 @@ where
         failure_reports,
         http,
         write_lock: Arc::new(Mutex::new(())),
+        health: Arc::default(),
+        health_task: None,
     };
+    if let Some(schedule) = health_schedule {
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                let task = runtime.spawn(health::check_periodically(state.clone(), schedule));
+                state.health_task = Some(Arc::new(AbortOnDrop(task)));
+            }
+            Err(_) => tracing::warn!("automation flows: no runtime, health check not scheduled"),
+        }
+    }
     Router::new()
+        .route("/health", get(health::last_health).post(health::check_now))
         .route("/", get(list_flows).post(create_flow))
         .route("/from-task", post(create_from_task))
         .route("/nodes", get(search_nodes))
