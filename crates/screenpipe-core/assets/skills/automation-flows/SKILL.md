@@ -1,6 +1,6 @@
 ---
 name: automation-flows
-description: List, read, create and change the user's ScreenPipe Automation Flows (n8n workflows the user reviews and switches on in ScreenPipe) through the local /automation-flows API. Use when the user asks to create, change, explain or list an Automation Flow, or when a message names an Automation Flow id.
+description: List, read, create, change and delete the user's ScreenPipe Automation Flows (n8n workflows the user reviews and switches on in ScreenPipe) through the local /automation-flows API. Use when the user asks to create, change, delete, explain or list an Automation Flow, or when a message names an Automation Flow id.
 ---
 
 # Automation Flows
@@ -62,6 +62,7 @@ the `screenpipe-api` skill (`Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY`).
 | `GET /automation-flows/<id>/workflow` | `{id, versionId, summary, workflow}`: the n8n workflow to edit |
 | `PUT /automation-flows/<id>` with `{workflow, summary?}` | the updated Flow |
 | `POST /automation-flows` with `{workflow, summary}` | the new Flow (`201`, `draft`, switched off) |
+| `DELETE /automation-flows/<id>` | `{id, deleted: true}`: the Flow is gone from n8n and ScreenPipe |
 
 `status` is `draft` (never activated), `active`, `paused` or `needs_review`
 (changed since its last activation).
@@ -72,9 +73,10 @@ Connexions → n8n), `502 n8n_unreachable` (n8n is not running), `502
 n8n_failed` (n8n answered with an error; `detail` has its message), `404
 flow_not_found`, `400
 invalid_workflow` (the `detail` says what to fix: fix it and send again),
-`409 flow_running` (on a change: the Flow is processing an email; ScreenPipe
-already waited about 90 s and changed nothing. Wait a minute and send the same
-request once more; if it is refused again, tell the user to try again later).
+`409 flow_running` (on a change or a deletion: the Flow is processing an
+email; ScreenPipe already waited about 90 s and changed nothing. Wait a minute
+and send the same request once more; if it is refused again, tell the user to
+try again later).
 
 ## Change a Flow
 
@@ -183,3 +185,24 @@ off; the user reviews it and switches it on.
 6. Reply in French: what the Flow will do in one to three short points, that
    the Flow is switched off until the user reviews and activates it, and the
    Review Screen link with the returned `id`.
+
+## Delete a Flow
+
+When the user asks to delete (« supprime », « efface ») a Flow, delete it
+without asking for confirmation: the user decided so. Deletion is final.
+ScreenPipe switches an active Flow off first (waiting for the email it
+processes), deletes the n8n workflow for good and removes its summary and
+history. A Flow n8n no longer has is still cleared.
+
+1. Find its `id` with `GET /automation-flows` (match the name the user gives;
+   if several Flows match, ask which one).
+2. Delete it:
+   ```bash
+   curl --fail-with-body -X DELETE -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+     -H "Content-Type: application/json" \
+     "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/automation-flows/<id>"
+   ```
+   On `409 flow_running`, wait a minute and send it once more (Errors above).
+   `404 flow_not_found`: there is no such Flow; nothing was deleted.
+3. Reply in French in one sentence: which Flow was deleted. No Review Screen
+   link (rule 9 does not apply).
