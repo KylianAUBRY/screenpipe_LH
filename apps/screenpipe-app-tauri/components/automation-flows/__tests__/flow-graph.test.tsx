@@ -20,12 +20,13 @@ function fakeApi(flow: Flow = fixtureFlow): FlowsApi {
     openInN8n: vi.fn(async () => {}),
     openTaskPage: vi.fn(async () => {}),
     openN8nConnection: vi.fn(async () => {}),
+    repetitions: vi.fn(async () => []),
   };
 }
 
 async function renderGraph(flow: Flow = fixtureFlow) {
   render(<FlowsTab flowId={flow.id} onSelectFlow={vi.fn()} api={fakeApi(flow)} />);
-  return screen.findByRole("application", { name: "Graphe du Flow" });
+  return screen.findByRole("application", { name: "Flow graph" });
 }
 
 afterEach(cleanup);
@@ -47,7 +48,7 @@ describe("Review Screen graph", () => {
     const graph = await renderGraph({ ...fixtureFlow, nodes: [{ ...first, sentence: null }, ...rest] });
 
     const card = within(graph).getByTestId(`flow-node-${first.id}`);
-    expect(within(card).getByText("Pas d'explication pour cette étape.")).toBeTruthy();
+    expect(within(card).getByText("No explanation for this step.")).toBeTruthy();
   });
 
   it("lists the facts the AI did not write under each step's sentence", async () => {
@@ -66,7 +67,7 @@ describe("Review Screen graph", () => {
     const card = within(graph).getByTestId(`flow-node-${jira.id}`);
     // React Flow keeps nodes invisible until it measures them, which jsdom
     // never does: roles need `hidden`, and the label is read from aria-label.
-    const facts = within(card).getByLabelText("Détails fixes");
+    const facts = within(card).getByLabelText("Fixed details");
     expect(facts.tagName).toBe("UL");
     expect(within(facts).getAllByRole("listitem", { hidden: true }).map((item) => item.textContent)).toEqual([
       "Identifiant n8n : NovaDesk Jira",
@@ -83,7 +84,8 @@ describe("Review Screen graph", () => {
     const graph = await renderGraph();
     const nameOf = (id: string) => fixtureFlow.nodes.find((node) => node.id === id)!.name;
 
-    const links = within(graph).getAllByRole("img", { name: / → / });
+    // Links are drawn once React Flow has measured the cards.
+    const links = await within(graph).findAllByRole("img", { name: / → / });
     expect(links.map((link) => link.getAttribute("aria-label")).sort()).toEqual(
       fixtureFlow.edges.map((edge) => `${nameOf(edge.from)} → ${nameOf(edge.to)}`).sort(),
     );
@@ -124,6 +126,7 @@ describe("Review Screen graph", () => {
 
   it("offers no editing: nothing to drag, select, connect or delete", async () => {
     const graph = await renderGraph();
+    await within(graph).findAllByRole("img", { name: / → / });
 
     for (const node of fixtureFlow.nodes) {
       const card = within(graph).getByTestId(`flow-node-${node.id}`);
@@ -148,8 +151,8 @@ describe("Review Screen graph", () => {
   it("lets the reviewer zoom the picture, but never unlock editing", async () => {
     const graph = await renderGraph();
 
-    for (const label of ["Zoom avant", "Zoom arrière", "Voir tout le graphe"]) {
-      expect(within(graph).getByRole("button", { name: label })).toBeTruthy();
+    for (const label of ["Zoom in", "Zoom out", "Show the whole graph"]) {
+      expect(await within(graph).findByRole("button", { name: label })).toBeTruthy();
     }
     expect(within(graph).queryByRole("button", { name: /interactiv/i })).toBeNull();
   });

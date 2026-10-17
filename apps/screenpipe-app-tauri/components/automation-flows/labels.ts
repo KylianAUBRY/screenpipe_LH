@@ -5,48 +5,62 @@
 import type { ActivationEvent, FlowStatus, LastExecution } from "./api";
 
 export const STATUS_LABEL: Record<FlowStatus, string> = {
-  draft: "Brouillon",
-  active: "Active",
-  paused: "En pause",
-  needs_review: "À revoir",
+  draft: "Not on yet",
+  active: "On",
+  paused: "Paused",
+  needs_review: "Needs review",
+  dismissed: "Dismissed",
 };
 
 const EXECUTION_LABEL: Record<LastExecution["status"], string> = {
-  success: "réussie",
-  error: "en erreur",
-  running: "en cours",
+  success: "succeeded",
+  error: "failed",
+  running: "running",
 };
 
 const EVENT_LABEL: Record<ActivationEvent["event"], string> = {
-  activated: "Activé",
-  deactivated: "Désactivé",
-  paused_for_edit: "Mis en pause pour modification",
-  modified: "Modifié",
+  activated: "Turned on",
+  deactivated: "Paused",
+  paused_for_edit: "Paused for a change",
+  modified: "Changed",
+  dismissed: "Dismissed",
+  restored: "Restored",
 };
 
+const BY_LABEL: Record<ActivationEvent["by"], string> = {
+  user: "by you",
+  chat: "by the chat",
+  api: "outside screenpipe",
+};
+
+/** "Sat, Oct 17, 09:05 AM": English like the rest of the Flows copy. */
 export function formatDate(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
+  return date.toLocaleString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export function lastRunLabel(execution: LastExecution | null): string {
-  if (!execution) return "Jamais exécuté";
+  if (!execution) return "Never run";
   return `${formatDate(execution.startedAt)} · ${EXECUTION_LABEL[execution.status]}`;
 }
 
+/** "Turned on by you": what happened and who did it, for the History list. */
+export function activationEventLabel(entry: ActivationEvent): string {
+  return `${EVENT_LABEL[entry.event]} ${BY_LABEL[entry.by]}`;
+}
+
 export function activationLabel(entry: ActivationEvent): string {
-  const by =
-    entry.by === "chat" ? "par le chat" : entry.by === "api" ? "hors de Screenpipe" : "par vous";
-  return `${EVENT_LABEL[entry.event]} ${by} · ${formatDate(entry.at)} · version ${shortVersion(entry.versionId)}`;
+  return `${activationEventLabel(entry)} · ${formatDate(entry.at)} · version ${shortVersion(entry.versionId)}`;
 }
 
 /** n8n version ids are UUIDs: the first 8 characters tell them apart. */
 export function shortVersion(versionId: string): string {
   return versionId.slice(0, 8);
-}
-
-/** `n8n-nodes-base.emailReadImap` → `emailReadImap`. */
-export function shortNodeType(type: string): string {
-  return type.slice(type.lastIndexOf(".") + 1);
 }

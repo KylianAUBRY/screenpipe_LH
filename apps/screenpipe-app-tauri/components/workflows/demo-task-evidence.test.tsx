@@ -35,7 +35,7 @@ describe("embedded evidence (scripted Detected Task)", () => {
     await act(async () => {
       render(<WorkflowsApp platform={createFixtureWorkflowsPlatform(saved)} storageKey={null} reviewRequest={{ key: "demo", workflowId: DEMO_TASK_ID }} />);
     });
-    for (const [index, ticket] of ["NOVA-25 (Bug)", "NOVA-26 (Bug)", "NOVA-27 (Tâche)"].entries()) {
+    for (const [index, ticket] of ["NOVA-25 (Bug)", "NOVA-26 (Bug)", "NOVA-27 (Task)"].entries()) {
       expect((await screen.findByRole<HTMLInputElement>("textbox", { name: `Step ${index + 1} title` })).value).toContain(ticket);
       const step = screen.getByRole("article", { name: `Step ${index + 1}` });
       const images = within(step).getAllByRole("img", { name: /^Captured reference/ });
@@ -77,7 +77,7 @@ describe("recorded evidence (captures found on this machine)", () => {
     await waitFor(() => expect(openCapturedMoment).toHaveBeenCalledWith(4242, live.timestamp));
   });
 
-  it("says « Voir dans la timeline » in words on the Task Page that creates a Flow", async () => {
+  it("says View in timeline in words on the Task Page that creates a Flow", async () => {
     window.history.replaceState(null, "", "/home?mode=workflows");
     const live = { frameId: 4242, timestamp: "2026-10-17T02:07:12.733417Z" };
     const task = buildDetectedTask(evidence, at, { "r1-form": live });
@@ -97,10 +97,10 @@ describe("recorded evidence (captures found on this machine)", () => {
       render(<WorkflowsApp platform={platform} storageKey={null} reviewRequest={{ key: "demo-create", workflowId: DEMO_TASK_ID }} />);
     });
     const step = await screen.findByRole("article", { name: "Step 1" });
-    const open = await within(step).findByRole("button", { name: /^Voir dans la timeline/ });
+    const open = await within(step).findByRole("button", { name: /^View in timeline/ });
     // The words are on screen, not only in the accessible name.
-    expect(open).toHaveTextContent("Voir dans la timeline");
-    expect(within(step).getAllByRole("button", { name: /^Voir dans la timeline/ })).toHaveLength(1);
+    expect(open).toHaveTextContent("View in timeline");
+    expect(within(step).getAllByRole("button", { name: /^View in timeline/ })).toHaveLength(1);
     expect(within(step).queryByRole("button", { name: /^Open recording/ })).toBeNull();
     fireEvent.click(open);
     await waitFor(() => expect(openCapturedMoment).toHaveBeenCalledWith(4242, live.timestamp));

@@ -7,9 +7,10 @@
 // the page URL to see the other states. A `PUT /automation-flows/<id>` (what
 // the chat skill sends) switches the fixture off and leaves it needing
 // review. Like the engine, activation needs the UI credential and the
-// reviewed version. Never contacts n8n.
+// reviewed version, and Dismiss / Restore set the Flow aside and back.
+// Never contacts n8n.
 
-import type { Flow } from "./api";
+import type { Flow, FlowStatus } from "./api";
 import { DEMO_TASK_ID, fixtureFlow, summaryOf } from "./fixtures";
 
 /**
@@ -23,6 +24,40 @@ let mockFlow: Flow = structuredClone(fixtureFlow);
 
 export function resetAutomationFlowsMock() {
   mockFlow = structuredClone(fixtureFlow);
+}
+
+/** The engine's `derive_status` for a Flow n8n does not run. */
+function offStatus(flow: Flow): FlowStatus {
+  if (!flow.reviewedVersionId) return "draft";
+  return flow.reviewedVersionId === flow.versionId ? "paused" : "needs_review";
+}
+
+/** What the engine does on dismiss / restore, without n8n. */
+function dismissMockFlow(action: string, headers: Headers): Response {
+  if (action === "dismiss" && mockFlow.status === "active") {
+    return Response.json({ error: "flow_active" }, { status: 409 });
+  }
+  const dismissed = action === "dismiss";
+  if ((mockFlow.status === "dismissed") !== dismissed) {
+    const by =
+      headers.get("x-screenpipe-flow-activation") === BROWSER_MOCK_FLOW_ACTIVATION_KEY
+        ? "user"
+        : "api";
+    mockFlow = {
+      ...mockFlow,
+      status: dismissed ? "dismissed" : offStatus(mockFlow),
+      activationLog: [
+        ...mockFlow.activationLog,
+        {
+          at: new Date().toISOString(),
+          event: dismissed ? "dismissed" : "restored",
+          versionId: mockFlow.versionId,
+          by,
+        },
+      ],
+    };
+  }
+  return Response.json(mockFlow);
 }
 
 /** What the engine does on activate / deactivate, without n8n. */
@@ -84,7 +119,12 @@ function changeMockFlow(body: { summary?: string }): Response {
   log.push({ at, event: "modified", versionId, by: "chat" });
   mockFlow = {
     ...mockFlow,
-    status: mockFlow.reviewedVersionId ? "needs_review" : "draft",
+    status:
+      mockFlow.status === "dismissed"
+        ? "dismissed"
+        : mockFlow.reviewedVersionId
+          ? "needs_review"
+          : "draft",
     versionId,
     summary: body.summary?.trim() || mockFlow.summary,
     activationLog: log,
@@ -149,6 +189,9 @@ export function mockAutomationFlowsResponse(
       JSON.parse(String(init?.body ?? "{}")),
       new Headers(init?.headers),
     );
+  }
+  if (method === "POST" && flow && (action === "dismiss" || action === "restore")) {
+    return dismissMockFlow(action, new Headers(init?.headers));
   }
   return Response.json({ error: "flow_not_found" }, { status: 404 });
 }

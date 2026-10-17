@@ -724,9 +724,9 @@ export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailab
   const actionableFriction = workflow.bottlenecks.filter(isActionableBottleneck);
   const constraints = workflow.bottlenecks.filter((item) => !isActionableBottleneck(item));
   const agentActions = workflowAgentActions?.(workflow);
-  // The host can turn this task into an Automation Flow: required answers, French copy.
+  // The host can turn this task into an Automation Flow: required answers, worded buttons.
   const createsFlow = !!(platform.createAutomationFlow && workflow.id && (platform.canCreateAutomationFlow?.(workflow.id) ?? true));
-  const timelineLabel = createsFlow ? "Voir dans la timeline" : undefined;
+  const timelineLabel = createsFlow ? "View in timeline" : undefined;
   const workflowActions = <div className={styles.workflowActions}>{agentActions}{platform.guides && <button className={styles.skillButton} type="button" aria-label={hasGuide ? "Open SOP" : "Create SOP"} title={hasGuide ? "Open SOP" : "Create SOP"} onClick={() => setGuideOpen(true)}><BookOpen size={16} aria-hidden="true"/>{hasGuide ? ui("Open SOP") : ui("Create SOP")}</button>}{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? ui("Creating skill…") : skillSaved ? platform.skillInstallMode === "preview" ? ui("Skill preview") : ui("Skill installed") : skillDraft ? ui("Review skill") : ui("Create skill")}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div>;
   return (
     <>

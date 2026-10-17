@@ -10,8 +10,9 @@
 import { localFetch } from "@/lib/api";
 import { emit } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import type { WorkflowAnalysis, WorkflowScreenshot, WorkflowStage } from "@screenpipe/workflows-ui";
 
-export type FlowStatus = "draft" | "active" | "paused" | "needs_review";
+export type FlowStatus = "draft" | "active" | "paused" | "needs_review" | "dismissed";
 
 export type LastExecution = {
   status: "success" | "error" | "running";
@@ -40,7 +41,7 @@ export type FlowNode = {
 
 export type ActivationEvent = {
   at: string;
-  event: "activated" | "deactivated" | "paused_for_edit" | "modified";
+  event: "activated" | "deactivated" | "paused_for_edit" | "modified" | "dismissed" | "restored";
   versionId: string;
   /** "api": switched off by a local caller other than the Review Screen. */
   by: "user" | "chat" | "api";
@@ -54,7 +55,7 @@ export type Flow = FlowSummary & {
   sourceTaskId: string | null;
   /**
    * Where the Detected Task was seen (ticket 22): its first evidence moment,
-   * for « Voir dans la timeline ». `null` for a Flow created from the chat.
+   * for "View in timeline". `null` for a Flow created from the chat.
    */
   sourceMoment: SourceMoment | null;
   summary: string;
@@ -66,6 +67,76 @@ export type Flow = FlowSummary & {
   activationLog: ActivationEvent[];
 };
 
+/** A capture of one step, e.g. the email, the Jira form or the created ticket. */
+export type FlowCapture = {
+  /** A recorder frame when positive; an embedded image when negative. */
+  frameId: number;
+  timestamp: string;
+  app: string;
+  /** An image URL; `null` when the frame could not be loaded. */
+  image: string | null;
+};
+
+/**
+ * One time the user did the task by hand: a stage of the Detected Task the
+ * Flow came from, shown under "Learned from" with its captures in order.
+ */
+export type FlowRepetition = {
+  title: string;
+  captures: FlowCapture[];
+};
+
+/** Where the browser mock's Task Page keeps the demo task (workflows-ui fixture platform). */
+const TASK_PREVIEW_KEY = "screenpipe:fictional-workflow-editor-preview";
+
+/** The workflow catalog the Task Page reads its Detected Tasks from. */
+async function loadTaskCatalog(signal?: AbortSignal): Promise<WorkflowAnalysis | null> {
+  if (process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock") {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(TASK_PREVIEW_KEY) || "null");
+      return saved?.analysis?.workflows ? (saved as WorkflowAnalysis) : null;
+    } catch {
+      return null;
+    }
+  }
+  const { loadScheduledCatalog } = await import("@/lib/workflows/scheduled-discovery");
+  return loadScheduledCatalog(signal);
+}
+
+const EMBEDDED_IMAGE = /^data:image\/(jpeg|png|webp);base64,/;
+
+/** The stage's captures in order, without duplicates or unusable ones (workflows-ui `stageScreenshots`). */
+function stageCaptures(stage: WorkflowStage) {
+  const seen = new Set<number>();
+  return [...(stage.screenshots ?? []), ...(stage.screenshot ? [stage.screenshot] : [])].filter(
+    (image) =>
+      image &&
+      Number.isSafeInteger(image.frameId) &&
+      (image.frameId > 0 || EMBEDDED_IMAGE.test(image.dataUrl)) &&
+      !seen.has(image.frameId) &&
+      !!seen.add(image.frameId),
+  );
+}
+
+async function loadCapture(image: WorkflowScreenshot, signal?: AbortSignal): Promise<FlowCapture> {
+  const capture = { frameId: image.frameId, timestamp: image.timestamp, app: image.app };
+  if (EMBEDDED_IMAGE.test(image.dataUrl)) return { ...capture, image: image.dataUrl };
+  // The browser mock has no recorder frames to load.
+  if (process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV) return { ...capture, image: null };
+  try {
+    const { loadWorkflowScreenshot } = await import("@/lib/workflows/source-screenshot");
+    const loaded = await loadWorkflowScreenshot(
+      image.timestamp,
+      image.app,
+      signal ?? new AbortController().signal,
+      image.frameId,
+    );
+    return { ...capture, image: loaded?.dataUrl || null };
+  } catch {
+    return { ...capture, image: null };
+  }
+}
+
 export type FlowsErrorCode =
   | "n8n_not_configured"
   /** n8n answered but refused the API key of Connections → n8n. */
@@ -73,8 +144,10 @@ export type FlowsErrorCode =
   | "n8n_unreachable"
   /** n8n answered with another error (detail carries its message). */
   | "n8n_failed"
-  /** Switching off (Désactiver, a chat change): n8n is still processing an email; retry in a moment. */
+  /** Switching off (Pause, a chat change): n8n is still processing an email; retry in a moment. */
   | "flow_running"
+  /** Dismiss: the Flow is on; pause it first. */
+  | "flow_active"
   | "not_found"
   /** Activation: the n8n workflow changed since the user loaded it. */
   | "version_changed"
@@ -90,6 +163,7 @@ const SERVER_CODES: readonly FlowsErrorCode[] = [
   "n8n_unreachable",
   "n8n_failed",
   "flow_running",
+  "flow_active",
   "version_changed",
   "activation_failed",
   "activation_requires_user",
@@ -166,7 +240,7 @@ export const flowsApi = {
 
   /**
    * Activation: switches the n8n workflow on at `versionId`, the version the
-   * user reviewed. Only ever called from the user's click on "Activer"; the
+   * user reviewed. Only ever called from the user's click on "Turn on"; the
    * engine refuses it without the UI credential.
    */
   async activate(id: string, versionId: string) {
@@ -190,8 +264,34 @@ export const flowsApi = {
     });
   },
 
-  /** "Voir le graphe": the workflow in the n8n editor. */
+  /**
+   * Dismiss: sets a Flow that is not on aside, listed as Dismissed until
+   * restored. Nothing changes in n8n. Refused (`flow_active`) while it runs.
+   */
+  async dismiss(id: string) {
+    return request<Flow>(`/automation-flows/${encodeURIComponent(id)}/dismiss`, {
+      method: "POST",
+      headers: await clickHeaders(),
+      body: "{}",
+    });
+  },
+
+  /** Restore: a dismissed Flow gets back the status it had. */
+  async restore(id: string) {
+    return request<Flow>(`/automation-flows/${encodeURIComponent(id)}/restore`, {
+      method: "POST",
+      headers: await clickHeaders(),
+      body: "{}",
+    });
+  },
+
+  /** "Open in n8n": the workflow in the n8n editor. */
   async openInN8n(url: string) {
+    // The browser dev loop answers Tauri commands with nothing: a plain tab instead.
+    if (process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV) {
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
     try {
       await openUrl(url);
     } catch {
@@ -199,7 +299,23 @@ export const flowsApi = {
     }
   },
 
-  /** "Voir la tâche": the Task Page, through the notification deeplink. */
+  /**
+   * "Learned from": each repetition of the Detected Task `taskId`, read like
+   * the Task Page reads it. Empty when the catalog no longer holds the task.
+   */
+  async repetitions(taskId: string, signal?: AbortSignal): Promise<FlowRepetition[]> {
+    const catalog = await loadTaskCatalog(signal);
+    const task = catalog?.analysis.workflows.find((workflow) => workflow.id === taskId);
+    if (!task) return [];
+    return Promise.all(
+      task.stages.map(async (stage) => ({
+        title: stage.name,
+        captures: await Promise.all(stageCaptures(stage).map((image) => loadCapture(image, signal))),
+      })),
+    );
+  },
+
+  /** "View task": the Task Page, through the notification deeplink. */
   async openTaskPage(taskId: string) {
     const { routeNotificationDeeplink } = await import(
       "@/lib/notifications/actions"
@@ -210,7 +326,7 @@ export const flowsApi = {
   },
 
   /**
-   * "Voir dans la timeline": the moment the Flow's task was seen, through
+   * "View in timeline": the moment the Flow's task was seen, through
    * the same Timeline handoff as the Task Page evidence.
    */
   async openTimeline(moment: SourceMoment) {
@@ -224,9 +340,9 @@ export const flowsApi = {
   },
 
   /**
-   * "Demander une modification": the ScreenPipe chat, its composer prefilled
-   * with this Flow's id for the `automation-flows` skill. The user writes the
-   * change and sends it; the skill never activates the Flow.
+   * "Change it": the ScreenPipe chat, its composer prefilled with this
+   * Flow's id for the `automation-flows` skill. The user writes what is wrong
+   * or what would work better and sends it; the skill never activates the Flow.
    */
   async requestChange(flow: Pick<Flow, "id" | "name">) {
     const { showChatWithPrefill } = await import("@/lib/chat-utils");
@@ -240,7 +356,7 @@ export const flowsApi = {
   },
 
   /**
-   * "Ajouter": the ScreenPipe chat, its composer prefilled to create a Flow
+   * "New Flow": the ScreenPipe chat, its composer prefilled to create a Flow
    * with the `automation-flows` skill. The user describes the automation and
    * sends it; the skill imports it switched off and ends with its Review
    * Screen link.
@@ -259,11 +375,11 @@ export const flowsApi = {
 
 /** The prefilled chat prompt; the user completes it with the automation. */
 export const CREATION_PROMPT =
-  "Avec le skill automation-flows, crée un nouvel Automation Flow. Ce qu'il doit faire : ";
+  "Using the automation-flows skill, create a new Automation Flow. What it should do: ";
 
 /** The prefilled chat prompt; the user completes it with the change. */
 export function changeRequestPrompt(flow: Pick<Flow, "id" | "name">): string {
-  return `Avec le skill automation-flows, modifie l'Automation Flow « ${flow.name} » (id : ${flow.id}). Modification demandée : `;
+  return `Using the automation-flows skill, change the Automation Flow "${flow.name}" (id: ${flow.id}). What to change: `;
 }
 
 export type FlowsApi = typeof flowsApi;

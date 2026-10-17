@@ -11,7 +11,7 @@ import { readWorkflowAnswers } from "../../../../packages/workflows-ui/src/workf
 
 // The Task Page of the scripted Detected Task, opened as the notification does.
 const at = "2026-10-17T02:05:41Z";
-const CREATE = "Créer l'automatisation";
+const CREATE = "Create automation";
 
 async function openTaskPage(extra: Partial<WorkflowsPlatform> = {}, taskId = DEMO_TASK_ID) {
   window.localStorage.clear(); window.sessionStorage.clear();
@@ -36,7 +36,7 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     expect(create).toBeDisabled();
     answer(CLARIFICATION_QUESTIONS[0], "Oui, en Tâche.");
     expect(create).toBeDisabled();
-    answer(CLARIFICATION_QUESTIONS[1], "Bloquant = Highest, contournement = Medium, idée = Low.");
+    answer(CLARIFICATION_QUESTIONS[1], "Blocking = Highest, workaround = Medium, idea = Low.");
     expect(create).toBeEnabled();
     answer(CLARIFICATION_QUESTIONS[0], "   ");
     expect(create).toBeDisabled();
@@ -68,22 +68,34 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
 
   it("marks the questions as required when the host can create Flows", async () => {
     await openTaskPage({ createAutomationFlow: vi.fn(async () => {}) });
-    expect(screen.getByText("Réponses : 0 sur 2 · Obligatoires pour créer l'automatisation")).toBeVisible();
+    expect(screen.getByText("0 of 2 answered · Required to create the automation")).toBeVisible();
     expect(screen.queryByRole("checkbox", { name: "Not sure" })).toBeNull();
   });
 
-  it("shows the question block in French, like the rest of the demo flow", async () => {
+  it("words the question block for creating the automation", async () => {
     await openTaskPage({ createAutomationFlow: vi.fn(async () => {}), canCreateAutomationFlow: id => id === DEMO_TASK_ID });
-    const block = within(screen.getByRole("region", { name: "Questions et remarques" }));
-    expect(block.getByRole("heading", { name: "Aidez Screenpipe à bien comprendre cette tâche" })).toBeVisible();
-    expect(block.getByRole("button", { name: "Répondre à voix haute" })).toBeVisible();
-    expect(block.getByRole("textbox", { name: "Autre chose à savoir ?" })).toHaveAttribute("placeholder", "Autre remarque…");
-    expect(block.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] })).toHaveAttribute("placeholder", "Votre réponse…");
-    expect(block.getByRole("button", { name: "Enregistrer les réponses" })).toBeDisabled();
-    answer(CLARIFICATION_QUESTIONS[0], "Oui, en Tâche.");
-    expect(block.getByRole("button", { name: "Effacer" })).toBeVisible();
-    expect(block.getByLabelText("Répondu")).toBeVisible();
-    expect(block.queryByText(/answered|Save answers|Anything else|Your answer|Clear/)).toBeNull();
+    const block = within(screen.getByRole("region", { name: "Questions and feedback" }));
+    expect(block.getByRole("heading", { name: "Help screenpipe understand this task" })).toBeVisible();
+    expect(block.getByRole("button", { name: "Answer with voice" })).toBeVisible();
+    expect(block.getByRole("textbox", { name: "Anything else to know?" })).toHaveAttribute("placeholder", "Another remark…");
+    expect(block.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] })).toHaveAttribute("placeholder", "Your answer…");
+    // One way to confirm: creating the automation saves the answers first.
+    expect(block.queryByRole("button", { name: "Save answers" })).toBeNull();
+    expect(block.getByRole("button", { name: CREATE })).toBeDisabled();
+    answer(CLARIFICATION_QUESTIONS[0], "Yes, as a Task.");
+    expect(block.getByRole("button", { name: "Clear" })).toBeVisible();
+    expect(block.getByLabelText("Answered")).toBeVisible();
+    // Not the optional wording of other tasks.
+    expect(block.queryByText(/All optional|Help make this workflow accurate/)).toBeNull();
+  });
+
+  it("creates the automation when the answers are confirmed with Enter, not only saves them", async () => {
+    const createAutomationFlow = vi.fn(async () => {});
+    await openTaskPage({ createAutomationFlow });
+    answer(CLARIFICATION_QUESTIONS[0], "Yes, as a Task.");
+    answer(CLARIFICATION_QUESTIONS[1], "Blocking = Highest.");
+    fireEvent.submit(screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[1] }).closest("form")!);
+    await waitFor(() => expect(createAutomationFlow).toHaveBeenCalledTimes(1));
   });
 
   it("saves the answers, then asks the host once to create the Flow from the task", async () => {
@@ -125,16 +137,16 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
 
   it("shows why creation failed, keeps the answers and allows a retry", async () => {
     const createAutomationFlow = vi.fn()
-      .mockRejectedValueOnce(new Error("n8n n'est pas configuré."))
+      .mockRejectedValueOnce(new Error("n8n is not set up."))
       .mockResolvedValue(undefined);
     await openTaskPage({ createAutomationFlow });
     answer(CLARIFICATION_QUESTIONS[0], "Oui, en Tâche.");
     answer(CLARIFICATION_QUESTIONS[1], "Bloquant = Highest.");
     fireEvent.click(screen.getByRole("button", { name: CREATE }));
-    expect(await screen.findByText("n8n n'est pas configuré.")).toHaveAttribute("role", "alert");
+    expect(await screen.findByText("n8n is not set up.")).toHaveAttribute("role", "alert");
     expect(screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] })).toHaveValue("Oui, en Tâche.");
     fireEvent.click(screen.getByRole("button", { name: CREATE }));
     await waitFor(() => expect(createAutomationFlow).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.queryByText("n8n n'est pas configuré.")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("n8n is not set up.")).toBeNull());
   });
 });

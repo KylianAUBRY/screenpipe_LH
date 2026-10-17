@@ -17,7 +17,7 @@ const when = (value: string) => Number.isFinite(Date.parse(value))
 export function WorkflowStepEvidence({ workflow, stage, platform, timelineLabel }: {
   workflow: WorkflowMap; stage: WorkflowStage; platform: WorkflowsPlatform;
   /** Visible text of the button that opens a capture in the Timeline (the
-   * Automation Flow Task Page says « Voir dans la timeline »); icon only when absent. */
+   * Automation Flow Task Page says "View in timeline"); icon only when absent. */
   timelineLabel?: string;
 }) {
   const label = platform.openCapturedMoment ? timelineLabel : undefined;

@@ -30,6 +30,11 @@ const pausedFlow: Flow = {
     { ...activation, at: "2026-10-17T10:00:00.000Z", event: "deactivated" },
   ],
 };
+const dismissedFlow: Flow = {
+  ...fixtureFlow,
+  status: "dismissed",
+  activationLog: [{ ...activation, at: "2026-10-17T11:00:00.000Z", event: "dismissed" }],
+};
 
 function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
   return {
@@ -38,6 +43,9 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     createFromTask: vi.fn(async () => fixtureFlow),
     activate: vi.fn(async () => activeFlow),
     deactivate: vi.fn(async () => pausedFlow),
+    dismiss: vi.fn(async () => dismissedFlow),
+    restore: vi.fn(async () => fixtureFlow),
+    repetitions: vi.fn(async () => []),
     openInN8n: vi.fn(async () => {}),
     openTaskPage: vi.fn(async () => {}),
     openN8nConnection: vi.fn(async () => {}),
@@ -61,7 +69,7 @@ describe("Flows list", () => {
         summaryOf(fixtureFlow),
         {
           id: "wf2",
-          name: "Autre Flow",
+          name: "Other Flow",
           status: "active" as const,
           lastExecution: { status: "success" as const, startedAt: "2026-10-17T09:00:00.000Z" },
         },
@@ -72,11 +80,11 @@ describe("Flows list", () => {
 
     const draft = await screen.findByTestId(`flow-row-${fixtureFlow.id}`);
     expect(within(draft).getByText(fixtureFlow.name)).toBeTruthy();
-    expect(within(draft).getByText("Brouillon")).toBeTruthy();
-    expect(within(draft).getByText("Dernière exécution : Jamais exécuté")).toBeTruthy();
+    expect(within(draft).getByText("Not on yet")).toBeTruthy();
+    expect(within(draft).getByText("Last run: Never run")).toBeTruthy();
     const active = screen.getByTestId("flow-row-wf2");
-    expect(within(active).getByText("Active")).toBeTruthy();
-    expect(within(active).getByText(/réussie/)).toBeTruthy();
+    expect(within(active).getByText("On")).toBeTruthy();
+    expect(within(active).getByText(/succeeded/)).toBeTruthy();
 
     fireEvent.click(draft);
     expect(onSelectFlow).toHaveBeenCalledWith(fixtureFlow.id);
@@ -84,17 +92,17 @@ describe("Flows list", () => {
 
   it("says when there is no Flow yet", async () => {
     render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ list: vi.fn(async () => []) })} />);
-    expect(await screen.findByText(/Aucun Flow pour l'instant/)).toBeTruthy();
+    expect(await screen.findByText(/No Flows yet/)).toBeTruthy();
   });
 
   it.each([
     ["with Flows", [summaryOf(fixtureFlow)]],
     ["without Flows", []],
-  ])("opens the chat to create a Flow from Ajouter (%s)", async (_, flows) => {
+  ])("opens the chat to create a Flow from New Flow (%s)", async (_, flows) => {
     const api = fakeApi({ list: vi.fn(async () => flows) });
     render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Ajouter" }));
+    fireEvent.click(await screen.findByRole("button", { name: "New Flow" }));
 
     expect(api.requestCreation).toHaveBeenCalledTimes(1);
     // Opening the chat creates or switches nothing by itself.
@@ -110,10 +118,10 @@ describe("Flows list", () => {
     });
     render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Ajouter" }));
+    fireEvent.click(await screen.findByRole("button", { name: "New Flow" }));
 
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText(/Impossible d'ouvrir le chat/)).toBeTruthy();
+    expect(within(alert).getByText(/Could not open the chat/)).toBeTruthy();
   });
 
   it("explains that n8n is not configured and links to Connections", async () => {
@@ -125,8 +133,8 @@ describe("Flows list", () => {
     render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
 
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("n8n n'est pas configuré")).toBeTruthy();
-    fireEvent.click(within(alert).getByRole("button", { name: "Ouvrir Connexions" }));
+    expect(within(alert).getByText("n8n is not set up")).toBeTruthy();
+    fireEvent.click(within(alert).getByRole("button", { name: "Open Connections" }));
     expect(api.openN8nConnection).toHaveBeenCalled();
   });
 
@@ -139,11 +147,47 @@ describe("Flows list", () => {
     render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
 
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("n8n a refusé la clé API")).toBeTruthy();
-    expect(within(alert).getByText(/clé API.*Connexions → n8n/)).toBeTruthy();
-    expect(within(alert).queryByText("Impossible de joindre n8n")).toBeNull();
-    fireEvent.click(within(alert).getByRole("button", { name: "Ouvrir Connexions" }));
+    expect(within(alert).getByText("n8n refused the API key")).toBeTruthy();
+    expect(within(alert).getByText(/API key.*Connections → n8n/)).toBeTruthy();
+    expect(within(alert).queryByText("Could not reach n8n")).toBeNull();
+    fireEvent.click(within(alert).getByRole("button", { name: "Open Connections" }));
     expect(api.openN8nConnection).toHaveBeenCalled();
+  });
+
+  it("groups the Flows by status, what waits for the user first", async () => {
+    const flows = [
+      { ...summaryOf(fixtureFlow), id: "paused", name: "Paused Flow", status: "paused" as const },
+      { ...summaryOf(fixtureFlow), id: "dismissed", name: "Dismissed Flow", status: "dismissed" as const },
+      { ...summaryOf(fixtureFlow), id: "draft", name: "Draft Flow" },
+      { ...summaryOf(fixtureFlow), id: "review", name: "Changed Flow", status: "needs_review" as const },
+      { ...summaryOf(fixtureFlow), id: "on", name: "Running Flow", status: "active" as const },
+    ];
+    render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ list: vi.fn(async () => flows) })} />);
+    await screen.findByTestId("flow-row-draft");
+
+    const groups = screen.getAllByTestId(/^flows-group-/).map((group) => group.getAttribute("data-testid"));
+    expect(groups).toEqual([
+      "flows-group-needs_review",
+      "flows-group-draft",
+      "flows-group-active",
+      "flows-group-paused",
+      "flows-group-dismissed",
+    ]);
+    expect(within(screen.getByTestId("flows-group-draft")).getByRole("heading").textContent).toBe("Not on yet 1");
+  });
+
+  it("restores a dismissed Flow from its row and reloads the list", async () => {
+    const dismissed = { ...summaryOf(fixtureFlow), status: "dismissed" as const };
+    const list = vi.fn().mockResolvedValueOnce([dismissed]).mockResolvedValue([summaryOf(fixtureFlow)]);
+    const onSelectFlow = vi.fn();
+    const api = fakeApi({ list });
+    render(<FlowsTab flowId={null} onSelectFlow={onSelectFlow} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: `Restore ${fixtureFlow.name}` }));
+
+    await waitFor(() => expect(screen.getByTestId("flows-group-draft")).toBeTruthy());
+    expect(api.restore).toHaveBeenCalledWith(fixtureFlow.id);
+    expect(onSelectFlow).not.toHaveBeenCalled();
   });
 
   it("explains that n8n is unreachable and retries", async () => {
@@ -160,9 +204,9 @@ describe("Flows list", () => {
     render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={api} />);
 
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("Impossible de joindre n8n")).toBeTruthy();
+    expect(within(alert).getByText("Could not reach n8n")).toBeTruthy();
     expect(within(alert).getByText(/cannot reach n8n/)).toBeTruthy();
-    fireEvent.click(within(alert).getByRole("button", { name: "Réessayer" }));
+    fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
 
     expect(await screen.findByTestId(`flow-row-${fixtureFlow.id}`)).toBeTruthy();
     expect(calls).toBe(2);
@@ -177,26 +221,26 @@ describe("Review Screen", () => {
     expect(await screen.findByRole("heading", { name: fixtureFlow.name })).toBeTruthy();
     expect(api.get).toHaveBeenCalledWith(fixtureFlow.id);
     expect(screen.getByText(fixtureFlow.summary)).toBeTruthy();
-    expect(screen.getByTestId("flow-status").textContent).toBe("Brouillon");
+    expect(screen.getByTestId("flow-status").textContent).toBe("Not on yet");
     for (const node of fixtureFlow.nodes) {
       const item = screen.getByTestId(`flow-node-${node.id}`);
       expect(within(item).getByText(node.name)).toBeTruthy();
       expect(within(item).getByText(node.sentence!)).toBeTruthy();
     }
-    expect(screen.getByText("Jamais activé.")).toBeTruthy();
+    expect(screen.getByText("Never turned on.")).toBeTruthy();
   });
 
   it.each([
-    ["success", "réussie"],
-    ["error", "en erreur"],
-    ["running", "en cours"],
+    ["success", "succeeded"],
+    ["error", "failed"],
+    ["running", "running"],
   ] as const)("shows when the Flow last ran and that it was %s", async (status, label) => {
     const startedAt = "2026-10-17T09:05:00.000Z";
     const ran: Flow = { ...activeFlow, lastExecution: { status, startedAt } };
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => ran) })} />);
 
-    // 17 October in any time zone from UTC-9 to UTC+14; the hour follows it.
-    const line = new RegExp(`^Dernière exécution : 17/10/2026 \\d{2}:\\d{2} · ${label}$`);
+    // Saturday 17 October in any time zone from UTC-9 to UTC+14; the hour follows it.
+    const line = new RegExp(`^Last run: Sat, Oct 17, \\d{2}:\\d{2} [AP]M · ${label}$`);
     expect(await screen.findByText(line)).toBeTruthy();
   });
 
@@ -204,17 +248,17 @@ describe("Review Screen", () => {
     const api = fakeApi();
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Voir le graphe" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open in n8n" }));
     expect(api.openInN8n).toHaveBeenCalledWith(fixtureFlow.n8nUrl);
-    fireEvent.click(screen.getByRole("button", { name: "Voir la tâche" }));
+    fireEvent.click(screen.getByRole("button", { name: "View task" }));
     expect(api.openTaskPage).toHaveBeenCalledWith(fixtureFlow.sourceTaskId);
   });
 
   it("hides the task link for a Flow without a source task", async () => {
     const chatFlow: Flow = { ...fixtureFlow, sourceTaskId: null };
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => chatFlow) })} />);
-    await screen.findByRole("button", { name: "Voir le graphe" });
-    expect(screen.queryByRole("button", { name: "Voir la tâche" })).toBeNull();
+    await screen.findByRole("button", { name: "Open in n8n" });
+    expect(screen.queryByRole("button", { name: "View task" })).toBeNull();
   });
 
   it("opens the moment the task was seen in the timeline", async () => {
@@ -222,7 +266,7 @@ describe("Review Screen", () => {
     const api = fakeApi({ get: vi.fn(async () => ({ ...fixtureFlow, sourceMoment: moment })) });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Voir dans la timeline" }));
+    fireEvent.click(await screen.findByRole("button", { name: "View in timeline" }));
 
     expect(api.openTimeline).toHaveBeenCalledWith(moment);
     expect(api.activate).not.toHaveBeenCalled();
@@ -231,8 +275,8 @@ describe("Review Screen", () => {
   it("offers the timeline only when the engine knows where the task was seen", async () => {
     const api = fakeApi({ get: vi.fn(async () => ({ ...fixtureFlow, sourceTaskId: null, sourceMoment: null })) });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
-    await screen.findByRole("button", { name: "Voir le graphe" });
-    expect(screen.queryByRole("button", { name: "Voir dans la timeline" })).toBeNull();
+    await screen.findByRole("button", { name: "Open in n8n" });
+    expect(screen.queryByRole("button", { name: "View in timeline" })).toBeNull();
   });
 
   it("says when the timeline cannot be opened", async () => {
@@ -244,10 +288,10 @@ describe("Review Screen", () => {
     });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Voir dans la timeline" }));
+    fireEvent.click(await screen.findByRole("button", { name: "View in timeline" }));
 
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText(/Impossible d'ouvrir ce moment dans la timeline/)).toBeTruthy();
+    expect(within(alert).getByText(/Could not open this moment in the timeline/)).toBeTruthy();
   });
 
   it("flags a Flow that needs review and lists its activation history", async () => {
@@ -262,16 +306,16 @@ describe("Review Screen", () => {
     };
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => changed) })} />);
 
-    expect(await screen.findByText(/a changé depuis sa dernière activation/)).toBeTruthy();
-    expect(screen.getByTestId("flow-status").textContent).toBe("À revoir");
-    expect(screen.getByText(/^Activé par vous/)).toBeTruthy();
-    expect(screen.getByText(/^Mis en pause pour modification par le chat/)).toBeTruthy();
+    expect(await screen.findByText(/changed since it was last on/)).toBeTruthy();
+    expect(screen.getByTestId("flow-status").textContent).toBe("Needs review");
+    expect(screen.getByText(/^Turned on by you/)).toBeTruthy();
+    expect(screen.getByText(/^Paused for a change by the chat/)).toBeTruthy();
   });
 
   it("goes back to the list", async () => {
     const onSelectFlow = vi.fn();
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={onSelectFlow} api={fakeApi()} />);
-    fireEvent.click(await screen.findByRole("button", { name: /Tous les Flows/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /All Flows/ }));
     expect(onSelectFlow).toHaveBeenCalledWith(null);
   });
 
@@ -279,30 +323,32 @@ describe("Review Screen", () => {
     const api = fakeApi();
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Activer" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
 
-    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("Active"));
+    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("On"));
     expect(api.activate).toHaveBeenCalledTimes(1);
     expect(api.activate).toHaveBeenCalledWith(fixtureFlow.id, fixtureFlow.versionId);
-    expect(screen.getByText(/^Activé par vous/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Désactiver" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Activer" })).toBeNull();
+    expect(screen.getByText(/^Turned on by you/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Turn on" })).toBeNull();
   });
 
   it("deactivates an Active Flow and lists who did what, when, on which version", async () => {
     const api = fakeApi({ get: vi.fn(async () => activeFlow) });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Désactiver" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Pause" }));
 
-    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("En pause"));
+    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("Paused"));
     expect(api.deactivate).toHaveBeenCalledWith(fixtureFlow.id);
-    const history = screen.getByRole("list", { name: "Historique d'activation" });
+    const history = screen.getByRole("list", { name: "History" });
     const entries = within(history).getAllByRole("listitem").map((item) => item.textContent);
+    // Newest first, with the date and no version id.
     expect(entries).toHaveLength(2);
-    expect(entries[0]).toMatch(/^Activé par vous · .+ · version fixture-/);
-    expect(entries[1]).toMatch(/^Désactivé par vous · .+ · version fixture-/);
-    expect(screen.getByRole("button", { name: "Activer" })).toBeTruthy();
+    expect(entries[0]).toMatch(/^Paused by youSat, Oct 17, \d{2}:\d{2} [AP]M$/);
+    expect(entries[1]).toMatch(/^Turned on by you/);
+    expect(entries.join(" ")).not.toMatch(/version|fixture-/);
+    expect(screen.getByRole("button", { name: "Turn on" })).toBeTruthy();
   });
 
   it("says why n8n refused the activation and leaves the Flow as it was", async () => {
@@ -313,16 +359,16 @@ describe("Review Screen", () => {
     });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Activer" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
 
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("Activation impossible")).toBeTruthy();
+    expect(within(alert).getByText("Could not turn it on")).toBeTruthy();
     expect(within(alert).getByText(/IMAP credentials are invalid/)).toBeTruthy();
-    expect(screen.getByTestId("flow-status").textContent).toBe("Brouillon");
-    expect((screen.getByRole("button", { name: "Activer" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByTestId("flow-status").textContent).toBe("Not on yet");
+    expect((screen.getByRole("button", { name: "Turn on" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("asks to try again when n8n is still processing an email at Désactiver", async () => {
+  it("asks to try again when n8n is still processing an email at Pause", async () => {
     const api = fakeApi({
       get: vi.fn(async () => activeFlow),
       deactivate: vi.fn(async () => {
@@ -331,12 +377,12 @@ describe("Review Screen", () => {
     });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Désactiver" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Pause" }));
 
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("Désactivation impossible")).toBeTruthy();
-    expect(within(alert).getByText(/traite encore un e-mail.*Réessayez dans un instant/)).toBeTruthy();
-    expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+    expect(within(alert).getByText("Could not pause it")).toBeTruthy();
+    expect(within(alert).getByText(/still processing an email.*Try again in a moment/)).toBeTruthy();
+    expect(screen.getByTestId("flow-status").textContent).toBe("On");
   });
 
   it("says when the Flow was switched off outside Screenpipe", async () => {
@@ -346,9 +392,9 @@ describe("Review Screen", () => {
     };
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => offElsewhere) })} />);
 
-    const history = await screen.findByRole("list", { name: "Historique d'activation" });
+    const history = await screen.findByRole("list", { name: "History" });
     const entries = within(history).getAllByRole("listitem").map((item) => item.textContent);
-    expect(entries[1]).toMatch(/^Désactivé hors de Screenpipe · .+ · version fixture-/);
+    expect(entries[0]).toMatch(/^Paused outside screenpipe/);
   });
 
   it("reloads a Flow that changed since it was opened instead of activating it", async () => {
@@ -362,11 +408,11 @@ describe("Review Screen", () => {
     });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Activer" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
 
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText(/a changé depuis que vous l'avez ouvert/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Activer" }));
+    expect(await screen.findByText(/changed since you opened it/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
     expect(api.activate).toHaveBeenLastCalledWith(fixtureFlow.id, "fixture-version-2");
   });
 
@@ -375,9 +421,9 @@ describe("Review Screen", () => {
     const api = fakeApi({ get: vi.fn(async () => edited) });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    expect(await screen.findByText(/modifié directement dans n8n/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Désactiver" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Activer cette version" }));
+    expect(await screen.findByText(/changed directly in n8n/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Turn on this version" }));
     expect(api.activate).toHaveBeenCalledWith(fixtureFlow.id, "fixture-version-2");
   });
 
@@ -394,14 +440,104 @@ describe("Review Screen", () => {
       list.unmount();
       expect(api.activate).not.toHaveBeenCalled();
       expect(api.deactivate).not.toHaveBeenCalled();
+      expect(api.dismiss).not.toHaveBeenCalled();
+      expect(api.restore).not.toHaveBeenCalled();
     }
+  });
+
+  it("pins the header with the status and the switch while the page scrolls", async () => {
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi()} />);
+    const header = await screen.findByTestId("flow-header");
+    expect(header.className).toMatch(/sticky/);
+    expect(within(header).getByRole("heading", { name: fixtureFlow.name })).toBeTruthy();
+    expect(within(header).getByText("Last run: Never run")).toBeTruthy();
+    for (const name of ["Dismiss", "Open in n8n", "Turn on"]) {
+      expect(within(header).getByRole("button", { name })).toBeTruthy();
+    }
+  });
+
+  it("dismisses a Flow that is not on and goes back to the list", async () => {
+    const onSelectFlow = vi.fn();
+    const api = fakeApi();
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={onSelectFlow} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
+
+    await waitFor(() => expect(onSelectFlow).toHaveBeenCalledWith(null));
+    expect(api.dismiss).toHaveBeenCalledWith(fixtureFlow.id);
+    expect(api.activate).not.toHaveBeenCalled();
+  });
+
+  it("never offers to dismiss a Flow that is on", async () => {
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => activeFlow) })} />);
+    await screen.findByRole("button", { name: "Pause" });
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+  });
+
+  it("restores a dismissed Flow from its Review Screen instead of turning it on", async () => {
+    const api = fakeApi({ get: vi.fn(async () => dismissedFlow) });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    expect(await screen.findByTestId("flow-status")).toBeTruthy();
+    expect(screen.getByTestId("flow-status").textContent).toBe("Dismissed");
+    expect(screen.queryByRole("button", { name: "Turn on" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(screen.getByText(/^Dismissed by you/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("Not on yet"));
+    expect(api.restore).toHaveBeenCalledWith(fixtureFlow.id);
+    expect(screen.getByRole("button", { name: "Turn on" })).toBeTruthy();
+  });
+
+  it("shows each time the user did the task by hand, as a strip of its captures", async () => {
+    const email = { frameId: -1, timestamp: "2026-10-17T02:05:41Z", app: "Gmail", image: "data:image/webp;base64,AAAA" };
+    const ticket = { frameId: 4242, timestamp: "2026-10-17T02:08:36Z", app: "Jira", image: "data:image/png;base64,BBBB" };
+    const repetitions = vi.fn(async () => [
+      { title: "Repetition 1 · Arthur Noteris → NOVA-25 (Bug)", captures: [email, { ...email, frameId: -2, app: "Jira" }, ticket] },
+      { title: "Repetition 2 · Loris Omont → NOVA-26 (Bug)", captures: [] },
+    ]);
+    const api = fakeApi({ repetitions });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    const cards = await screen.findAllByTestId("flow-repetition");
+    expect(repetitions).toHaveBeenCalledWith(fixtureFlow.sourceTaskId, expect.anything());
+    expect(cards).toHaveLength(2);
+    expect(within(cards[0]).getAllByRole("button", { name: /^Open capture \d of 3/ })).toHaveLength(3);
+    expect(within(cards[0]).getByText(/Oct 17, .+ · Gmail, Jira$/)).toBeTruthy();
+    expect(within(cards[1]).getByText("No capture")).toBeTruthy();
+
+    fireEvent.click(within(screen.getByTestId("flow-learned-from")).getByRole("button", { name: "View task" }));
+    expect(api.openTaskPage).toHaveBeenCalledWith(fixtureFlow.sourceTaskId);
+  });
+
+  it("opens a capture large, with the timeline only for a recorder frame of this machine", async () => {
+    const email = { frameId: -1, timestamp: "2026-10-17T02:05:41Z", app: "Gmail", image: "data:image/webp;base64,AAAA" };
+    const ticket = { frameId: 4242, timestamp: "2026-10-17T02:08:36Z", app: "Jira", image: "data:image/png;base64,BBBB" };
+    const api = fakeApi({
+      repetitions: vi.fn(async () => [{ title: "Repetition 1 · Arthur Noteris → NOVA-25 (Bug)", captures: [email, ticket] }]),
+    });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Open capture 1 of 2/ }));
+    const dialog = await screen.findByTestId("flow-capture-dialog");
+    expect(within(dialog).getByText(/^1 of 2 · .+ · Gmail$/)).toBeTruthy();
+    expect(within(dialog).getByRole("img", { name: /^Gmail, / }).getAttribute("src")).toBe(email.image);
+    // An embedded demo image comes from another recording: no timeline moment.
+    expect(within(dialog).queryByRole("button", { name: "View in timeline" })).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Capture 2: Jira" }));
+    expect(within(dialog).getByText(/^2 of 2 · .+ · Jira$/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "View in timeline" }));
+    expect(api.openTimeline).toHaveBeenCalledWith({ frameId: 4242, timestamp: ticket.timestamp });
   });
 
   it("opens the chat about this Flow to request a change", async () => {
     const api = fakeApi({ get: vi.fn(async () => activeFlow) });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Demander une modification" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Change it" }));
 
     expect(api.requestChange).toHaveBeenCalledTimes(1);
     expect(api.requestChange).toHaveBeenCalledWith(
@@ -410,7 +546,7 @@ describe("Review Screen", () => {
     // Asking for a change switches nothing by itself.
     expect(api.activate).not.toHaveBeenCalled();
     expect(api.deactivate).not.toHaveBeenCalled();
-    expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+    expect(screen.getByTestId("flow-status").textContent).toBe("On");
   });
 
   it("says when the chat cannot be opened", async () => {
@@ -421,10 +557,10 @@ describe("Review Screen", () => {
     });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Demander une modification" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Change it" }));
 
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText(/Impossible d'ouvrir le chat/)).toBeTruthy();
+    expect(within(alert).getByText(/Could not open the chat/)).toBeTruthy();
   });
 
   it("asks to review a Flow the chat changed until the user activates it again", async () => {
@@ -459,16 +595,16 @@ describe("Review Screen", () => {
     });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
-    expect(await screen.findByText(/a changé depuis sa dernière activation/)).toBeTruthy();
-    expect(screen.getByTestId("flow-status").textContent).toBe("À revoir");
-    expect(screen.getByText(/^Mis en pause pour modification par le chat/)).toBeTruthy();
-    expect(screen.getByText(/^Modifié par le chat · .+ · version fixture-/)).toBeTruthy();
+    expect(await screen.findByText(/changed since it was last on/)).toBeTruthy();
+    expect(screen.getByTestId("flow-status").textContent).toBe("Needs review");
+    expect(screen.getByText(/^Paused for a change by the chat/)).toBeTruthy();
+    expect(screen.getByText(/^Changed by the chat/)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Activer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
 
-    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("Active"));
+    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("On"));
     expect(api.activate).toHaveBeenCalledWith(fixtureFlow.id, "fixture-version-2");
-    expect(screen.queryByText(/a changé depuis sa dernière activation/)).toBeNull();
+    expect(screen.queryByText(/changed since it was last on/)).toBeNull();
   });
 
   it("shows the n8n message when the Flow cannot be loaded", async () => {
@@ -478,7 +614,7 @@ describe("Review Screen", () => {
       }),
     });
     render(<FlowsTab flowId="wf1" onSelectFlow={vi.fn()} api={api} />);
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("n8n n'est pas configuré"));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("n8n is not set up"));
   });
 });
 
@@ -500,10 +636,10 @@ describe("Design rules (docs/DESIGN.md)", () => {
     );
     await screen.findByRole("heading", { name: fixtureFlow.name });
     expect(forcedCasing(review.container)).toEqual([]);
-    for (const name of ["Désactiver", "Voir le graphe", "Voir la tâche", "Demander une modification"]) {
+    for (const name of ["Pause", "Open in n8n", "View task", "Change it"]) {
       expect(screen.getByRole("button", { name })).toBeTruthy();
     }
-    expect(screen.getByRole("heading", { name: "Ce que fait ce Flow" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "What this Flow does" })).toBeTruthy();
   });
 
   it("lights phosphor only while the Flow is running, not because it is active", async () => {
@@ -513,7 +649,7 @@ describe("Design rules (docs/DESIGN.md)", () => {
 
     const first = render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => idle) })} />);
     await screen.findByRole("heading", { name: fixtureFlow.name });
-    expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+    expect(screen.getByTestId("flow-status").textContent).toBe("On");
     expect(marker()).not.toMatch(/phosphor/);
     first.unmount();
 
@@ -521,7 +657,7 @@ describe("Design rules (docs/DESIGN.md)", () => {
     await screen.findByRole("heading", { name: fixtureFlow.name });
     expect(marker()).toMatch(/phosphor/);
     // Not by color alone: the last run says it is running.
-    expect(screen.getByText(/^Dernière exécution : .+ · en cours$/)).toBeTruthy();
+    expect(screen.getByText(/^Last run: .+ · running$/)).toBeTruthy();
   });
 
   it("marks a running Flow in the list the same way", async () => {
@@ -554,16 +690,16 @@ describe("Freshness", () => {
     const { get, answer } = slowSecondGet(fixtureFlow);
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get })} />);
     await screen.findByRole("heading", { name: fixtureFlow.name });
-    expect(screen.getByText("Dernière exécution : Jamais exécuté")).toBeTruthy();
+    expect(screen.getByText("Last run: Never run")).toBeTruthy();
 
     fireEvent.focus(window);
 
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
     // While n8n answers, the Flow stays on screen: no loading state.
     expect(screen.getByRole("heading", { name: fixtureFlow.name })).toBeTruthy();
-    expect(screen.queryByText("Chargement du Flow…")).toBeNull();
+    expect(screen.queryByText("Loading the Flow…")).toBeNull();
     await answer(ranOnce);
-    expect(screen.getByText(/^Dernière exécution : .+ · réussie$/)).toBeTruthy();
+    expect(screen.getByText(/^Last run: .+ · succeeded$/)).toBeTruthy();
   });
 
   it("reloads the Review Screen when the window becomes visible again", async () => {
@@ -575,7 +711,7 @@ describe("Freshness", () => {
     expect(get).toHaveBeenCalledTimes(1);
 
     setVisibility("visible");
-    expect(await screen.findByText(/^Dernière exécution : .+ · réussie$/)).toBeTruthy();
+    expect(await screen.findByText(/^Last run: .+ · succeeded$/)).toBeTruthy();
     expect(get).toHaveBeenCalledTimes(2);
   });
 
@@ -586,19 +722,19 @@ describe("Freshness", () => {
     fireEvent.focus(window);
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
 
-    fireEvent.click(screen.getByRole("button", { name: "Activer" }));
-    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("Active"));
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("On"));
     // The read sent before the click still holds the Draft.
     await answer(fixtureFlow);
 
-    expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+    expect(screen.getByTestId("flow-status").textContent).toBe("On");
   });
 
   it("activates only the version the user loaded, even after a background read brings another", async () => {
     const edited: Flow = {
       ...fixtureFlow,
       versionId: "fixture-version-2",
-      summary: "Résumé modifié dans n8n.",
+      summary: "Summary changed in n8n.",
     };
     const get = vi.fn().mockResolvedValueOnce(fixtureFlow).mockResolvedValue(edited);
     const activate = vi
@@ -607,27 +743,27 @@ describe("Freshness", () => {
       .mockResolvedValue({ ...edited, status: "active", reviewedVersionId: edited.versionId });
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get, activate })} />);
     await screen.findByRole("heading", { name: fixtureFlow.name });
-    expect(screen.queryByText(/a changé depuis que vous l'avez ouvert/)).toBeNull();
+    expect(screen.queryByText(/changed since you opened it/)).toBeNull();
 
     fireEvent.focus(window);
 
     // The background read shows the new version and says it changed.
-    expect(await screen.findByText("Résumé modifié dans n8n.")).toBeTruthy();
-    expect(screen.getByText(/a changé depuis que vous l'avez ouvert/)).toBeTruthy();
+    expect(await screen.findByText("Summary changed in n8n.")).toBeTruthy();
+    expect(screen.getByText(/changed since you opened it/)).toBeTruthy();
 
-    // Activer still names the version the user loaded: the engine refuses it.
-    fireEvent.click(screen.getByRole("button", { name: "Activer" }));
+    // Turn on still names the version the user loaded: the engine refuses it.
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
     await waitFor(() => expect(activate).toHaveBeenCalledTimes(1));
     expect(activate).toHaveBeenLastCalledWith(fixtureFlow.id, fixtureFlow.versionId);
     await waitFor(() => expect(get).toHaveBeenCalledTimes(3));
-    expect(screen.getByTestId("flow-status").textContent).toBe("Brouillon");
-    expect(screen.getByText(/a changé depuis que vous l'avez ouvert/)).toBeTruthy();
+    expect(screen.getByTestId("flow-status").textContent).toBe("Not on yet");
+    expect(screen.getByText(/changed since you opened it/)).toBeTruthy();
 
     // That reload is the user's: the next click activates what they now read.
-    fireEvent.click(screen.getByRole("button", { name: "Activer" }));
-    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("Active"));
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("On"));
     expect(activate).toHaveBeenLastCalledWith(fixtureFlow.id, "fixture-version-2");
-    expect(screen.queryByText(/a changé depuis que vous l'avez ouvert/)).toBeNull();
+    expect(screen.queryByText(/changed since you opened it/)).toBeNull();
   });
 
   it("keeps the Flow on screen when a background read fails", async () => {
@@ -643,7 +779,7 @@ describe("Freshness", () => {
     await act(async () => {});
 
     expect(screen.getByRole("heading", { name: fixtureFlow.name })).toBeTruthy();
-    expect(screen.queryByText("Impossible de joindre n8n")).toBeNull();
+    expect(screen.queryByText("Could not reach n8n")).toBeNull();
   });
 
   describe("on an interval", () => {
@@ -658,7 +794,7 @@ describe("Freshness", () => {
       await screen.findByRole("heading", { name: fixtureFlow.name });
 
       await tick(REFRESH_INTERVAL_MS);
-      expect(await screen.findByText(/^Dernière exécution : .+ · réussie$/)).toBeTruthy();
+      expect(await screen.findByText(/^Last run: .+ · succeeded$/)).toBeTruthy();
       expect(get).toHaveBeenCalledTimes(2);
 
       setVisibility("hidden");
@@ -671,11 +807,15 @@ describe("Freshness", () => {
       const list = vi.fn().mockResolvedValueOnce([summaryOf(fixtureFlow)]).mockResolvedValue([ran]);
       render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ list })} />);
       const row = await screen.findByTestId(`flow-row-${fixtureFlow.id}`);
-      expect(within(row).getByText("Brouillon")).toBeTruthy();
+      expect(within(row).getByText("Not on yet")).toBeTruthy();
 
       await tick(REFRESH_INTERVAL_MS);
 
-      expect(await within(row).findByText("Active")).toBeTruthy();
+      // Switched on, it moves to the "On" group.
+      await waitFor(() =>
+        expect(within(screen.getByTestId("flows-group-active")).getByText(fixtureFlow.name)).toBeTruthy(),
+      );
+      expect(screen.queryByTestId("flows-group-draft")).toBeNull();
       expect(list).toHaveBeenCalledTimes(2);
     });
   });

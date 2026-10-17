@@ -5,7 +5,7 @@
 "use client";
 
 // Read-only picture of a Flow's n8n workflow for the Review Screen: each node
-// with its one-sentence explanation. Editing happens in n8n ("Voir le graphe").
+// with its one-sentence explanation. Editing happens in n8n ("Open in n8n").
 
 import React, { useMemo } from "react";
 import {
@@ -20,7 +20,6 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import type { Flow, FlowNode } from "./api";
-import { shortNodeType } from "./labels";
 
 // Cards are narrow so the fitted picture stays readable; a sentence makes
 // them taller than n8n's ~100 px nodes, so rows are spread further apart.
@@ -59,15 +58,15 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
           className={HIDDEN_HANDLE}
         />
       ))}
+      {/* The step in plain words; the n8n node type is for n8n, not the reader. */}
       <p className="text-sm font-medium leading-tight">{node.name}</p>
-      <p className="mt-0.5 break-all font-mono text-[10px] text-muted-foreground">{shortNodeType(node.type)}</p>
       <p className="mt-1.5 break-words text-xs leading-snug text-muted-foreground">
-        {node.sentence ?? "Pas d'explication pour cette étape."}
+        {node.sentence ?? "No explanation for this step."}
       </p>
       {/* An engine from before ticket 22 sends no facts. */}
       {(node.facts ?? []).length > 0 && (
         <ul
-          aria-label="Détails fixes"
+          aria-label="Fixed details"
           className="mt-1.5 space-y-0.5 border-t border-border pt-1.5 font-mono text-[10px] leading-snug text-muted-foreground"
         >
           {node.facts.map((fact) => (
@@ -84,10 +83,10 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
 const NODE_TYPES = { step: StepCard };
 
 const ARIA_LABELS = {
-  "controls.ariaLabel": "Zoom du graphe",
-  "controls.zoomIn.ariaLabel": "Zoom avant",
-  "controls.zoomOut.ariaLabel": "Zoom arrière",
-  "controls.fitView.ariaLabel": "Voir tout le graphe",
+  "controls.ariaLabel": "Graph zoom",
+  "controls.zoomIn.ariaLabel": "Zoom in",
+  "controls.zoomOut.ariaLabel": "Zoom out",
+  "controls.fitView.ariaLabel": "Show the whole graph",
 };
 
 const CONTROLS_STYLE = {
@@ -153,7 +152,7 @@ export function FlowGraph({ nodes, edges }: { nodes: FlowNode[]; edges: Flow["ed
   return (
     <div className="h-[420px] border border-border">
       <ReactFlow
-        aria-label="Graphe du Flow"
+        aria-label="Flow graph"
         nodes={stepNodes}
         edges={links}
         nodeTypes={NODE_TYPES}
