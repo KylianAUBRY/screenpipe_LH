@@ -25,10 +25,13 @@ proofs are in `evidence/LIVE-CHECKS.md`.
 
 ## Between rehearsals (start state)
 
+From the repo root, Bun loads `N8N_API_KEY` (n8n → Settings → n8n API) and
+`SCREENPIPE_LOCAL_API_KEY` (ScreenPipe → Settings → Privacy) from the
+gitignored root `.env`:
+
 ```bash
-export N8N_API_KEY=…            # n8n → Settings → n8n API
 bun infra/automation-flows/demo/reset.ts   # no demo Flow, no answers, no unread email
-SCREENPIPE_LOCAL_API_KEY=… bun infra/automation-flows/demo/demo.ts --no-notify   # re-install the task (9/9 real captures)
+bun infra/automation-flows/demo/demo.ts --no-notify   # re-install the task (9/9 real captures)
 ```
 
 Expected last line of reset: « Reset complete: no demo Flow, no saved

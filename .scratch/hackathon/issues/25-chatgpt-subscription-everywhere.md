@@ -5,8 +5,8 @@ User decision (2026-10-17, SPEC D21): ScreenPipe's `auto` model
 enough to build Flows or to judge in the n8n nodes. Every AI in scope now uses
 the user's ChatGPT subscription.
 
-**Status:** code done, unit and integration tests pass; live check waits for a
-ChatGPT sign-in in the app (see « Live check »).
+**Status:** done, live-verified on this Mac (2026-10-17, app rebuilt from
+`7d8ee80a9`, ChatGPT signed in).
 
 ## Where each AI gets its model
 
@@ -66,23 +66,35 @@ byte for byte as before.
   → 94 passed. (The full vitest suite has 180 failures in 17 unrelated files,
   mostly `localStorage` missing in the test environment.)
 
-## Live check
+## Live check (2026-10-17, this Mac)
 
-Needs, in this order: the app rebuilt from this branch (`bun run build:tauri:dev`)
-and restarted; a ChatGPT sign-in in Settings → AI → ChatGPT; the n8n nodes
-reinstalled (`bun run install-n8n`, done).
+A scratch script (not in the repo) ran three checks with the keys from the
+root `.env`. The n8n check copies the
+workflow's AI step (agent, model, output parser, ScreenPipe tool, same
+credentials) behind a temporary webhook, then deletes it.
 
-1. `curl` the proxy with `"model": "chatgpt/gpt-5.6-terra"` and the local key → a chat completion.
-2. The n8n AI step on a demo email → a Jira ticket.
-3. A ScreenPipe AI Trigger « Fetch Test Event » → the AI's decision.
+| Check | Result |
+|-------|--------|
+| Proxy, `chatgpt/gpt-5.6-terra`, plain | 200 in 2 s, « Paris », usage filled |
+| Proxy, tool call | 200 in 1.4 s, OpenAI tool call (`call_…` id, `finish_reason: tool_calls`) |
+| Proxy, tool result sent back | 200 in 1.4 s, « It’s 19:04 in Paris. » |
+| Proxy, `stream: true` + usage | chunk, finish chunk, usage chunk, `[DONE]` |
+| Proxy, `chatgpt/not-a-model` | 400, « The 'not-a-model' model is not supported when using Codex with a ChatGPT account. » |
+| Proxy, `auto` | 200 from screenpipe cloud, as before |
+| AI Trigger, default model, « working in a code editor, a terminal or an AI coding assistant » | fired in 2.6 s: « The user is actively using Terminal and Claude for coding-related work. » |
+| AI Trigger, « watching a football match » | not met in 1.5 s: « The activity shows coding and messaging, with no football match visible. » |
+| n8n AI step, NovaCRM CSV-export bug email | 200 in 4.9 s: Bug, NovaCRM, Highest, back, « Export CSV des contacts filtrés vide (en-têtes seuls) » |
+| n8n AI step, Google security alert | 200 in 1.4 s: `type: none` (no ticket) |
+
+Every call stayed far under the AI step's 20 s timeout. n8n 2.x registers a
+webhook a moment after activation: the first try got a 404 and the delete a
+409; the check script now waits for both.
 
 ## Known limits
 
 - ChatGPT plans have usage windows; a polling AI Trigger spends them. A usage
   limit is a 429 that the trigger treats as « not met » and the n8n step fails
   (and retries) on.
-- The n8n AI step's 20 s timeout was sized for `auto` (1-6 s); a reasoning
-  model can be slower. Measure in the live check before the demo.
 - `/v1/local/chat/completions` (« the user's preset ») still sends
   `openai-chatgpt` presets to `api.openai.com`, which refuses a ChatGPT token.
   Not used by Flows.
