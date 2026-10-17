@@ -1,11 +1,32 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-// Demo reset: bring the demo machine back to the state before the first click.
-//   bun infra/automation-flows/demo/reset.ts
+// Demo reset: bring the demo machine back to the state before the first click,
+// so rehearsals repeat. It
+// - switches off and deletes in n8n every Flow created from the demo task
+//   (its records in `<data dir>/automation-flows.json`) and the copy
+//   `import-workflow.sh` installs (the bundled workflow's fixed id), then
+//   removes their records: the Flows list is empty and "Créer
+//   l'automatisation" creates the Flow again. Other workflows are never touched;
+// - marks the unread emails of the demo inbox read, inside the n8n container
+//   with the IMAP credential stored there (`mark-read.sh`), so the next
+//   activation only processes the email sent live;
+// - clears the Task Page answers.
+// It prints what it did and exits 1, with every reason, on anything it could
+// not restore.
+//
+//   N8N_API_KEY=… bun infra/automation-flows/demo/reset.ts
+//
+// N8N_API_KEY: the n8n API key; without it, the key of ScreenPipe's n8n
+// connection when it is saved in `<data dir>/connections.json` (the app keeps
+// it in its encrypted secret store otherwise). Never printed. N8N_API_URL
+// (default: the connection's, else http://localhost:5678), N8N_CONTAINER
+// (default automation-flows-n8n-1), SCREENPIPE_DATA_DIR (default ~/.screenpipe),
+// SCREENPIPE_WORKFLOWS_DIR (see catalog.ts).
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { clearAnswers, readCatalog, writeCatalog } from "./catalog";
+import { catalogDir, clearAnswers, readCatalog, writeCatalog } from "./catalog";
 import { DEMO_TASK_ID } from "./detected-task";
 
 const STORE_FILE = "automation-flows.json";
@@ -203,4 +224,50 @@ export async function resetDemo(options: ResetOptions): Promise<ResetReport> {
   await step("inbox", () => markInboxRead(options));
   await step("answers", () => clearTaskAnswers(options.catalogDir));
   return { failures };
+}
+
+/** The n8n instance root from what the user typed (connector `n8n::instance_url`). */
+const instanceUrl = (raw: string) => raw.trim().replace(/\/+$/, "").replace(/\/api\/v1$/, "").replace(/\/+$/, "");
+
+/** N8N_API_KEY / N8N_API_URL, else ScreenPipe's n8n connection when it is saved
+ * in the legacy `connections.json` (`load_connection`'s file fallback). */
+export function n8nConfig(env: Record<string, string | undefined>, dataDir: string): N8nConfig | null {
+  let saved: { api_url?: string; api_key?: string } = {};
+  try {
+    const connection = JSON.parse(readFileSync(join(dataDir, "connections.json"), "utf8")).n8n;
+    if (connection?.enabled) saved = connection.credentials ?? {};
+  } catch {
+    // No saved connection.
+  }
+  const apiKey = env.N8N_API_KEY?.trim() || saved.api_key?.trim();
+  if (!apiKey) return null;
+  return { url: instanceUrl(env.N8N_API_URL?.trim() || saved.api_url || "http://localhost:5678"), apiKey };
+}
+
+const runCommand: CommandRunner = async argv => {
+  const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { code, stdout, stderr };
+};
+
+if (import.meta.main) {
+  try {
+    const dataDir = process.env.SCREENPIPE_DATA_DIR || join(homedir(), ".screenpipe");
+    const { failures } = await resetDemo({
+      n8n: n8nConfig(process.env, dataDir),
+      dataDir,
+      catalogDir: catalogDir(),
+      container: process.env.N8N_CONTAINER || "automation-flows-n8n-1",
+      run: runCommand,
+      log: line => console.log(line),
+    });
+    if (failures.length > 0) {
+      console.error(`Reset incomplete, ${failures.length} step(s) not restored:\n${failures.map(f => `- ${f}`).join("\n")}`);
+      process.exit(1);
+    }
+    console.log("Reset complete: no demo Flow, no saved answers, no unread demo email.");
+  } catch (error) {
+    console.error(`Reset incomplete: ${error instanceof Error ? error.message : error}`);
+    process.exit(1);
+  }
 }

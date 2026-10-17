@@ -271,7 +271,18 @@ class ImapFlow {
 module.exports = { ImapFlow };
 `;
 
-async function runMarkRead(state: object, env: Record<string, string> = {}) {
+// `docker exec [-e K=V]… <container> <cmd…>` runs <cmd…> here with those variables.
+const FAKE_DOCKER = `#!/bin/sh
+[ "$1" = exec ] || { echo "fake docker: only exec" >&2; exit 2; }
+shift
+while [ "$1" = "-e" ]; do export "$2"; shift 2; done
+[ "$1" = "$FAKE_CONTAINER" ] || { echo "Error response from daemon: No such container: $1" >&2; exit 1; }
+shift
+exec "$@"
+`;
+
+/** What the n8n container offers mark-read.sh: the n8n CLI, n8n's imapflow, a temp dir, a mailbox. */
+function fakeContainer(state: object) {
   const root = mkdtempSync(join(tmpdir(), "demo-mark-read-"));
   const bin = join(root, "bin");
   const pnpm = join(root, "pnpm");
@@ -279,18 +290,29 @@ async function runMarkRead(state: object, env: Record<string, string> = {}) {
   const module = join(pnpm, "imapflow@1.15.0", "node_modules", "imapflow");
   mkdirSync(bin); mkdirSync(module, { recursive: true }); mkdirSync(tmp);
   writeFileSync(join(bin, "n8n"), FAKE_N8N, { mode: 0o755 });
+  writeFileSync(join(bin, "docker"), FAKE_DOCKER, { mode: 0o755 });
   writeFileSync(join(module, "index.js"), FAKE_IMAPFLOW);
   const statePath = join(root, "imap-state.json");
   writeFileSync(statePath, JSON.stringify(state));
-  const child = Bun.spawn(["sh", join(import.meta.dir, "mark-read.sh")], {
-    env: {
-      PATH: `${bin}:${process.env.PATH}`, TMPDIR: tmp, N8N_PNPM_DIR: pnpm, FAKE_IMAP_STATE: statePath,
-      CRED_ID: "spNovaImap000001", MAILBOX: "INBOX", ...env,
-    },
-    stdout: "pipe", stderr: "pipe",
-  });
+  return {
+    env: { PATH: `${bin}:${process.env.PATH}`, TMPDIR: tmp, N8N_PNPM_DIR: pnpm, FAKE_IMAP_STATE: statePath, FAKE_CONTAINER: "n8n-test" },
+    imap: () => JSON.parse(readFileSync(statePath, "utf8")),
+    leftInTmp: () => readdirSync(tmp),
+  };
+}
+
+async function spawn(argv: string[], env: Record<string, string>) {
+  const child = Bun.spawn(argv, { env, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  return { code, stdout, stderr, imap: JSON.parse(readFileSync(statePath, "utf8")), leftInTmp: readdirSync(tmp) };
+  return { code, stdout, stderr };
+}
+
+async function runMarkRead(state: object, env: Record<string, string> = {}) {
+  const container = fakeContainer(state);
+  const result = await spawn(["sh", join(import.meta.dir, "mark-read.sh")], {
+    ...container.env, CRED_ID: "spNovaImap000001", MAILBOX: "INBOX", ...env,
+  });
+  return { ...result, imap: container.imap(), leftInTmp: container.leftInTmp() };
 }
 
 describe("mark-read.sh (inside the n8n container)", () => {
@@ -325,5 +347,60 @@ describe("mark-read.sh (inside the n8n container)", () => {
     expect(result.stderr).toContain("cannot export the n8n credential spUnknown0000001");
     expect(result.stderr).toContain("No credentials found");
     expect(result.leftInTmp).toEqual([]);
+  });
+});
+
+describe("bun infra/automation-flows/demo/reset.ts", () => {
+  const cli = (env: Record<string, string>) =>
+    spawn([process.execPath, join(import.meta.dir, "reset.ts")], { HOME: mkdtempSync(join(tmpdir(), "demo-reset-home-")), ...env });
+
+  it("restores the start state and exits 0, never printing the n8n key", async () => {
+    const n8n = serve([{ id: "wfDemo000000001", name: "NovaDesk", active: true, tags: [{ name: "screenpipe-flow" }] }], { strictArchive: true });
+    const data = dataDir({ wfDemo000000001: record(DEMO_TASK) });
+    const catalog = catalogDir("saved answers");
+    const container = fakeContainer({ messages: [{ uid: 7, seen: false }] });
+
+    const result = await cli({
+      ...container.env, N8N_API_KEY: KEY, N8N_API_URL: `${n8n.url}/`, N8N_CONTAINER: "n8n-test",
+      SCREENPIPE_DATA_DIR: data, SCREENPIPE_WORKFLOWS_DIR: catalog,
+    });
+
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("wfDemo000000001 (NovaDesk): switched off, archived, deleted");
+    expect(result.stdout).toContain("inbox: marked 1 unread email(s) as read in INBOX (0 unread left)");
+    expect(result.stdout).toContain("Reset complete");
+    expect(`${result.stdout}${result.stderr}`).not.toContain(KEY);
+    expect(`${result.stdout}${result.stderr}`).not.toContain(PASSWORD);
+    expect(n8n.workflows.size).toBe(0);
+    expect(storedFlows(data)).toEqual({});
+    expect(container.imap().messages).toEqual([{ uid: 7, seen: true }]);
+    expect(readCatalog(catalog)!.analysis.workflows[0].userCorrection).toBeNull();
+  });
+
+  it("falls back to the n8n connection ScreenPipe saved in connections.json", async () => {
+    const n8n = serve([{ id: "spNovaFlow000001", name: "NovaDesk", active: false }]);
+    const data = dataDir({});
+    writeFileSync(join(data, "connections.json"), JSON.stringify({
+      n8n: { enabled: true, credentials: { api_url: `${n8n.url}/api/v1`, api_key: KEY } },
+    }));
+    const container = fakeContainer({ messages: [] });
+
+    const result = await cli({ ...container.env, N8N_CONTAINER: "n8n-test", SCREENPIPE_DATA_DIR: data, SCREENPIPE_WORKFLOWS_DIR: catalogDir() });
+
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(n8n.workflows.size).toBe(0);
+  });
+
+  it("exits non-zero with every reason when a step cannot be restored", async () => {
+    const container = fakeContainer({ messages: [] });
+
+    const result = await cli({ ...container.env, N8N_CONTAINER: "n8n-wrong", SCREENPIPE_DATA_DIR: dataDir({}), SCREENPIPE_WORKFLOWS_DIR: catalogDir() });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Reset incomplete");
+    expect(result.stderr).toContain("N8N_API_KEY");
+    expect(result.stderr).toContain("No such container: n8n-wrong");
   });
 });
