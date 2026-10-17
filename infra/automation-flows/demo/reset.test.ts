@@ -339,7 +339,10 @@ function fakeContainer(state: object) {
 }
 
 async function spawn(argv: string[], env: Record<string, string>) {
-  const child = Bun.spawn(argv, { env, stdout: "pipe", stderr: "pipe" });
+  // A fresh cwd: Bun loads the `.env` of its working directory, and the repo
+  // root's (the user's real n8n key) must never leak into the child.
+  const cwd = mkdtempSync(join(tmpdir(), "demo-reset-cwd-"));
+  const child = Bun.spawn(argv, { env, cwd, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { code, stdout, stderr };
 }

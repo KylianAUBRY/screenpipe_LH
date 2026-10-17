@@ -6,12 +6,23 @@ import react from "@vitejs/plugin-react";
 import path from "path";
 import { collectBunTestFiles } from "./scripts/bun-test-files";
 
+// Node 25+ turns on its own Web Storage: its `localStorage` global (undefined
+// without `--localstorage-file`) hides jsdom's, and every test touching it
+// fails. Switch it off in the test workers on the Node versions that have it.
+const nodeWebStorageOff = process.allowedNodeEnvironmentFlags.has("--experimental-webstorage")
+	? ["--no-experimental-webstorage"]
+	: [];
+
 export default defineConfig({
 	plugins: [react()],
 	test: {
 		environment: "jsdom",
 		globals: true,
 		setupFiles: ["./vitest.setup.ts"],
+		poolOptions: {
+			threads: { execArgv: nodeWebStorageOff },
+			forks: { execArgv: nodeWebStorageOff },
+		},
 		include: ["**/__tests__/**/*.test.{ts,tsx}", "**/*.test.{ts,tsx}"],
 		// `"node_modules"` only excludes the top-level dir, not nested ones.
 		// Without `**/node_modules/**` vitest crawled into
