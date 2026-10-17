@@ -14,7 +14,6 @@ import { ArrowLeft, ExternalLink, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Flow, FlowsApi } from "./api";
 import {
-  ACTION_BUTTON,
   ChatButton,
   FlowsErrorMessage,
   SectionLabel,
@@ -49,7 +48,12 @@ export function FlowReview({
         <FlowsErrorMessage error={flow.error} onRetry={reload} api={api} />
       )}
       {flow.state === "ready" && (
-        <ReviewContent flow={flow.data} api={api} onChange={replace} />
+        <ReviewContent
+          flow={flow.data}
+          readVersionId={flow.read.versionId}
+          api={api}
+          onChange={replace}
+        />
       )}
     </div>
   );
@@ -72,12 +76,15 @@ function RequestChange({ flow, api }: { flow: Flow; api: FlowsApi }) {
 
 function ReviewContent({
   flow,
+  readVersionId,
   api,
   onChange,
 }: {
   flow: Flow;
+  /** The version the user loaded; a background read may show a newer one. */
+  readVersionId: string;
   api: FlowsApi;
-  onChange: (flow: Flow) => void;
+  onChange: (flow: Flow, options?: { read?: boolean }) => void;
 }) {
   // The n8n node order: sorting by position would put an AI agent's model
   // and tools (drawn below it, further left) before the agent itself.
@@ -88,14 +95,14 @@ function ReviewContent({
       <header className="space-y-2">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-lg font-medium">{flow.name}</h2>
-          <StatusBadge status={flow.status} />
+          <StatusBadge status={flow.status} running={flow.lastExecution?.status === "running"} />
         </div>
         <p className="text-xs text-muted-foreground">
           Dernière exécution : {lastRunLabel(flow.lastExecution)}
         </p>
-        <FlowActivation flow={flow} api={api} onChange={onChange} />
+        <FlowActivation flow={flow} readVersionId={readVersionId} api={api} onChange={onChange} />
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" className={ACTION_BUTTON} onClick={() => void api.openInN8n(flow.n8nUrl)}>
+          <Button size="sm" variant="outline" onClick={() => void api.openInN8n(flow.n8nUrl)}>
             <ExternalLink className="mr-1 h-4 w-4" aria-hidden />
             Voir le graphe
           </Button>
@@ -103,7 +110,6 @@ function ReviewContent({
             <Button
               size="sm"
               variant="outline"
-              className={ACTION_BUTTON}
               onClick={() => void api.openTaskPage(flow.sourceTaskId!)}
             >
               Voir la tâche
@@ -132,7 +138,7 @@ function ReviewContent({
 
       <section className="space-y-2">
         <SectionLabel>
-          Étapes <span className="font-mono tracking-normal">{steps.length}</span>
+          Étapes <span className="font-mono">{steps.length}</span>
         </SectionLabel>
         <FlowGraph nodes={steps} edges={flow.edges} />
       </section>

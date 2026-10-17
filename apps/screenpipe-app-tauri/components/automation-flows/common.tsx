@@ -14,7 +14,13 @@ import { STATUS_LABEL } from "./labels";
 
 type Load<T> =
   | { state: "loading" }
-  | { state: "ready"; data: T }
+  /**
+   * `data` is what is on screen; `read` is the data as the user last loaded
+   * it on purpose (opening the screen, "Réessayer", or a `replace` marked
+   * `read`). A background read updates `data` only, so "Activer" can keep
+   * naming the version the user actually loaded.
+   */
+  | { state: "ready"; data: T; read: T }
   | { state: "error"; error: FlowsApiError };
 
 function asFlowsError(error: unknown): FlowsApiError {
@@ -24,7 +30,8 @@ function asFlowsError(error: unknown): FlowsApiError {
 /**
  * Runs `load` on mount and whenever `key` changes; `reload` runs it again;
  * `replace` shows fresher data already in hand (e.g. the Flow an action
- * returned) without going back through "loading".
+ * returned) without going back through "loading", and counts it as loaded
+ * by the user only with `{ read: true }`.
  *
  * While the window is visible it also re-reads in the background when the
  * window gets the focus or becomes visible again, and every
@@ -53,11 +60,12 @@ export function useFlowsLoad<T>(load: () => Promise<T>, key: string) {
     };
     loadRef.current().then(
       (data) =>
-        settle((previous) =>
-          previous.state === "ready" && sameData(previous.data, data)
-            ? previous
-            : { state: "ready", data },
-        ),
+        settle((previous) => {
+          if (mode === "foreground" || previous.state !== "ready") {
+            return { state: "ready", data, read: data };
+          }
+          return sameData(previous.data, data) ? previous : { ...previous, data };
+        }),
       (error) =>
         settle((previous) =>
           mode === "background" && previous.state === "ready"
@@ -90,9 +98,13 @@ export function useFlowsLoad<T>(load: () => Promise<T>, key: string) {
   }, [run]);
 
   const reload = useCallback(() => run("foreground"), [run]);
-  const replace = useCallback((data: T) => {
+  const replace = useCallback((data: T, options?: { read?: boolean }) => {
     latest.current += 1;
-    setResult({ state: "ready", data });
+    setResult((previous) => ({
+      state: "ready",
+      data,
+      read: options?.read || previous.state !== "ready" ? data : previous.read,
+    }));
   }, []);
   return [result, reload, replace] as const;
 }
@@ -109,17 +121,24 @@ function sameData<T>(a: T, b: T): boolean {
   }
 }
 
-/** Status square + label; phosphor marks a Flow that runs (docs/DESIGN.md). */
-export function StatusBadge({ status }: { status: FlowStatus }) {
+/**
+ * Status square + label. An active Flow is ready (neutral signal); phosphor
+ * lights only while an execution runs (docs/DESIGN.md), and the last-run
+ * line says so in words.
+ */
+export function StatusBadge({ status, running = false }: { status: FlowStatus; running?: boolean }) {
   return (
     <span className="inline-flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground">
       <span
         aria-hidden
+        data-testid="flow-status-marker"
         className={cn(
           "h-[9px] w-[9px] flex-none border",
-          status === "active"
+          running
             ? "border-phosphor bg-phosphor"
-            : "border-muted-foreground/60",
+            : status === "active"
+              ? "border-foreground bg-foreground"
+              : "border-muted-foreground/60",
         )}
       />
       <span data-testid="flow-status">{STATUS_LABEL[status]}</span>
@@ -127,20 +146,13 @@ export function StatusBadge({ status }: { status: FlowStatus }) {
   );
 }
 
-/** Uppercase section label, as in the rest of the app. */
+/** Section label; its casing is the copy's own (docs/DESIGN.md). */
 export function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <h3 className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-      {children}
-    </h3>
-  );
+  return <h3 className="text-xs font-medium text-muted-foreground">{children}</h3>;
 }
 
-/** Uppercase mono action buttons. */
-export const ACTION_BUTTON = "uppercase tracking-[0.08em]";
-
 /**
- * Opens the ScreenPipe chat ("Ajouter", "Demander une modification"). The
+ * Opens the Screenpipe chat ("Ajouter", "Demander une modification"). The
  * work happens there; the button only says when the chat could not open.
  */
 export function ChatButton({
@@ -172,7 +184,6 @@ export function ChatButton({
       <Button
         size="sm"
         variant="outline"
-        className={ACTION_BUTTON}
         disabled={busy}
         onClick={() => void onClick()}
       >
@@ -205,7 +216,7 @@ export function FlowsErrorMessage({
           Renseignez l&apos;URL de l&apos;API n8n et une clé API dans Connexions → n8n,
           puis revenez ici.
         </p>
-        <Button size="sm" variant="outline" className={ACTION_BUTTON} onClick={() => void api.openN8nConnection()}>
+        <Button size="sm" variant="outline" onClick={() => void api.openN8nConnection()}>
           Ouvrir Connexions
         </Button>
       </div>
@@ -221,10 +232,10 @@ export function FlowsErrorMessage({
           puis revenez ici.
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" className={ACTION_BUTTON} onClick={() => void api.openN8nConnection()}>
+          <Button size="sm" variant="outline" onClick={() => void api.openN8nConnection()}>
             Ouvrir Connexions
           </Button>
-          <Button size="sm" variant="outline" className={ACTION_BUTTON} onClick={onRetry}>
+          <Button size="sm" variant="outline" onClick={onRetry}>
             Réessayer
           </Button>
         </div>
@@ -249,7 +260,7 @@ export function FlowsErrorMessage({
       {error.detail && (
         <p className="break-all font-mono text-xs text-muted-foreground">{error.detail}</p>
       )}
-      <Button size="sm" variant="outline" className={ACTION_BUTTON} onClick={onRetry}>
+      <Button size="sm" variant="outline" onClick={onRetry}>
         Réessayer
       </Button>
     </div>

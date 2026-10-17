@@ -419,6 +419,58 @@ describe("Review Screen", () => {
   });
 });
 
+describe("Design rules (docs/DESIGN.md)", () => {
+  /** Elements whose casing CSS would rewrite, instead of the copy itself. */
+  const forcedCasing = (root: HTMLElement) =>
+    [...root.querySelectorAll<HTMLElement>("*")].filter((element) =>
+      /(^|\s)(uppercase|lowercase|capitalize)(\s|$)/.test(element.getAttribute("class") ?? ""),
+    );
+
+  it("writes labels and buttons in sentence case in the copy, never through CSS", async () => {
+    const list = render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi()} />);
+    await screen.findByTestId(`flow-row-${fixtureFlow.id}`);
+    expect(forcedCasing(list.container)).toEqual([]);
+    list.unmount();
+
+    const review = render(
+      <FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => activeFlow) })} />,
+    );
+    await screen.findByRole("heading", { name: fixtureFlow.name });
+    expect(forcedCasing(review.container)).toEqual([]);
+    for (const name of ["Désactiver", "Voir le graphe", "Voir la tâche", "Demander une modification"]) {
+      expect(screen.getByRole("button", { name })).toBeTruthy();
+    }
+    expect(screen.getByRole("heading", { name: "Ce que fait ce Flow" })).toBeTruthy();
+  });
+
+  it("lights phosphor only while the Flow is running, not because it is active", async () => {
+    const marker = () => screen.getByTestId("flow-status-marker").getAttribute("class") ?? "";
+    const idle: Flow = { ...activeFlow, lastExecution: { status: "success", startedAt: "2026-10-17T09:05:00.000Z" } };
+    const running: Flow = { ...activeFlow, lastExecution: { status: "running", startedAt: "2026-10-17T09:05:00.000Z" } };
+
+    const first = render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => idle) })} />);
+    await screen.findByRole("heading", { name: fixtureFlow.name });
+    expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+    expect(marker()).not.toMatch(/phosphor/);
+    first.unmount();
+
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => running) })} />);
+    await screen.findByRole("heading", { name: fixtureFlow.name });
+    expect(marker()).toMatch(/phosphor/);
+    // Not by color alone: the last run says it is running.
+    expect(screen.getByText(/^Dernière exécution : .+ · en cours$/)).toBeTruthy();
+  });
+
+  it("marks a running Flow in the list the same way", async () => {
+    const list = vi.fn(async () => [
+      { ...summaryOf(activeFlow), lastExecution: { status: "running" as const, startedAt: "2026-10-17T09:05:00.000Z" } },
+    ]);
+    render(<FlowsTab flowId={null} onSelectFlow={vi.fn()} api={fakeApi({ list })} />);
+    const row = await screen.findByTestId(`flow-row-${fixtureFlow.id}`);
+    expect(within(row).getByTestId("flow-status-marker").getAttribute("class")).toMatch(/phosphor/);
+  });
+});
+
 describe("Freshness", () => {
   const ranOnce: Flow = {
     ...fixtureFlow,
@@ -477,6 +529,42 @@ describe("Freshness", () => {
     await answer(fixtureFlow);
 
     expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+  });
+
+  it("activates only the version the user loaded, even after a background read brings another", async () => {
+    const edited: Flow = {
+      ...fixtureFlow,
+      versionId: "fixture-version-2",
+      summary: "Résumé modifié dans n8n.",
+    };
+    const get = vi.fn().mockResolvedValueOnce(fixtureFlow).mockResolvedValue(edited);
+    const activate = vi
+      .fn()
+      .mockRejectedValueOnce(new FlowsApiError("version_changed"))
+      .mockResolvedValue({ ...edited, status: "active", reviewedVersionId: edited.versionId });
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get, activate })} />);
+    await screen.findByRole("heading", { name: fixtureFlow.name });
+    expect(screen.queryByText(/a changé depuis que vous l'avez ouvert/)).toBeNull();
+
+    fireEvent.focus(window);
+
+    // The background read shows the new version and says it changed.
+    expect(await screen.findByText("Résumé modifié dans n8n.")).toBeTruthy();
+    expect(screen.getByText(/a changé depuis que vous l'avez ouvert/)).toBeTruthy();
+
+    // Activer still names the version the user loaded: the engine refuses it.
+    fireEvent.click(screen.getByRole("button", { name: "Activer" }));
+    await waitFor(() => expect(activate).toHaveBeenCalledTimes(1));
+    expect(activate).toHaveBeenLastCalledWith(fixtureFlow.id, fixtureFlow.versionId);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(3));
+    expect(screen.getByTestId("flow-status").textContent).toBe("Brouillon");
+    expect(screen.getByText(/a changé depuis que vous l'avez ouvert/)).toBeTruthy();
+
+    // That reload is the user's: the next click activates what they now read.
+    fireEvent.click(screen.getByRole("button", { name: "Activer" }));
+    await waitFor(() => expect(screen.getByTestId("flow-status").textContent).toBe("Active"));
+    expect(activate).toHaveBeenLastCalledWith(fixtureFlow.id, "fixture-version-2");
+    expect(screen.queryByText(/a changé depuis que vous l'avez ouvert/)).toBeNull();
   });
 
   it("keeps the Flow on screen when a background read fails", async () => {
