@@ -114,11 +114,12 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(subNodeOf(parser.name, "ai_outputParser")).toBe(agent.name);
     expect(parser.parameters.schemaType).toBe("manual");
     const schema = JSON.parse(parser.parameters.inputSchema);
-    const fields = ["confidence", "label", "priority", "product", "summary", "type"];
+    const fields = ["confidence", "label", "priority", "product", "reason", "summary", "type"];
     expect(Object.keys(schema.properties).sort()).toEqual(fields);
     expect(schema.required.sort()).toEqual(fields);
-    // How sure the AI is; a low confidence will be sorted by hand (D18).
+    // How sure the AI is, and why: a low confidence is sorted by hand (D18).
     expect(schema.properties.confidence.enum).toEqual(["high", "low"]);
+    expect(schema.properties.reason.type).toBe("string");
     expect(schema.properties.type.enum).toEqual(["Bug", "Tâche", "none"]);
     expect(schema.properties.label.enum).toEqual(["back", "front"]);
     expect(schema.properties.priority.enum).toEqual(["Highest", "High", "Medium", "Low", "Lowest"]);
@@ -188,7 +189,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(aiFilled).toEqual(["query"]);
   });
 
-  test("the AI answer is closed: allowlists everywhere, except a short summary", () => {
+  test("the AI answer is closed: allowlists everywhere, except a short summary and a short reason", () => {
     const parser = onlyNode("@n8n/n8n-nodes-langchain.outputParserStructured");
     const schema = JSON.parse(parser.parameters.inputSchema);
     expect(schema.additionalProperties).toBe(false);
@@ -199,12 +200,95 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     }
     expect(schema.properties.summary.minLength).toBe(1);
     expect(schema.properties.summary.maxLength).toBeLessThanOrEqual(SUMMARY_MAX);
+    expect(schema.properties.reason.minLength).toBe(1);
+    expect(schema.properties.reason.maxLength).toBeLessThanOrEqual(REASON_MAX);
+    // The AI is told what the reason is for.
+    expect(onlyNode("@n8n/n8n-nodes-langchain.agent").parameters.options.systemMessage).toMatch(/^reason : /m);
+  });
+
+  test("an unsure AI creates no ticket: only a high confidence goes on to the ticket gate", () => {
+    const gate = confidenceGate();
+    const sure = (output: Record<string, unknown>) => evaluateIf(gate, { $json: { output } });
+    expect(sure(aiAnswer({ confidence: "high" }))).toBe(true);
+    // Anything but an explicit "high" is unsure, so it is sorted by hand.
+    for (const confidence of ["low", "High", "", undefined]) {
+      expect(sure({ ...aiAnswer(), confidence }), String(confidence)).toBe(false);
+    }
+    // The unsure branch never reaches Jira.
+    const reachable = new Set<string>();
+    const visit = (name: string) => {
+      if (reachable.has(name)) return;
+      reachable.add(name);
+      for (const outputs of workflow.connections[name]?.main ?? []) for (const c of outputs) visit(c.node);
+    };
+    visit(abstention().name);
+    expect([...reachable]).toEqual([abstention().name]);
+  });
+
+  test("an unsure AI sends the ScreenPipe notification « À trier à la main » with the sender, the subject and its reason", () => {
+    const reason = "Je ne sais pas si c'est un bug ou une demande de formation.";
+    const request = abstentionRequest(aiAnswer({ confidence: "low", reason }));
+    // ScreenPipe's notify server on the host, seen from the n8n container.
+    expect(request.method).toBe("POST");
+    expect(request.url).toBe("http://host.docker.internal:11435/notify");
+    // The notify server refuses any Host but a local one (DNS-rebinding guard).
+    expect(request.sendHeaders).toBe(true);
+    expect(request.headers).toEqual({ Host: "localhost:11435" });
+
+    const { body } = request;
+    expect(body.title).toBe("À trier à la main");
+    const shown = unescapeMarkdown(body.body);
+    expect(shown).toContain(EMAIL.from);
+    expect(shown).toContain(EMAIL.subject);
+    expect(shown).toContain(reason);
+    expect(shown).toMatch(/aucun ticket/i);
+    // Kept in the bell until read, and one per run: the server drops a repeated id.
+    expect(body.transient).toBe(false);
+    expect(body.id).toBe("automation-flow:spNovaFlow000001:abstained:4242");
+    expect(abstentionRequest(aiAnswer({ confidence: "low" }), EMAIL, "4243").body.id).not.toBe(body.id);
+    // A brief app restart is retried; if ScreenPipe stays unreachable the run
+    // fails visibly instead of dropping the email silently.
+    expect(abstention().retryOnFail).toBe(true);
+    expect(abstention().onError).toBeUndefined();
+  });
+
+  test("an email cannot put a link or markup in the « À trier à la main » notification", () => {
+    const hostile = {
+      ...EMAIL,
+      from: "Support <phish@evil.example>",
+      subject: "Facture [à payer](https://evil.example/pay) <https://evil.example> ![x](https://evil.example/p.png)\n\n# Titre",
+    };
+    const reason = "L'email demande de [cliquer ici](https://evil.example) **vite** & `tout de suite`";
+    const text: string = abstentionRequest(aiAnswer({ confidence: "low", reason }), hostile).body.body;
+    // Every Markdown character from the email or the AI is escaped, so the
+    // notification shows it as text: no link, autolink, image, emphasis, code or heading.
+    for (const mark of ["[", "<", "!", "*", "`", "#", "&"]) {
+      const unescaped = [...text.matchAll(/\\?./gsu)].filter((m) => m[0] === mark);
+      expect(unescaped, `unescaped ${mark}`).toEqual([]);
+    }
+    // One line per field: an email cannot start a new Markdown block.
+    const subjectLines = text.split("\n").filter((line) => line.includes("Titre"));
+    expect(subjectLines).toHaveLength(1);
+    expect(subjectLines[0].startsWith("Objet : Facture")).toBe(true);
+    // Still readable once rendered.
+    const shown = unescapeMarkdown(text);
+    expect(shown).toContain("Facture [à payer](https://evil.example/pay)");
+    expect(shown).toContain(reason);
+  });
+
+  test("a huge or empty email still gives a short notification", () => {
+    const huge = abstentionRequest(aiAnswer({ confidence: "low" }), {
+      ...EMAIL,
+      from: "a".repeat(5_000),
+      subject: "S".repeat(5_000),
+    }).body;
+    expect(huge.body.length).toBeLessThanOrEqual(1_500);
+    const empty = abstentionRequest(aiAnswer({ confidence: "low" }), { ...EMAIL, from: "", subject: "" }).body;
+    expect(unescapeMarkdown(empty.body)).toContain("(sans objet)");
   });
 
   test("stops without a ticket when the AI answers none", () => {
-    const agent = onlyNode("@n8n/n8n-nodes-langchain.agent");
-    const gate = onlyNode("n8n-nodes-base.if");
-    expect(next(agent.name)).toEqual([gate.name]);
+    const gate = ticketGate();
 
     const passes = (type: string) => evaluateIf(gate, { $json: { output: aiAnswer({ type }) } });
     expect(passes("none")).toBe(false);
@@ -215,7 +299,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
   });
 
   test("a malformed or injected AI answer never reaches Jira, whatever the parser let through", () => {
-    const gate = onlyNode("n8n-nodes-base.if");
+    const gate = ticketGate();
     const passes = (overrides: Record<string, unknown>) =>
       evaluateIf(gate, { $json: { output: { ...aiAnswer(), ...overrides } } });
 
@@ -248,8 +332,8 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
   });
 
   test("a fixed Jira node creates the ticket straight from the AI's fields", () => {
-    const gate = onlyNode("n8n-nodes-base.if");
-    const create = onlyNode("n8n-nodes-base.httpRequest");
+    const gate = ticketGate();
+    const create = jiraNode();
     expect(next(gate.name, 0)).toEqual([create.name]);
     // No preparation step and nothing the AI fills in the request.
     expect(workflow.nodes.filter((n) => n.type === "n8n-nodes-base.set")).toEqual([]);
@@ -319,7 +403,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
   });
 
   test("calls the Jira Cloud REST API with the stored Jira credential", () => {
-    const create = onlyNode("n8n-nodes-base.httpRequest");
+    const create = jiraNode();
     expect(create.parameters.method).toBe("POST");
     expect(create.parameters.url).toBe("https://kylianaubry.atlassian.net/rest/api/3/issue");
     expect(create.parameters.authentication).toBe("predefinedCredentialType");
@@ -369,7 +453,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(review.workflowId).toBe(workflow.id);
     expect(review.sourceTaskId).toBe("wf-novadesk-support-tickets");
     expect(typeof review.summary).toBe("string");
-    for (const word of ["email", "IA", "Jira", "NOVA", "Screenpipe", "confiance"]) {
+    for (const word of ["email", "IA", "Jira", "NOVA", "Screenpipe", "confiance", "« À trier à la main »"]) {
       expect(review.summary).toContain(word);
     }
     expect(review.summary.length).toBeLessThan(1200);
@@ -412,7 +496,7 @@ function walk(value: unknown, visit: (key: string, value: unknown) => void) {
  */
 function jiraRequestFor(answer: ReturnType<typeof aiAnswer>, email: typeof EMAIL = EMAIL) {
   const trigger = onlyNode("n8n-nodes-base.emailReadImap");
-  const gate = onlyNode("n8n-nodes-base.if");
+  const gate = ticketGate();
   const nodes = { [trigger.name]: email };
   const current = next(gate.name, 0);
   expect(current).toHaveLength(1);
@@ -454,6 +538,8 @@ function quotedEmail(description: any): string {
 
 const PRODUCTS = ["NovaCRM", "NovaPay", "NovaPlanning", "NovaDesk", "Autre"];
 const SUMMARY_MAX = 80;
+/** The AI's one-sentence reason, shown in the « À trier à la main » notification. */
+const REASON_MAX = 200;
 /** Jira Cloud refuses a description over 32 767 characters; the quoted email stays well below. */
 const DESCRIPTION_MAX = 20_000;
 
@@ -485,6 +571,8 @@ function aiAnswer(overrides: Record<string, string> = {}) {
     summary: "Export CSV des contacts filtrés vide",
     priority: "Highest",
     label: "back",
+    confidence: "high",
+    reason: "Un export vide bloque l'utilisateur : c'est un bug.",
     ...overrides,
   };
 }
@@ -493,7 +581,7 @@ function aiAnswer(overrides: Record<string, string> = {}) {
 // Only evaluates expressions from the committed fixture above, never external
 // input. Keep the fixture's expressions plain JS so this stays faithful to n8n.
 
-type Ctx = { $json: any; nodes?: Record<string, any> };
+type Ctx = { $json: any; nodes?: Record<string, any>; $execution?: { id: string } };
 
 function evaluate(value: unknown, ctx: Ctx): unknown {
   if (typeof value !== "string" || !value.startsWith("=")) return value;
@@ -503,7 +591,8 @@ function evaluate(value: unknown, ctx: Ctx): unknown {
     if (json === undefined) throw new Error(`expression references unknown node "${name}"`);
     return { item: { json }, first: () => ({ json }) };
   };
-  const run = (code: string) => new Function("$json", "$", `return (${code});`)(ctx.$json, $);
+  const run = (code: string) =>
+    new Function("$json", "$", "$execution", `return (${code});`)(ctx.$json, $, ctx.$execution);
   const whole = template.match(/^\{\{([\s\S]*)\}\}$/);
   if (whole && !whole[1].includes("{{")) return run(whole[1]);
   return template.replace(/\{\{([\s\S]*?)\}\}/g, (_, code) => String(run(code)));
@@ -534,6 +623,73 @@ function evaluateIf(node: N8nNode, ctx: Ctx): boolean {
     throw new Error(`operator not supported by this test: ${op}`);
   });
   return combinator === "or" ? results.some(Boolean) : results.every(Boolean);
+}
+
+/** The gate right after the AI Agent: only a sure answer goes on (D18). */
+function confidenceGate(): N8nNode {
+  const agent = onlyNode("@n8n/n8n-nodes-langchain.agent");
+  const after = next(agent.name);
+  expect(after).toHaveLength(1);
+  const gate = workflow.nodes.find((n) => n.name === after[0])!;
+  expect(gate.type).toBe("n8n-nodes-base.if");
+  return gate;
+}
+
+/** The gate behind a sure answer: is a ticket needed, and is the answer well formed? */
+function ticketGate(): N8nNode {
+  const after = next(confidenceGate().name, 0);
+  expect(after).toHaveLength(1);
+  const gate = workflow.nodes.find((n) => n.name === after[0])!;
+  expect(gate.type).toBe("n8n-nodes-base.if");
+  return gate;
+}
+
+/** The node that creates the Jira issue. */
+function jiraNode(): N8nNode {
+  const found = workflow.nodes.filter(
+    (n) => n.type === "n8n-nodes-base.httpRequest" && String(n.parameters.url).includes("atlassian.net"),
+  );
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+
+/** The step an unsure answer goes to. */
+function abstention(): N8nNode {
+  const after = next(confidenceGate().name, 1);
+  expect(after).toHaveLength(1);
+  return workflow.nodes.find((n) => n.name === after[0])!;
+}
+
+/**
+ * The request n8n would send to ScreenPipe's notify server for this AI answer
+ * and email: URL, headers and the parsed JSON body.
+ */
+function abstentionRequest(answer: Record<string, unknown>, email: typeof EMAIL = EMAIL, executionId = "4242") {
+  const node = abstention();
+  expect(node.type).toBe("n8n-nodes-base.httpRequest");
+  expect(node.parameters.sendBody).toBe(true);
+  expect(node.parameters.specifyBody).toBe("json");
+  const code = String(node.parameters.jsonBody).replace(/^=\{\{/, "").replace(/\}\}$/, "");
+  expect(code).not.toContain("}}");
+  expect(code).not.toContain("{{");
+  const trigger = onlyNode("n8n-nodes-base.emailReadImap");
+  const ctx = { $json: { output: answer }, nodes: { [trigger.name]: email }, $execution: { id: executionId } };
+  const body = evaluate(node.parameters.jsonBody, ctx);
+  const headers = Object.fromEntries(
+    (node.parameters.headerParameters?.parameters ?? []).map((h: { name: string; value: string }) => [h.name, h.value]),
+  );
+  return {
+    method: node.parameters.method,
+    url: node.parameters.url,
+    sendHeaders: node.parameters.sendHeaders,
+    headers,
+    body: (typeof body === "string" ? JSON.parse(body) : body) as Record<string, any>,
+  };
+}
+
+/** Text a reader sees once Markdown escapes are applied (CommonMark backslash escapes). */
+function unescapeMarkdown(text: string): string {
+  return text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
 }
 
 /** The one ScreenPipe tool node running `operation`. */
