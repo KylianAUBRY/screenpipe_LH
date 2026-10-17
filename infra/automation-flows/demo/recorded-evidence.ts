@@ -13,6 +13,7 @@ export type RecordingsApi = {
   url: string;
   key?: string;
   window: { start: string; end: string };
+  timeoutMs?: number;
 };
 
 type SearchRow = { frame_id?: unknown; timestamp?: unknown; app_name?: unknown; window_name?: unknown; browser_url?: unknown };
@@ -41,7 +42,12 @@ async function findCapture(capture: EvidenceCapture, api: RecordingsApi): Promis
     });
     const response = await fetch(`${api.url}/search?${params}`, {
       headers: api.key ? { Authorization: `Bearer ${api.key}` } : {},
-    });
+      signal: AbortSignal.timeout(api.timeoutMs ?? 5_000),
+    }).catch(() => { throw new Error(`ScreenPipe is not reachable at ${api.url}`); });
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(`ScreenPipe refused the search (HTTP ${response.status}); set SCREENPIPE_LOCAL_API_KEY (Settings > Privacy)`);
+    }
+    if (!response.ok) throw new Error(`ScreenPipe search failed (HTTP ${response.status})`);
     const body = await response.json() as { data?: { type?: string; content?: SearchRow }[] };
     const row = body.data?.map(item => item.type === "OCR" ? item.content : undefined)
       .find(row => row && typeof row.timestamp === "string" && Number.isFinite(Date.parse(row.timestamp))
@@ -51,9 +57,12 @@ async function findCapture(capture: EvidenceCapture, api: RecordingsApi): Promis
   const distance = (frame: RecordedFrame) => Math.abs(Date.parse(frame.timestamp) - Date.parse(capture.at));
   const [before, after] = await Promise.all([side("descending"), side("ascending")]);
   const frame = before && after ? (distance(after) < distance(before) ? after : before) : before ?? after;
-  return frame ? { image: capture.image, frame } : { image: capture.image, frame: null, reason: "no matching frame" };
+  return frame ? { image: capture.image, frame }
+    : { image: capture.image, frame: null, reason: "no matching frame in the recording window" };
 }
 
+/** Never throws: a capture whose lookup fails comes back without a frame, with the reason. */
 export function findRecordedFrames(captures: EvidenceCapture[], api: RecordingsApi): Promise<CaptureLookup[]> {
-  return Promise.all(captures.map(capture => findCapture(capture, api)));
+  return Promise.all(captures.map(capture => findCapture(capture, api).catch((error: unknown) =>
+    ({ image: capture.image, frame: null, reason: error instanceof Error ? error.message : String(error) }))));
 }

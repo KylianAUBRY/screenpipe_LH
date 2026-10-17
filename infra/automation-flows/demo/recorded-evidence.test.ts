@@ -96,4 +96,29 @@ describe("demo task evidence from this machine's recordings", () => {
     const { task } = await buildDemoTask(now, { url: api.url, key: KEY });
     expect(task.stages[0].screenshots!.map(image => image.frameId)).toEqual([7102, 7141, 7154]);
   });
+
+  it("keeps the embedded image of a capture whose lookup fails, and says why", async () => {
+    const formQuery = (params: URLSearchParams) => params.get("q")?.includes("filtres") && !params.get("q")?.includes("NOVA-25");
+    const api = fakeScreenpipe([R1_EMAIL, R1_FORM, R1_TICKET], params => formQuery(params) ? 500 : undefined);
+    const { task, evidence } = await buildDemoTask(now, { url: api.url, key: KEY });
+    expect(task.stages[0].screenshots!.map(image => image.frameId)).toEqual([7101, -2, 7152]);
+    expect(shot(task, 0, 1)).toMatchObject({ timestamp: "2026-10-17T02:08:01Z", dataUrl: expect.stringMatching(/^data:image\/webp;base64,/) });
+    expect(evidence.find(lookup => lookup.image === "r1-form")).toMatchObject({ frame: null, reason: expect.stringContaining("HTTP 500") });
+    expect(evidence.find(lookup => lookup.image === "r2-email")).toMatchObject({ frame: null, reason: expect.stringContaining("no matching frame") });
+  });
+
+  it("keeps every embedded image when ScreenPipe is unreachable or refuses the key", async () => {
+    const closed = Bun.serve({ port: 0, fetch: () => new Response() });
+    const url = closed.url.origin;
+    closed.stop(true);
+    const down = await buildDemoTask(now, { url, key: KEY });
+    expect(down.task.stages.flatMap(stage => stage.screenshots!).every(image => image.frameId < 0 && image.dataUrl.startsWith("data:image/webp"))).toBe(true);
+    expect(down.evidence.every(lookup => !lookup.frame && lookup.reason.includes("not reachable"))).toBe(true);
+
+    const refused = fakeScreenpipe([R1_EMAIL], () => 401);
+    const unauthorized = await buildDemoTask(now, { url: refused.url });
+    expect(unauthorized.task.stages[0].screenshots![0].frameId).toBe(-1);
+    expect(unauthorized.evidence[0]).toMatchObject({ frame: null, reason: expect.stringContaining("SCREENPIPE_LOCAL_API_KEY") });
+    expect(refused.auth.every(header => header === null)).toBe(true);
+  });
 });
