@@ -8,14 +8,22 @@
 //   bun infra/automation-flows/demo/demo.ts --print      print a catalog holding only the task (browser mock)
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildDetectedTask, DEMO_TASK_ID, DEMO_TASK_URL } from "./detected-task";
+import { buildDetectedTask, DEMO_RECORDING, DEMO_TASK_ID, DEMO_TASK_URL, EVIDENCE_CAPTURES } from "./detected-task";
 import { catalogDir, readCatalog, upsertTask, writeCatalog } from "./catalog";
+import { findRecordedFrames } from "./recorded-evidence";
 
 const NOTIFY_URL = process.env.SCREENPIPE_NOTIFY_URL ?? "http://localhost:11435/notify";
 
 export function evidenceDataUrl(image: string): string {
   const bytes = readFileSync(join(import.meta.dir, "evidence", `${image}.webp`));
   return `data:image/webp;base64,${bytes.toString("base64")}`;
+}
+
+/** The demo task, each capture pointing at this machine's recorder frame when one is found. */
+export async function buildDemoTask(now: string, api: { url: string; key?: string }) {
+  const evidence = await findRecordedFrames(EVIDENCE_CAPTURES, { ...api, window: DEMO_RECORDING });
+  const frames = Object.fromEntries(evidence.flatMap(lookup => lookup.frame ? [[lookup.image, lookup.frame]] : []));
+  return { task: buildDetectedTask(evidenceDataUrl, now, frames), evidence };
 }
 
 /** Same deeplink action shape as the native workflow notification (`notifications/workflow.rs`). */
