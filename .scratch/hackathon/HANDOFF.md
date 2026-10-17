@@ -28,7 +28,7 @@ Read this first, then `AGENTS.md` (Hackathon mode), `CONTEXT.md`, `SPEC.md`,
 | 05 | Read-only graph | merged |
 | 06 | Questions unlock "Créer l'automatisation" | merged |
 | 07 | ScreenPipe node as AI Agent tool | merged; live tool check pending human |
-| 08 | Chat modification (pause → Needs Review) | **in progress** (implementer on branch `hackathon/ticket-08`) |
+| 08 | Chat modification (pause → Needs Review) | **in progress**: route, skill and button committed on `hackathon/ticket-08` (pushed as WIP, not merged); finish tests, merge integration tip, then merge it |
 | 09 | Chat creation (Add) | todo, blocked by 08 |
 | 10 | ScreenPipe Trigger (deterministic) | merged; manual check pending human |
 | 11 | ScreenPipe AI Trigger | merged; manual check pending human |
