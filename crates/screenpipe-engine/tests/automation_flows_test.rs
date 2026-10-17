@@ -123,6 +123,7 @@ impl Respond for FakeN8n {
                 workflow["active"] = json!(false);
                 workflow["isArchived"] = json!(false);
                 workflow["versionId"] = json!("version-1");
+                workflow["activeVersionId"] = Value::Null;
                 workflow["tags"] = json!([]);
                 state.workflows.push(workflow.clone());
                 json_response(200, workflow)
@@ -399,6 +400,39 @@ async fn second_create_returns_the_same_flow() {
 }
 
 #[tokio::test]
+async fn create_adopts_the_workflow_already_imported_by_the_import_script() {
+    // infra/automation-flows/import-workflow.sh imports the same bundled file
+    // under its fixed id, switched off and tagged by name.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let mut imported: Value = serde_json::from_str(include_str!(
+        "../../../infra/automation-flows/workflows/novadesk-support-tickets.json"
+    ))
+    .unwrap();
+    imported["active"] = json!(false);
+    imported["versionId"] = json!("imported-version");
+    imported["tags"] = json!([{"id": "tag-imported", "name": "screenpipe-flow"}]);
+    n8n.add_workflow(imported);
+
+    let (status, flow) = app.create_from_task().await;
+
+    assert!(status.is_success(), "{status} {flow}");
+    assert_eq!(flow["id"], "spNovaFlow000001");
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(flow["sourceTaskId"], TASK_ID);
+    assert!(
+        workflow_posts(&server).await.is_empty(),
+        "no duplicate import"
+    );
+    assert_eq!(n8n.workflows().len(), 1);
+    assert_eq!(
+        app.store()["flows"]["spNovaFlow000001"]["sourceTaskId"],
+        TASK_ID
+    );
+}
+
+#[tokio::test]
 async fn create_again_after_the_workflow_was_deleted_in_n8n() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;
@@ -555,8 +589,11 @@ async fn status_is_derived_from_n8n_and_the_reviewed_version() {
     app.write_store(store);
     assert_eq!(app.call("GET", &uri, None).await.1["status"], "paused");
 
-    // Switched on in n8n: Active, review up to date.
-    n8n.edit_workflow(&id, |w| w["active"] = json!(true));
+    // Published in n8n: Active, review up to date.
+    n8n.edit_workflow(&id, |w| {
+        w["active"] = json!(true);
+        w["activeVersionId"] = json!("version-1");
+    });
     let (_, flow) = app.call("GET", &uri, None).await;
     assert_eq!(flow["status"], "active");
     assert_eq!(flow["reviewOutdated"], false);
@@ -573,4 +610,33 @@ async fn status_is_derived_from_n8n_and_the_reviewed_version() {
         app.call("GET", &uri, None).await.1["status"],
         "needs_review"
     );
+}
+
+#[tokio::test]
+async fn review_is_outdated_while_n8n_runs_an_older_version_than_its_draft() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let uri = format!("/automation-flows/{id}");
+
+    // Published at version-1, then edited in the n8n editor: n8n keeps running
+    // version-1 while version-2 is only a draft, whatever ScreenPipe recorded.
+    let mut store = app.store();
+    store["flows"][&id]["reviewedVersionId"] = json!("version-2");
+    app.write_store(store);
+    n8n.edit_workflow(&id, |w| {
+        w["active"] = json!(true);
+        w["activeVersionId"] = json!("version-1");
+        w["versionId"] = json!("version-2");
+    });
+    let (_, flow) = app.call("GET", &uri, None).await;
+    assert_eq!(flow["status"], "active");
+    assert_eq!(flow["reviewOutdated"], true);
+
+    // The draft is published: n8n runs what it shows.
+    n8n.edit_workflow(&id, |w| w["activeVersionId"] = json!("version-2"));
+    let (_, flow) = app.call("GET", &uri, None).await;
+    assert_eq!(flow["reviewOutdated"], false);
 }

@@ -39,6 +39,8 @@ const STICKY_NOTE: &str = "n8n-nodes-base.stickyNote";
 
 /// Demo contract: a Detected Task maps to a pre-built n8n workflow and its
 /// pre-written review material. The answers are stored but do not change it.
+/// The files are the ones `infra/automation-flows/import-workflow.sh` imports,
+/// so both paths install the same workflow.
 struct DemoTask {
     id: &'static str,
     workflow: &'static str,
@@ -47,8 +49,12 @@ struct DemoTask {
 
 const DEMO_TASKS: &[DemoTask] = &[DemoTask {
     id: "wf-novadesk-support-tickets",
-    workflow: include_str!("../assets/automation-flows/novadesk-support-tickets.workflow.json"),
-    review: include_str!("../assets/automation-flows/novadesk-support-tickets.review.json"),
+    workflow: include_str!(
+        "../../../infra/automation-flows/workflows/novadesk-support-tickets.json"
+    ),
+    review: include_str!(
+        "../../../infra/automation-flows/workflows/novadesk-support-tickets.review.json"
+    ),
 }];
 
 // Fields the n8n public API accepts on create; it rejects any other property.
@@ -620,8 +626,10 @@ async fn build_flow(api: &N8nApi, workflow: &Value, record: Option<&FlowRecord>)
     let reviewed_version_id = record.and_then(|r| r.reviewed_version_id.clone());
     Flow {
         n8n_url: api.editor_url(&head.id),
+        // n8n 2.x keeps running the published `activeVersionId` while an edit
+        // in its editor creates a newer draft `versionId` (SPEC D7).
         review_outdated: head.status == "active"
-            && reviewed_version_id.as_deref() != Some(version_id.as_str()),
+            && workflow["activeVersionId"].as_str() != Some(version_id.as_str()),
         id: head.id,
         name: head.name,
         status: head.status,
@@ -681,9 +689,10 @@ async fn get_flow(
     Ok(Json(build_flow(&api, &workflow, record).await))
 }
 
-/// Demo: imports the task's bundled n8n workflow switched off and tagged, and
-/// records its review material. Calling it again for the same task returns
-/// the same Flow (re-imported only if it was deleted or archived in n8n).
+/// Demo: imports the task's bundled n8n workflow switched off and tagged (or
+/// adopts the copy the import script already installed), and records its
+/// review material. Calling it again for the same task returns the same Flow
+/// (re-imported only if it was deleted or archived in n8n).
 async fn create_from_task(
     State(state): State<FlowsState>,
     Json(request): Json<FromTaskRequest>,
@@ -723,14 +732,24 @@ async fn create_from_task(
         .map_err(|e| FlowError::Internal(format!("bundled workflow of {}: {e}", task.id)))?;
     let review: Value = serde_json::from_str(task.review)
         .map_err(|e| FlowError::Internal(format!("bundled review of {}: {e}", task.id)))?;
-    let created = api
-        .expect_ok(
-            Method::POST,
-            "/workflows",
-            &[],
-            Some(&importable(&workflow)),
-        )
-        .await?;
+    // infra/automation-flows/import-workflow.sh installs the same file under
+    // its fixed id: adopt that copy instead of importing a second one.
+    let preinstalled = match workflow["id"].as_str().filter(|id| valid_workflow_id(id)) {
+        Some(fixed_id) => api.workflow(fixed_id).await?,
+        None => None,
+    };
+    let created = match preinstalled {
+        Some(workflow) => workflow,
+        None => {
+            api.expect_ok(
+                Method::POST,
+                "/workflows",
+                &[],
+                Some(&importable(&workflow)),
+            )
+            .await?
+        }
+    };
     let id = workflow_id(&created)?;
     // Recorded before tagging, so a failed tag call is repaired by a retry
     // instead of importing a second copy.
