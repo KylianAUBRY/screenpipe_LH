@@ -16,8 +16,10 @@ type Refusal = { status: number; message: string };
 /** n8n 2.x public API as far as reset uses it. Refuses what n8n would refuse:
  * archiving or deleting a workflow that is switched on, and (strict) deleting
  * one that is not archived. */
-function fakeN8n(initial: FakeWorkflow[], options: { strictArchive?: boolean; refuse?: Record<string, Refusal> } = {}) {
+function fakeN8n(initial: FakeWorkflow[], options: { strictArchive?: boolean; refuse?: Record<string, Refusal>; busyAfterUnpublish?: number } = {}) {
   const workflows = new Map(initial.map(workflow => [workflow.id, { ...workflow }]));
+  // n8n 2.x answers 409 to a delete while it is still unpublishing the workflow.
+  const unpublishing = new Map<string, number>();
   const json = (status: number, body: unknown) => Response.json(body, { status });
   const server = Bun.serve({
     port: 0,
@@ -35,7 +37,11 @@ function fakeN8n(initial: FakeWorkflow[], options: { strictArchive?: boolean; re
       const workflow = id ? workflows.get(id) : undefined;
       if (!workflow) return json(404, { message: "Not Found" });
       if (request.method === "GET" && !action) return json(200, workflow);
-      if (request.method === "POST" && action === "unpublish") { workflow.active = false; return json(200, workflow); }
+      if (request.method === "POST" && action === "unpublish") {
+        workflow.active = false;
+        unpublishing.set(workflow.id, options.busyAfterUnpublish ?? 0);
+        return json(200, workflow);
+      }
       if (request.method === "POST" && action === "archive") {
         if (workflow.active) return json(400, { message: "Workflow is active" });
         workflow.isArchived = true;
@@ -43,6 +49,11 @@ function fakeN8n(initial: FakeWorkflow[], options: { strictArchive?: boolean; re
       }
       if (request.method === "DELETE" && !action) {
         if (workflow.active) return json(400, { message: "Workflow is active" });
+        const busy = unpublishing.get(workflow.id) ?? 0;
+        if (busy > 0) {
+          unpublishing.set(workflow.id, busy - 1);
+          return json(409, { message: "Workflow is still being unpublished. Please try again in a few moments." });
+        }
         if (options.strictArchive && !workflow.isArchived) return json(400, { message: "Workflow must be archived before it can be deleted." });
         workflows.delete(id!);
         return json(200, workflow);
@@ -119,6 +130,19 @@ describe("demo reset", () => {
     expect(n8n.workflows.size).toBe(0);
     expect(storedFlows(data)).toEqual({});
     expect(lines.join("\n")).toContain("spNovaFlow000001");
+  });
+
+  it("waits while n8n is still unpublishing a Flow, then deletes it instead of leaving it archived", async () => {
+    const n8n = serve([
+      { id: "spNovaFlow000001", name: "NovaDesk (import script)", active: true, tags: [{ name: "screenpipe-flow" }] },
+    ], { strictArchive: true, busyAfterUnpublish: 2 });
+
+    const report = await resetDemo({
+      n8n: { url: n8n.url, apiKey: KEY }, dataDir: dataDir({}), catalogDir: catalogDir(), container: "n8n-test", run: inbox(), log: () => {},
+    });
+
+    expect(report.failures).toEqual([]);
+    expect(n8n.workflows.size).toBe(0);
   });
 
   it("clears the demo Task Page answers and keeps the other tasks' answers", async () => {

@@ -74,6 +74,17 @@ const ok = (status: number) => status >= 200 && status < 300;
 const answer = ({ status, body }: { status: number; body: any }) =>
   `n8n answered ${status}${body?.message ? `: ${body.message}` : ""}`;
 
+/** DELETE, waiting while n8n answers 409 because it is still unpublishing the
+ * workflow (n8n 2.x does that for a moment after `unpublish`). */
+async function deleteWhenUnpublished(n8n: N8nCall, id: string) {
+  let deleted = await n8n("DELETE", `/workflows/${id}`);
+  for (let attempt = 1; deleted.status === 409 && attempt <= 20; attempt++) {
+    await new Promise(done => setTimeout(done, 500));
+    deleted = await n8n("DELETE", `/workflows/${id}`);
+  }
+  return deleted;
+}
+
 /** Switches a workflow off, then deletes it (archiving first when n8n asks for
  * it). Returns what it did; throws with n8n's reason when it is still there. */
 async function removeWorkflow(n8n: N8nCall, id: string): Promise<string> {
@@ -89,13 +100,13 @@ async function removeWorkflow(n8n: N8nCall, id: string): Promise<string> {
     if (!ok(off.status)) throw new Error(`cannot switch off ${id}: ${answer(off)}`);
     done.push("switched off");
   }
-  let deleted = await n8n("DELETE", `/workflows/${id}`);
+  let deleted = await deleteWhenUnpublished(n8n, id);
   if (!ok(deleted.status) && deleted.status !== 404 && !workflow.isArchived) {
     // n8n 2.x deletes only archived workflows.
     const archived = await n8n("POST", `/workflows/${id}/archive`);
     if (!ok(archived.status)) throw new Error(`cannot archive ${id}: ${answer(archived)} (delete: ${answer(deleted)})`);
     done.push("archived");
-    deleted = await n8n("DELETE", `/workflows/${id}`);
+    deleted = await deleteWhenUnpublished(n8n, id);
   }
   if (!ok(deleted.status) && deleted.status !== 404) throw new Error(`cannot delete ${id}: ${answer(deleted)}`);
   const after = await n8n("GET", `/workflows/${id}`);
