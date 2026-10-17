@@ -25,6 +25,7 @@ function isEvidence(value: unknown): value is FlowEvidence {
     !Number.isNaN(Date.parse(value.at)) &&
     typeof value.label === "string" &&
     (value.frameId === undefined || Number.isInteger(value.frameId)) &&
+    (value.imageUrl === undefined || typeof value.imageUrl === "string") &&
     (value.app === undefined || typeof value.app === "string")
   );
 }

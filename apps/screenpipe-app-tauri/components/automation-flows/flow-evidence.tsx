@@ -24,7 +24,8 @@ export function FlowEvidence({ evidence, unit }: { evidence: Evidence[]; unit: s
   const uiLocale = useUiLocale();
   const router = useRouter();
   const setPendingNavigation = useTimelineStore((store) => store.setPendingNavigation);
-  const [missingFrames, setMissingFrames] = useState<ReadonlySet<number>>(new Set());
+  // Captures that failed to load, by their URL.
+  const [missing, setMissing] = useState<ReadonlySet<string>>(new Set());
 
   // Same path as the meeting replay strip: the Timeline reads the pending
   // target on mount, and the event covers an already-mounted Timeline.
@@ -50,7 +51,12 @@ export function FlowEvidence({ evidence, unit }: { evidence: Evidence[]; unit: s
       </div>
       <ol className="flex snap-x gap-3 overflow-x-auto pb-2">
         {evidence.map((item, index) => {
-          const showFrame = item.frameId !== undefined && !missingFrames.has(item.frameId);
+          // A screenpipe frame wins; an image URL is the fallback.
+          const capture =
+            item.frameId !== undefined
+              ? appendAuthToken(`${getApiBaseUrl()}/frames/${item.frameId}`)
+              : item.imageUrl;
+          const showCapture = Boolean(capture) && !missing.has(capture as string);
           return (
             <li
               key={`${item.at}-${index}`}
@@ -58,17 +64,15 @@ export function FlowEvidence({ evidence, unit }: { evidence: Evidence[]; unit: s
               data-testid="flow-evidence-item"
             >
               <div className="relative aspect-video bg-muted">
-                {showFrame ? (
+                {showCapture ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={appendAuthToken(`${getApiBaseUrl()}/frames/${item.frameId}`)}
+                    src={capture}
                     alt={ui("Screen capture: {label}", { label: item.label })}
                     className="h-full w-full object-cover object-top"
                     draggable={false}
                     loading="lazy"
-                    onError={() =>
-                      setMissingFrames((previous) => new Set(previous).add(item.frameId as number))
-                    }
+                    onError={() => setMissing((previous) => new Set(previous).add(capture as string))}
                   />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center gap-1.5 text-xs text-muted-foreground">

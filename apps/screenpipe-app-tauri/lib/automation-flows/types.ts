@@ -45,6 +45,8 @@ export type FlowEvidence = {
   label: string;
   /** screenpipe frame id of a capture of that moment (`frame_id` in /search results). */
   frameId?: number;
+  /** Capture as an image URL, used when there is no frame id (e.g. an exported screenshot). */
+  imageUrl?: string;
   /** App where it happened, e.g. "Gmail". */
   app?: string;
 };

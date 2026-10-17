@@ -40,6 +40,20 @@ describe("flow evidence", () => {
     expect(screen.getAllByText("No capture")).toHaveLength(2);
   });
 
+  it("falls back to the image URL when there is no screenpipe frame", () => {
+    render(
+      <FlowEvidence
+        evidence={[
+          { at: "2026-10-14T09:12:00.000Z", label: "With both", frameId: 7, imageUrl: "/shot-a.png" },
+          { at: "2026-10-15T09:12:00.000Z", label: "Image only", imageUrl: "/shot-b.png" },
+        ]}
+        unit="examples"
+      />,
+    );
+    expect((screen.getByRole("img", { name: "Screen capture: With both" }) as HTMLImageElement).src).toContain("/frames/7");
+    expect((screen.getByRole("img", { name: "Screen capture: Image only" }) as HTMLImageElement).src).toContain("/shot-b.png");
+  });
+
   it("opens the timeline at the moment of the repetition", () => {
     vi.useFakeTimers();
     render(<FlowEvidence evidence={EVIDENCE} unit="examples" />);
