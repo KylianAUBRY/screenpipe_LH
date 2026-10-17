@@ -166,3 +166,19 @@ answers, no unread demo email. » (exit 0).
   catch-up seed. Two findings fixed at once (the user's Désactiver always
   switches off; no host fact behind URL userinfo); two minor ones left as known
   limits (`HANDOFF.md`).
+
+## Custom n8n nodes with ChatGPT luna:max (ticket 25), 2026-10-17 19:35
+
+App rebuilt from `1326c501d`, nodes reinstalled (`bun run install-n8n`). Each
+n8n check ran in a temporary workflow, deleted afterwards.
+
+| Check | Result |
+|-------|--------|
+| ScreenPipe node in n8n: search « Jira » (limit 3) → activity summary of the last hour | success: 2 items, then 1 summary item |
+| AI step in n8n with the ScreenPipe tool, NovaPay card-refusal email | 200 in 5.3 s: Bug, NovaPay, Highest, back; model called twice, `Historique ScreenPipe` tool called once, no error |
+| ScreenPipe AI Trigger active in n8n (every minute, default `chatgpt/gpt-5.6-luna:max`) | fired at its first poll: « L'utilisateur travaille clairement dans l'assistant IA Claude, avec un terminal également ouvert. » |
+| ScreenPipe Trigger active in n8n: window `Terminal`, flow `DucCIr8YH6FdrZOZ`, keyword « automatisation » | each polled without error and set its cursor; nothing fired (no new event during the minute, by design) |
+| ScreenPipe Trigger, « Fetch Test Event » path (real node code against ScreenPipe): keyword « ok », window Terminal, pipe `digital-clone`, flow NovaDesk | each returned its newest real event |
+
+Not observed live: a deterministic trigger firing inside n8n on a new event
+(the transition logic is covered by `test/screenpipe-trigger.test.ts`).
