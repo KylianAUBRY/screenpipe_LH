@@ -97,6 +97,14 @@ describe("demo task evidence from this machine's recordings", () => {
     expect(task.stages[0].screenshots!.map(image => image.frameId)).toEqual([7102, 7141, 7154]);
   });
 
+  it("gives a frame to one capture only, the one whose key frame is nearest", async () => {
+    // No frame of the form: the ticket view also shows the summary.
+    const api = fakeScreenpipe([R1_EMAIL, R1_TICKET]);
+    const { task, evidence } = await buildDemoTask(now, { url: api.url, key: KEY });
+    expect(task.stages[0].screenshots!.map(image => image.frameId)).toEqual([7101, -2, 7152]);
+    expect(evidence.find(lookup => lookup.image === "r1-form")).toMatchObject({ frame: null, reason: expect.stringContaining("r1-ticket") });
+  });
+
   it("keeps the embedded image of a capture whose lookup fails, and says why", async () => {
     const formQuery = (params: URLSearchParams) => params.get("q")?.includes("filtres") && !params.get("q")?.includes("NOVA-25");
     const api = fakeScreenpipe([R1_EMAIL, R1_FORM, R1_TICKET], params => formQuery(params) ? 500 : undefined);

@@ -62,7 +62,21 @@ async function findCapture(capture: EvidenceCapture, api: RecordingsApi): Promis
 }
 
 /** Never throws: a capture whose lookup fails comes back without a frame, with the reason. */
-export function findRecordedFrames(captures: EvidenceCapture[], api: RecordingsApi): Promise<CaptureLookup[]> {
-  return Promise.all(captures.map(capture => findCapture(capture, api).catch((error: unknown) =>
+export async function findRecordedFrames(captures: EvidenceCapture[], api: RecordingsApi): Promise<CaptureLookup[]> {
+  const lookups: CaptureLookup[] = await Promise.all(captures.map(capture => findCapture(capture, api).catch((error: unknown) =>
     ({ image: capture.image, frame: null, reason: error instanceof Error ? error.message : String(error) }))));
+  // The Task Page shows a frame once: a frame two captures match goes to the
+  // capture whose key frame is nearest; the other keeps its embedded image.
+  const distance = (lookup: CaptureLookup, index: number) =>
+    lookup.frame ? Math.abs(Date.parse(lookup.frame.timestamp) - Date.parse(captures[index].at)) : Infinity;
+  return lookups.map((lookup, index) => {
+    if (!lookup.frame) return lookup;
+    const frameId = lookup.frame.frameId;
+    // Ties go to the earlier capture, so exactly one capture owns the frame.
+    const owner = lookups.reduce((best, other, i) => other.frame?.frameId === frameId
+      && distance(other, i) < distance(lookups[best], best) ? i : best,
+    lookups.findIndex(other => other.frame?.frameId === frameId));
+    return owner === index ? lookup
+      : { image: lookup.image, frame: null, reason: `its nearest frame ${frameId} is ${lookups[owner].image}'s` };
+  });
 }
