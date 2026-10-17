@@ -4399,9 +4399,11 @@ async fn failed_runs_since_the_last_check_are_notified_once_each() {
     let app = App::new().await;
     app.configure_n8n(&server.uri());
     let id = active_flow(&app).await;
-    // Failed while the app was down; a run that went through is not a failure.
-    n8n.add_execution(failed_run_ago("exec-down", &id, chrono::Duration::minutes(30)));
-    let mut fine = failed_run_ago("exec-fine", &id, chrono::Duration::minutes(20));
+    // A first check, then runs that end after it (while the app was down);
+    // a run that went through is not a failure.
+    assert_eq!(health_check(&app).await["notified"], json!([]));
+    n8n.add_execution(failed_run_ago("exec-down", &id, chrono::Duration::zero()));
+    let mut fine = failed_run_ago("exec-fine", &id, chrono::Duration::zero());
     fine["status"] = json!("success");
     n8n.add_execution(fine);
 
@@ -4433,12 +4435,33 @@ async fn failed_runs_since_the_last_check_are_notified_once_each() {
 }
 
 #[tokio::test]
+async fn the_very_first_check_does_not_notify_runs_from_before_the_engine_started() {
+    // A first install (no record of past checks) must not turn the last day
+    // of failures into a burst of notifications.
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let id = active_flow(&app).await;
+    // Failed hours before this engine started.
+    n8n.add_execution(failed_run_ago("exec-old", &id, chrono::Duration::hours(3)));
+
+    let report = health_check(&app).await;
+    assert_eq!(report["notified"], json!([]), "{report}");
+    assert_eq!(report["pendingNotifications"], json!([]), "{report}");
+    assert!(notifications(&app).await.is_empty());
+
+    // A run that fails after the engine started is notified.
+    n8n.add_execution(failed_run_ago("exec-new", &id, chrono::Duration::zero()));
+    assert_eq!(health_check(&app).await["notified"], json!(["exec-new"]));
+}
+
+#[tokio::test]
 async fn a_run_the_error_workflow_reported_is_not_notified_again_and_vice_versa() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;
     app.configure_n8n(&server.uri());
     let id = active_flow(&app).await;
-    n8n.add_execution(failed_run_ago("exec-live", &id, chrono::Duration::minutes(5)));
+    n8n.add_execution(failed_run_ago("exec-live", &id, chrono::Duration::zero()));
     let report = |execution: &str| {
         let uri = format!("/automation-flows/{id}/failures");
         let body = json!({"executionId": execution, "error": "503 Service Unavailable"});
@@ -4467,7 +4490,7 @@ async fn a_failed_run_the_notification_server_missed_is_notified_at_the_next_che
     let app = App::new().await;
     app.configure_n8n(&server.uri());
     let id = active_flow(&app).await;
-    n8n.add_execution(failed_run_ago("exec-1", &id, chrono::Duration::minutes(1)));
+    n8n.add_execution(failed_run_ago("exec-1", &id, chrono::Duration::zero()));
     // The app's notification server is not up yet.
     app.notify.reset().await;
 

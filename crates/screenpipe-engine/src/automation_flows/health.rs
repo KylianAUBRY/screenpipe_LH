@@ -19,14 +19,16 @@
 //! Which runs were notified is kept in `<data dir>/automation-flows-health.json`
 //! (the time of the last check and the runs notified since), shared with the
 //! error workflow's route, so a run is never notified twice, across restarts
-//! too.
+//! too. Without that record (a first install), checks look at the runs that
+//! ended since the engine started, never at older ones: the last day of
+//! failures must not arrive as a burst of notifications.
 
 use super::failures::{failure_notice, notify, Undelivered};
 use super::*;
 
 const LEDGER_FILE: &str = "automation-flows-health.json";
-/// How far back the very first check looks for failed runs.
-const FIRST_LOOKBACK: chrono::Duration = chrono::Duration::hours(24);
+/// How long a notified run is remembered before what checks look at.
+const NOTIFIED_KEPT: chrono::Duration = chrono::Duration::hours(24);
 /// A draft under construction unchanged for this long is abandoned.
 const ABANDONED_AFTER: chrono::Duration = chrono::Duration::hours(24);
 /// Runs read per Flow at each check (n8n lists the newest first).
@@ -65,10 +67,21 @@ impl HealthSchedule {
 
 /// The last check's result, and the lock that serializes checks and the
 /// ledger's readers and writers.
-#[derive(Default)]
 pub(super) struct Health {
     last: Mutex<Option<HealthReport>>,
     ledger: Mutex<()>,
+    /// When this engine started: without a ledger, checks look no further back.
+    started_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl Default for Health {
+    fn default() -> Self {
+        Self {
+            last: Mutex::new(None),
+            ledger: Mutex::new(()),
+            started_at: chrono::Utc::now(),
+        }
+    }
 }
 
 /// What a check found (wire: `GET`/`POST /automation-flows/health`).
@@ -131,19 +144,21 @@ impl Ledger {
         }
     }
 
-    /// Failed runs that stopped before this are no longer looked at.
-    fn since(&self, now: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+    /// Failed runs that stopped before this are no longer looked at: the
+    /// last check that handed every run over, else (no check yet) when the
+    /// engine started.
+    fn since(&self, started_at: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
         self.last_check_at
             .as_deref()
             .and_then(instant)
-            .unwrap_or(now - FIRST_LOOKBACK)
+            .unwrap_or(started_at)
     }
 
     /// Forgets the runs that stopped a day before what checks look at: no
     /// check reads them again, and the error workflow reports a run within
     /// seconds, never a day late.
-    fn prune(&mut self, now: chrono::DateTime<chrono::Utc>) {
-        let kept_from = self.since(now) - FIRST_LOOKBACK;
+    fn prune(&mut self, started_at: chrono::DateTime<chrono::Utc>) {
+        let kept_from = self.since(started_at) - NOTIFIED_KEPT;
         self.notified
             .retain(|_, at| instant(at).is_none_or(|at| at >= kept_from));
     }
@@ -328,7 +343,7 @@ async fn report_failed_runs(
     let dir = &state.screenpipe_dir;
     let store = FlowStore::load(dir)?;
     let mut ledger = Ledger::load(dir);
-    let since = ledger.since(now);
+    let since = ledger.since(state.health.started_at);
     for workflow in workflows {
         let Some(flow_id) = workflow["id"].as_str() else {
             continue;
@@ -390,7 +405,7 @@ async fn report_failed_runs(
     if report.pending.is_empty() {
         ledger.last_check_at = Some(now.to_rfc3339());
     }
-    ledger.prune(now);
+    ledger.prune(state.health.started_at);
     ledger.save(dir);
     Ok(())
 }
