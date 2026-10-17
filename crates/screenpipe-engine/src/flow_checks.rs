@@ -180,6 +180,31 @@ pub fn check_and_wire(workflow: &mut Value, credentials: &[N8nCredential]) -> Re
     }
 }
 
+/// The parameters a new node of `kind` at `version` starts from, for the card
+/// the chat reads ([`crate::n8n_nodes`]): every parameter the check reads
+/// (required ones and those their display rules read) that is shown, at the
+/// `chosen` value or its default. The chat fills the empty ones. `None` when
+/// the check does not know that type at that version.
+pub fn skeleton_parameters(
+    kind: &str,
+    version: f64,
+    chosen: &Map<String, Value>,
+) -> Option<Map<String, Value>> {
+    let group = catalog()
+        .nodes
+        .get(kind)?
+        .iter()
+        .find(|g| g.versions.iter().any(|v| (v - version).abs() < 1e-9))?;
+    let eval = Eval { group, params: chosen, version };
+    let mut parameters = chosen.clone();
+    for def in &group.params {
+        if !parameters.contains_key(&def.name) && eval.shown(&def.rules, 0) == Some(true) {
+            parameters.insert(def.name.clone(), def.default.clone());
+        }
+    }
+    Some(parameters)
+}
+
 /// Keeps the node's credential of `kind` when n8n holds it, else wires the
 /// only one n8n has of that kind.
 fn wire(node: &mut Value, name: &str, kind: &str, credentials: &[N8nCredential]) -> Result<(), String> {
