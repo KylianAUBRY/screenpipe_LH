@@ -52,6 +52,17 @@ the integration branch, fix findings in one implementer, set every ticket's
   `/Applications` does not contain our routes or the proxy fix. Live checks:
   quit the installed app, then `cd apps/screenpipe-app-tauri && bun run dev:tauri`
   on this branch, signed in (the AI proxy needs the cloud token).
+- **Dev builds are isolated by default** (`~/.screenpipe-dev`, API on port
+  3130). The n8n credentials point at port 3030 and the AI tool needs the real
+  captures, so run the dev build with `SCREENPIPE_DEV_USE_PROD_DATA=1`, from
+  macOS Terminal (screen permissions), never next to the installed app.
+- **Workflows view needs the PostHog `workflows` flag.** The Task Page lives
+  there. On a demo machine whose account lacks the flag, put
+  `NEXT_PUBLIC_SCREENPIPE_WORKFLOWS_ROLLOUT=1` in
+  `apps/screenpipe-app-tauri/.env.local` (gitignored) and rebuild. It only
+  shows the view; background workflow AI still needs its explicit opt-in.
+- **Docker Desktop** reports bind mounts as `/host_mnt/Users/…`;
+  `install-n8n` strips that prefix (it refused to copy before).
 - **n8n 2.42.2:** switch on/off = `publish`/`unpublish` with `versionId`
   (`activate`/`deactivate` are deprecated). CLI runs inside the container need
   `-e N8N_RUNNERS_BROKER_PORT=5690`. Polling triggers only run from the
