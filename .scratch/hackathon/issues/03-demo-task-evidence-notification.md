@@ -15,7 +15,7 @@ once 02 exists, the demo Flow) so the demo can be replayed.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** done (one human check left, see the first item)
+**Status:** ready-for-agent
 
 - [x] Running the demo script shows a notification; clicking it opens the Task Page of the demo task.
   `bun infra/automation-flows/demo/demo.ts` against the running app: `Installed wf-novadesk-support-tickets …` then
