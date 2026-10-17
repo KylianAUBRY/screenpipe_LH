@@ -78,6 +78,26 @@ then « 0 of 2 answered · Required to create the automation » and the two
 scripted questions. (The Workflows view needs the PostHog `workflows` flag;
 this machine builds with `NEXT_PUBLIC_SCREENPIPE_WORKFLOWS_ROLLOUT=1`.)
 
+## Rehearsal 0 — full journey on the build with tickets 14–17 and 19 (13:23–13:32)
+
+| Step | Observed |
+|---|---|
+| Demo notification → action button | Task Page in 4 s; question block in French: « Réponses : 0 sur 2 · Obligatoires pour créer l'automatisation » |
+| 2 answers pasted in the two question fields | « Réponses : 2 sur 2 »; « Créer l'automatisation » enabled |
+| « Créer l'automatisation » | Review Screen « Brouillon » in ~10 s with the full French summary and 8 steps; n8n: one workflow `dO641Kw152MPhwzh`, inactive, tag `screenpipe-flow` |
+| « VOIR LA TÂCHE », then « Créer » again | back on the Task Page with the answers kept; second click → same Flow, still one workflow in n8n |
+| « VOIR LE GRAPHE » | default browser (Safari) opened `localhost:5678/…/workflow/dO641Kw152MPhwzh` — Safari showed n8n's sign-in page: **log into n8n in Safari before the demo** |
+| `POST /activate` with only the local API key | `403 activation_requires_user`; without JSON content type: 415 (ticket 14) |
+| Click « ACTIVER » | active in n8n, history `activated/user` |
+| Bug email « NovaCRM : impossible d'ajouter une pièce jointe… » | NOVA-34, Bug, Highest, label `back` |
+| « DEMANDER UNE MODIFICATION » | Home chat with « Avec le skill automation-flows, modifie l'Automation Flow « NovaDesk… » (id : dO641Kw152MPhwzh). Modification demandée : » prefilled, not sent |
+| Request « Ajoute l'étiquette auto à chaque ticket créé… » sent | in ~30 s the agent answered « …l'étiquette `auto` est ajoutée. Rien d'autre n'a changé. Le flux est désactivé et doit être revu… » + « Revoir le Flow » link; n8n inactive, Jira body `labels: [ $json.label, 'auto' ]`, node sentence and summary updated; history `paused_for_edit/chat`, `modified/chat` |
+| « Revoir le Flow » → Review Screen | « À revoir » + banner; history lines « Mis en pause pour modification par le chat », « Modifié par le chat · version 2d7c7381 » |
+| Click « ACTIVER », bug email « NovaPay : … frais kilométriques … » | NOVA-35, Bug, Medium, labels `auto` + `back` |
+| `docker restart` n8n with the Flow active | n8n ready in 4 s, still active, 0 new execution in 90 s (no email reprocessed) |
+| Click « DÉSACTIVER », bug email sent | 2 min later: no execution, the email still unread (deactivation stops processing) |
+| Flows → « AJOUTER » → chat creation « quand je dis « point d'étape » à voix haute, note l'heure… » | prompt prefilled; agent created « Noter les points d'étape »: Draft, inactive, tagged, `CUSTOM.screenPipeTrigger` + Set, French sentences — but the trigger's parameters were empty (the skill did not name them) → fixed: the skill now lists every node parameter (package test guards it) |
+
 ## Task Page evidence (ticket 15)
 
 `demo.ts` lookup: 9/9 captures resolved to frames recorded on this Mac
