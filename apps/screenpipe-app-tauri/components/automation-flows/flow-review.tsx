@@ -23,8 +23,9 @@ import {
   useFlowsLoad,
 } from "./common";
 import { FlowActivation } from "./flow-activation";
+import { FailedRun } from "./flow-failed-run";
 import { FlowGraph } from "./flow-graph";
-import { activationLabel, formatDate, lastRunLabel } from "./labels";
+import { activationLabel, lastRunLabel } from "./labels";
 import { N8nUnreachableBanner } from "./n8n-banner";
 
 export function FlowReview({
@@ -139,17 +140,7 @@ function ReviewContent({
         </div>
       </header>
 
-      {flow.failedRun && (
-        <p
-          role="status"
-          data-testid="flow-failed-run"
-          className="border border-red-600 p-3 text-sm dark:border-red-500"
-        >
-          Le dernier passage a échoué le {formatDate(flow.failedRun.startedAt)}. Un échec
-          ne met pas le Flow en pause ; il apparaît en rouge jusqu&apos;au prochain passage
-          réussi.
-        </p>
-      )}
+      <FailedRun flow={flow} api={api} onChange={onChange} />
       {flow.status === "needs_review" && (
         <p role="status" className="border border-border bg-accent p-3 text-sm">
           Ce Flow a changé depuis sa dernière activation : relisez-le avant de le

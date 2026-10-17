@@ -41,6 +41,10 @@ function fakeApi(overrides: Partial<FlowsApi> = {}): FlowsApi {
     createFromTask: vi.fn(async () => fixtureFlow),
     activate: vi.fn(async () => activeFlow),
     deactivate: vi.fn(async () => pausedFlow),
+    retry: vi.fn(async () => ({
+      run: { executionId: "240", status: "success" as const, startedAt: "2026-10-17T10:00:00.000Z" },
+      flow: activeFlow,
+    })),
     openInN8n: vi.fn(async () => {}),
     openTaskPage: vi.fn(async () => {}),
     openN8nConnection: vi.fn(async () => {}),
@@ -795,6 +799,105 @@ describe("Failed Runs (ticket 24)", () => {
 
     expect(screen.queryByTestId("flow-failed-run")).toBeNull();
     expect(screen.queryByText("En échec")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Relancer" })).toBeNull();
+  });
+
+  describe("« Relancer » (ticket 26)", () => {
+    const recovered: Flow = {
+      ...activeFlow,
+      lastExecution: { status: "success", startedAt: "2026-10-17T10:00:00.000Z" },
+      failedRun: null,
+    };
+
+    it("replays the Failed Run and shows the new outcome", async () => {
+      const retry = vi.fn(async () => ({
+        run: { executionId: "240", status: "success" as const, startedAt: "2026-10-17T10:00:00.000Z" },
+        flow: recovered,
+      }));
+      const api = fakeApi({ get: vi.fn(async () => failed), retry });
+      render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
+
+      const banner = await screen.findByTestId("flow-failed-run");
+      fireEvent.click(within(banner).getByRole("button", { name: "Relancer" }));
+
+      await waitFor(() => expect(screen.queryByTestId("flow-failed-run")).toBeNull());
+      expect(retry).toHaveBeenCalledWith(fixtureFlow.id, failedRun.executionId);
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("status", { name: "Résultat de la relance" }).textContent).toMatch(
+        /a réussi/,
+      );
+      expect(screen.queryByText("En échec")).toBeNull();
+      expect(screen.getByTestId("flow-status").textContent).toBe("Active");
+    });
+
+    it("keeps the Flow failed when the replay fails again, on the new Run", async () => {
+      const failedAgain: Flow = {
+        ...failed,
+        lastExecution: { status: "error", startedAt: "2026-10-17T10:00:00.000Z" },
+        failedRun: { executionId: "240", startedAt: "2026-10-17T10:00:00.000Z" },
+      };
+      const retry = vi.fn(async () => ({
+        run: { executionId: "240", status: "error" as const, startedAt: "2026-10-17T10:00:00.000Z" },
+        flow: failedAgain,
+      }));
+      render(
+        <FlowsTab
+          flowId={fixtureFlow.id}
+          onSelectFlow={vi.fn()}
+          api={fakeApi({ get: vi.fn(async () => failed), retry })}
+        />,
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: "Relancer" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("status", { name: "Résultat de la relance" }).textContent).toMatch(
+          /a de nouveau échoué/,
+        ),
+      );
+      expect(screen.getByTestId("flow-failed-run")).toBeTruthy();
+      // « Relancer » now replays the new Failed Run.
+      fireEvent.click(screen.getByRole("button", { name: "Relancer" }));
+      await waitFor(() => expect(retry).toHaveBeenCalledTimes(2));
+      expect(retry).toHaveBeenLastCalledWith(fixtureFlow.id, "240");
+    });
+
+    it("says why a retry was refused and shows the Flow as it now is", async () => {
+      const get = vi.fn().mockResolvedValueOnce(failed).mockResolvedValue(recovered);
+      const retry = vi.fn(async () => {
+        throw new FlowsApiError("run_not_failed", "this Run succeeded; nothing to retry");
+      });
+      render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get, retry })} />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Relancer" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toMatch(/Relance impossible/);
+      expect(alert.textContent).toMatch(/n'est plus en échec/);
+      await waitFor(() => expect(screen.queryByTestId("flow-failed-run")).toBeNull());
+    });
+
+    it("cannot replay the same Run twice while n8n works on it", async () => {
+      let finish: (value: { run: never; flow: Flow }) => void = () => {};
+      const retry = vi.fn(
+        () => new Promise<{ run: never; flow: Flow }>((resolve) => (finish = resolve)),
+      );
+      render(
+        <FlowsTab
+          flowId={fixtureFlow.id}
+          onSelectFlow={vi.fn()}
+          api={fakeApi({ get: vi.fn(async () => failed), retry: retry as FlowsApi["retry"] })}
+        />,
+      );
+
+      const button = await screen.findByRole("button", { name: "Relancer" });
+      fireEvent.click(button);
+      await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(true));
+      fireEvent.click(button);
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("flow-failed-run").textContent).toMatch(/Relance en cours/);
+      await act(async () => finish({ run: undefined as never, flow: recovered }));
+    });
   });
 });
 

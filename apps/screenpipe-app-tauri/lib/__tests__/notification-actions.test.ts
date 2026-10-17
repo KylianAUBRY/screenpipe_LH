@@ -60,6 +60,47 @@ describe("notification API actions", () => {
     expect(apiMocks.localFetch).not.toHaveBeenCalled();
   });
 
+  describe("« Relancer » on a Failed Run notification (ticket 26)", () => {
+    // As the engine's Failed Run notification carries it.
+    const relancer = {
+      type: "api" as const,
+      label: "Relancer",
+      method: "POST",
+      url: "/automation-flows/wf1/retry",
+      body: { executionId: "231" },
+      deeplink_url: "screenpipe://flows/wf1",
+    };
+
+    beforeEach(() => {
+      tauriCommandMocks.showWindowActivated.mockClear();
+      apiMocks.isLocalApiUrl.mockReturnValue(true);
+    });
+
+    it("replays the Run, then opens the Flow's Review Screen on its new outcome", async () => {
+      apiMocks.localFetch.mockResolvedValue(Response.json({ run: {}, flow: {} }));
+
+      await executeNotificationAction(relancer);
+
+      expect(apiMocks.localFetch).toHaveBeenCalledWith("/automation-flows/wf1/retry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ executionId: "231" }),
+      });
+      expect(tauriCommandMocks.showWindowActivated).toHaveBeenCalledWith({
+        Home: { page: expect.stringContaining("flow=wf1") },
+      });
+    });
+
+    it("reports a refused retry and opens nothing", async () => {
+      apiMocks.localFetch.mockResolvedValue(
+        Response.json({ error: "run_not_failed" }, { status: 409 }),
+      );
+
+      await expect(executeNotificationAction(relancer)).rejects.toThrow(/HTTP 409/);
+      expect(tauriCommandMocks.showWindowActivated).not.toHaveBeenCalled();
+    });
+  });
+
   it("allows a relative local API target", async () => {
     apiMocks.isLocalApiUrl.mockReturnValue(true);
     apiMocks.localFetch.mockResolvedValue(new Response(null, { status: 200 }));

@@ -279,6 +279,16 @@ const NotificationHandler: React.FC = () => {
             if (typeof noteUrl === "string" && noteUrl.startsWith("screenpipe://")) {
               await routeNotificationDeeplink(noteUrl);
             }
+          } else if (res.ok) {
+            // Any other api action with an in-app follow-up (a Flow's
+            // « Relancer », ticket 26: its Review Screen on the new outcome),
+            // as the webview panel and the bell do.
+            const next = action.deeplinkUrl || action.deeplink_url;
+            if (typeof next === "string" && next.startsWith("screenpipe://")) {
+              await routeNotificationDeeplink(next);
+            }
+          } else {
+            console.warn(`api action ${action.url} failed: HTTP ${res.status}`);
           }
           return;
         }
