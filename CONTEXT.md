@@ -2,7 +2,7 @@
 
 Vocabulary for Automation Flows: reviewable automations backed by n8n, created
 from the ScreenPipe chat or from a repetitive task ScreenPipe detected. The
-feature is described in the "Automation Flows" section of `README.md`.
+feature is described in `README.md`.
 
 ## Language
 

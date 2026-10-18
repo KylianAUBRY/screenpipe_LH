@@ -12,8 +12,8 @@ Automation Flows are ScreenPipe automations backed by a self-hosted n8n
 workflow. Before changing `crates/screenpipe-engine/src/automation_flows*`,
 `apps/screenpipe-app-tauri/components/automation-flows/`,
 `apps/screenpipe-app-tauri/lib/automation-flows/`,
-`packages/n8n-nodes-screenpipe/` or `infra/automation-flows/`, read the
-"Automation Flows" section of `README.md`: its design rules are binding.
+`packages/n8n-nodes-screenpipe/` or `infra/automation-flows/`, read
+`README.md`: its "Design rules" are binding.
 Vocabulary: `CONTEXT.md`. Design history: `docs/automation-flows/history/`.
 
 ## Read on demand

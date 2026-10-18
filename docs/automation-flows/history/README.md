@@ -14,4 +14,4 @@ tickets, the demo runbook and handoff notes, kept as they were written.
 
 Some of this material describes a scripted demo (a pre-built task and
 workflow). For what the feature does today and the design rules that apply,
-read the "Automation Flows" section of the root `README.md`.
+read the root `README.md`.
