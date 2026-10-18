@@ -51,14 +51,14 @@ export function WorkflowAccessNotice({ access, open = false, onOpenChange, refre
   const reset = "resetAt" in access && access.resetAt ? new Date(access.resetAt) : null;
   const title = access.state === "upgrade" ? "Update workflows with Business" : access.state === "paused" ? "Workflow updates are paused" : "Couldn’t check workflow access";
   const description = access.state === "upgrade" ? "Automatic workflow discovery requires Business." : access.message;
-  const buttonStyle = { fontFamily: "inherit", letterSpacing: 0 };
+  const buttonStyle = { fontFamily: "inherit", letterSpacing: 0, background: "#fff", color: "#171815", borderColor: "#dedfd8" };
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-w-sm" overlayClassName="bg-black/30" style={{ fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif" }}>
+    <DialogContent className="max-w-sm" overlayClassName="bg-black/30" style={{ background: "#fff", color: "#171815", fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif" }}>
       <DialogHeader>
         <DialogTitle style={{ fontFamily: "inherit", letterSpacing: 0 }} className="text-lg normal-case">{title}</DialogTitle>
-        <DialogDescription className="text-muted-foreground">{description}</DialogDescription>
+        <DialogDescription style={{ color: "#73766d" }}>{description}</DialogDescription>
       </DialogHeader>
-      {reset && Number.isFinite(reset.getTime()) && <p className="text-xs text-muted-foreground">Allowance resets {reset.toLocaleString(uiLocale, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.</p>}
+      {reset && Number.isFinite(reset.getTime()) && <p className="text-xs" style={{ color: "#73766d" }}>Allowance resets {reset.toLocaleString(uiLocale, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.</p>}
       <DialogFooter>
         {access.state === "unavailable" ? <Button className="normal-case" style={buttonStyle} variant="outline" size="sm" disabled={refreshing} onClick={onRetry}>Try again</Button>
           : <Button className="normal-case" style={buttonStyle} variant="outline" size="sm" onClick={() => { onOpenChange?.(false); onAccount(); }}>{access.state === "upgrade" ? ui("View Business") : ui("Increase capacity")}</Button>}

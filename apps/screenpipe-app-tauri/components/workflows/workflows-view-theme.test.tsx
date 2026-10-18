@@ -3,20 +3,19 @@
 import React from "react";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serializeWorkflowData, WorkflowsApp } from "@screenpipe/workflows-ui";
 import { createFixtureWorkflowsPlatform } from "@screenpipe/workflows-ui/fixture";
 import { buildDetectedTask, CLARIFICATION_QUESTIONS, DEMO_TASK_ID } from "@/lib/automation-flows/demo-task/detected-task";
 import { upsertTask } from "@/lib/automation-flows/demo-task/catalog";
 import { IntegratedWorkflows } from "./integrated-workflows";
-import { WorkflowAccessNotice } from "./workflow-access";
-import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
 
 // The Workflows view (library, Task Page, evidence, questions, « Create
 // automation ») rendered with its real stylesheets under the app's
-// `dark` class: no element may paint a light neutral surface or force a light
-// colour scheme.
+// `dark` class: no element on screen may paint a light neutral surface or
+// force a light colour scheme. Its dialogs (access notice, automatic updates)
+// keep the light palette on purpose.
 
 vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => ({ settings: { aiPresets: [], user: {}, workflowSource: "device" }, updateSettings: vi.fn(), isSettingsLoaded: true }),
@@ -128,6 +127,8 @@ function isInvertedControl(element: Element): boolean {
 function lightSurfaces(root: Element): string[] {
   const offenders: string[] = [];
   for (const element of [root, ...root.querySelectorAll("*")]) {
+    // A hidden page (Context, while the Task Page shows) is not on screen.
+    if (element.closest("[hidden]")) continue;
     const style = getComputedStyle(element);
     const painted = ["background-color", "background", "background-image"].map(p => style.getPropertyValue(p)).join(" ");
     const resolved = resolve(element, painted);
@@ -185,21 +186,5 @@ describe("Workflows view follows the app theme", () => {
     });
     expect(await screen.findByRole("combobox", { name: "Workflow source" })).toBeInTheDocument();
     expect(lightSurfaces(container)).toEqual([]);
-  });
-
-  it("opens the access notice in the app theme when the app is dark", async () => {
-    document.documentElement.classList.add("dark");
-    render(<WorkflowAccessNotice open access={{ state: "unavailable", message: "Could not check access." } as never} onRetry={vi.fn()} onAccount={vi.fn()} onUsage={vi.fn()} />);
-    expect(lightSurfaces(await screen.findByRole("dialog"))).toEqual([]);
-  });
-
-  it("asks about automatic updates in the app theme when the app is dark", async () => {
-    document.documentElement.classList.add("dark");
-    const tasks = { load: vi.fn(async () => ({ enabled: false, title: "Keep your workflows current", schedule: "Hourly discovery", tasks: [{ name: "task-0", title: "Task 0", enabled: false }] })), enable: vi.fn(async () => {}), disable: vi.fn(async () => {}) };
-    render(<WorkflowTasksPrompt active tasks={tasks} />);
-    const toggle = await screen.findByRole("switch", { name: "Automatic updates" });
-    await waitFor(() => expect(toggle).toBeEnabled());
-    fireEvent.click(toggle);
-    expect(lightSurfaces(await screen.findByRole("dialog"))).toEqual([]);
   });
 });

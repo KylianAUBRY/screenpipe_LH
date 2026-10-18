@@ -1,6 +1,6 @@
 /* screenpipe — AI that knows everything you've seen, said, or heard */
 /* https://screenpipe.com */
-.questions { width: 100%; box-sizing: border-box; scroll-margin-top: 130px; max-width: 768px; margin-inline: auto; border-top: 1px solid var(--line); padding-top: 32px; }
+.questions { width: 100%; box-sizing: border-box; color-scheme: light; scroll-margin-top: 130px; max-width: 768px; margin-inline: auto; border-top: 1px solid var(--line); padding-top: 32px; }
 .heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .questions .heading h2 { font-size: 20px; font-weight: 600; letter-spacing: -.025em; margin: 0; }
 .hint { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 8px 0 0; max-width: 510px; }
