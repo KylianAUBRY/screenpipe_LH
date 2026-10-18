@@ -8,10 +8,9 @@
 //   `import-workflow.sh` installs (the bundled workflow's fixed id), then
 //   removes their records: the Flows list is empty and "Créer
 //   l'automatisation" creates the Flow again. Other workflows are never touched;
-// - marks the unread emails of the demo inbox read, inside the n8n container
-//   with the IMAP credential stored there (`mark-read.sh`), so the next
-//   activation only processes the email sent live;
 // - clears the Task Page answers.
+// The inbox needs no reset: the Flow's Gmail Trigger only takes the emails
+// that arrive after its activation, read or unread.
 // It prints what it did and exits 1, with every reason, on anything it could
 // not restore.
 //
@@ -20,9 +19,8 @@
 // N8N_API_KEY: the n8n API key; without it, the key of ScreenPipe's n8n
 // connection when it is saved in `<data dir>/connections.json` (the app keeps
 // it in its encrypted secret store otherwise). Never printed. N8N_API_URL
-// (default: the connection's, else http://localhost:5678), N8N_CONTAINER
-// (default automation-flows-n8n-1), SCREENPIPE_DATA_DIR (default ~/.screenpipe),
-// SCREENPIPE_WORKFLOWS_DIR (see catalog.ts).
+// (default: the connection's, else http://localhost:5678), SCREENPIPE_DATA_DIR
+// (default ~/.screenpipe), SCREENPIPE_WORKFLOWS_DIR (see catalog.ts).
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -35,23 +33,14 @@ const FLOW_TAG = "screenpipe-flow"; // engine `FLOW_TAG`
 const WORKFLOW = JSON.parse(readFileSync(join(import.meta.dir, "..", "workflows", "novadesk-support-tickets.json"), "utf8"));
 /** The copy `import-workflow.sh` installs keeps the bundled workflow's fixed id. */
 export const DEMO_WORKFLOW_ID: string = WORKFLOW.id;
-// The demo inbox is the one the Flow's email trigger reads.
-const TRIGGER = WORKFLOW.nodes.find((node: { type: string }) => node.type === "n8n-nodes-base.emailReadImap");
-const IMAP_CREDENTIAL_ID: string = TRIGGER.credentials.imap.id;
-const MAILBOX: string = TRIGGER.parameters.mailbox ?? "INBOX";
-const MARK_READ_SCRIPT = readFileSync(join(import.meta.dir, "mark-read.sh"), "utf8");
 
 export type N8nConfig = { url: string; apiKey: string };
-export type CommandRunner = (argv: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 export type ResetOptions = {
   n8n: N8nConfig | null;
   /** ScreenPipe data dir, holding the engine's `automation-flows.json`. */
   dataDir: string;
   /** Workflow catalog dir (`catalog.ts`), holding the Task Page answers. */
   catalogDir: string;
-  /** The n8n container (`docker-compose.yml`). */
-  container: string;
-  run: CommandRunner;
   log: (line: string) => void;
 };
 export type ResetReport = { failures: string[] };
@@ -113,27 +102,6 @@ async function removeWorkflow(n8n: N8nCall, id: string): Promise<string> {
   if (after.status !== 404) throw new Error(`${id} is still in n8n after delete (${answer(after)})`);
   done.push("deleted");
   return `${id} (${workflow.name ?? "unnamed"}): ${done.join(", ")}`;
-}
-
-/** `mark-read.sh` inside the n8n container: the IMAP secret never leaves it. */
-async function markInboxRead({ container, run }: ResetOptions): Promise<string> {
-  const { code, stdout, stderr } = await run([
-    "docker", "exec",
-    "-e", "N8N_RUNNERS_BROKER_PORT=5690", // the n8n server holds the default runner port
-    "-e", `CRED_ID=${IMAP_CREDENTIAL_ID}`,
-    "-e", `MAILBOX=${MAILBOX}`,
-    container, "sh", "-c", MARK_READ_SCRIPT,
-  ]);
-  const tail = (text: string) => text.trim().split("\n").slice(-3).join(" / ");
-  if (code !== 0) throw new Error(`could not mark the demo inbox read (exit ${code}): ${tail(stderr) || tail(stdout)}`);
-  let result: { marked: number; unread: number };
-  try {
-    result = JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
-  } catch {
-    throw new Error(`unexpected answer from the n8n container: ${tail(stdout)}`);
-  }
-  if (result.unread > 0) throw new Error(`marked ${result.marked} emails read but ${result.unread} unread email(s) left in ${MAILBOX}`);
-  return `marked ${result.marked} unread email(s) as read in ${MAILBOX} (0 unread left)`;
 }
 
 /** The engine's Flow records (`automation_flows.rs`); a missing file has none. */
@@ -234,7 +202,6 @@ export async function resetDemo(options: ResetOptions): Promise<ResetReport> {
     });
   }
 
-  await step("inbox", () => markInboxRead(options));
   await step("answers", () => clearTaskAnswers(options.catalogDir));
   return { failures };
 }
@@ -257,12 +224,6 @@ export function n8nConfig(env: Record<string, string | undefined>, dataDir: stri
   return { url: instanceUrl(env.N8N_API_URL?.trim() || saved.api_url || "http://localhost:5678"), apiKey };
 }
 
-const runCommand: CommandRunner = async argv => {
-  const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  return { code, stdout, stderr };
-};
-
 if (import.meta.main) {
   try {
     const dataDir = process.env.SCREENPIPE_DATA_DIR || join(homedir(), ".screenpipe");
@@ -270,15 +231,13 @@ if (import.meta.main) {
       n8n: n8nConfig(process.env, dataDir),
       dataDir,
       catalogDir: catalogDir(),
-      container: process.env.N8N_CONTAINER || "automation-flows-n8n-1",
-      run: runCommand,
       log: line => console.log(line),
     });
     if (failures.length > 0) {
       console.error(`Reset incomplete, ${failures.length} step(s) not restored:\n${failures.map(f => `- ${f}`).join("\n")}`);
       process.exit(1);
     }
-    console.log("Reset complete: no demo Flow, no saved answers, no unread demo email.");
+    console.log("Reset complete: no demo Flow, no saved answers.");
   } catch (error) {
     console.error(`Reset incomplete: ${error instanceof Error ? error.message : error}`);
     process.exit(1);

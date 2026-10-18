@@ -481,7 +481,7 @@ mod tests {
         let mut credentials = credentials();
         // The demo's own credential ids.
         for (id, kind) in [
-            ("spNovaImap000001", "imap"),
+            ("iI1juBmbWgqjr8Yo", "gmailOAuth2"),
             ("spProxyOpenAI001", "openAiApi"),
             ("spScreenpipeApi1", "screenpipeApi"),
             ("spNovaJira000001", "jiraSoftwareCloudApi"),

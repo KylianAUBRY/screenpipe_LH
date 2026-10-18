@@ -185,9 +185,10 @@ impl std::fmt::Debug for FlowActivationKey {
 
 /// How long switching a Flow off waits for the execution n8n is running.
 ///
-/// n8n's IMAP trigger marks an email read before its execution starts, and
-/// an execution still running when its workflow is unpublished never
-/// finishes: the email would be lost (rehearsal 3). So the Flow service
+/// n8n's mail triggers (the demo's Gmail trigger, IMAP) count an email as
+/// taken before its execution starts, and an execution still running when
+/// its workflow is unpublished never finishes: the email would be lost
+/// (rehearsal 3). So the Flow service
 /// polls n8n every `interval` and unpublishes once nothing runs, or changes
 /// nothing after `deadline` (`409 flow_running`). The demo's AI step takes
 /// 10 to 25 s.

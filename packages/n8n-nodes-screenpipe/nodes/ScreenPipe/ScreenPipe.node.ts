@@ -13,6 +13,10 @@ import {
 } from "n8n-workflow";
 
 const DEFAULT_MAX_TEXT_LENGTH = 1000;
+// The app's notification server, as seen from n8n in Docker.
+const DEFAULT_NOTIFY_URL = "http://host.docker.internal:11435/notify";
+// A notification must never hold a run: ScreenPipe answers in milliseconds.
+const NOTIFY_TIMEOUT_MS = 5000;
 
 /**
  * Reads the user's ScreenPipe memory (screen captures, audio, activity).
@@ -26,7 +30,7 @@ export class ScreenPipe implements INodeType {
     group: ["input"],
     version: 1,
     subtitle: '={{ $parameter["operation"] }}',
-    description: "Search what the user saw, heard and did, as recorded by ScreenPipe",
+    description: "Search what the user saw, heard and did, as recorded by ScreenPipe, or notify the user",
     defaults: { name: "ScreenPipe" },
     inputs: [NodeConnectionTypes.Main],
     outputs: [NodeConnectionTypes.Main],
@@ -52,7 +56,61 @@ export class ScreenPipe implements INodeType {
             action: "Summarize activity over a time range",
             description: "Apps and windows used, time spent, key screen texts and transcriptions",
           },
+          {
+            name: "Send Notification",
+            value: "notify",
+            action: "Send a notification to the user",
+            description: "Show a ScreenPipe notification with a title, a text and an optional button",
+          },
         ],
+      },
+      {
+        displayName: "Title",
+        name: "title",
+        type: "string",
+        default: "",
+        required: true,
+        displayOptions: { show: { operation: ["notify"] } },
+      },
+      {
+        displayName: "Body",
+        name: "body",
+        type: "string",
+        typeOptions: { rows: 4 },
+        default: "",
+        description: "Plain text; Markdown characters are shown as typed",
+        displayOptions: { show: { operation: ["notify"] } },
+      },
+      {
+        displayName: "Button Label",
+        name: "buttonLabel",
+        type: "string",
+        default: "",
+        placeholder: "Open in Jira",
+        displayOptions: { show: { operation: ["notify"] } },
+      },
+      {
+        displayName: "Button URL",
+        name: "buttonUrl",
+        type: "string",
+        default: "",
+        description: "Web link, or a screenpipe:// link that opens inside ScreenPipe. Leave empty for no button.",
+        displayOptions: { show: { operation: ["notify"] } },
+      },
+      {
+        displayName: "Notification ID",
+        name: "notificationId",
+        type: "string",
+        default: "",
+        description: "ScreenPipe shows one notification per ID. Leave empty for one per run and node.",
+        displayOptions: { show: { operation: ["notify"] } },
+      },
+      {
+        displayName: "Notification Server URL",
+        name: "notifyUrl",
+        type: "string",
+        default: DEFAULT_NOTIFY_URL,
+        displayOptions: { show: { operation: ["notify"] } },
       },
       {
         displayName: "Start Time",
@@ -155,6 +213,7 @@ export class ScreenPipe implements INodeType {
         typeOptions: { minValue: 50 },
         default: DEFAULT_MAX_TEXT_LENGTH,
         description: "Longer texts are cut, so a workflow or an AI gets a short answer",
+        displayOptions: { show: { operation: ["searchContent", "activitySummary"] } },
       },
     ],
   };
@@ -169,7 +228,7 @@ export class ScreenPipe implements INodeType {
     for (let i = 0; i < items.length; i++) {
       try {
         const operation = this.getNodeParameter("operation", i) as string;
-        const run = operation === "activitySummary" ? activitySummary : searchContent;
+        const run = operation === "notify" ? notify : operation === "activitySummary" ? activitySummary : searchContent;
         for (const json of await run(this, i, baseUrl, apiKey)) {
           output.push({ json, pairedItem: { item: i } });
         }
@@ -211,6 +270,72 @@ const activitySummary: Operation = async (ctx, i, baseUrl, apiKey) => {
   }));
   return [truncateTexts(summary, maxTextLength) as IDataObject];
 };
+
+/**
+ * Posts a notification to the app's notification server (the same one
+ * ScreenPipe's own Flow notifications use). Its answer says whether it was
+ * shown or held back (pause, quiet hours, a repeat); only a non-2xx answer or
+ * no answer is an error.
+ */
+const notify: Operation = async (ctx, i) => {
+  const url = String(ctx.getNodeParameter("notifyUrl", i, DEFAULT_NOTIFY_URL) || DEFAULT_NOTIFY_URL);
+  const buttonUrl = String(ctx.getNodeParameter("buttonUrl", i, "")).trim();
+  const buttonLabel = String(ctx.getNodeParameter("buttonLabel", i, "")).trim() || "Open";
+  const id =
+    String(ctx.getNodeParameter("notificationId", i, "")).trim() ||
+    `n8n:${ctx.getWorkflow().id}:${ctx.getExecutionId()}:${ctx.getNode().name}:${i}`;
+  const body: IDataObject = {
+    id,
+    title: String(ctx.getNodeParameter("title", i)).trim().slice(0, 200),
+    body: escapeMarkdown(String(ctx.getNodeParameter("body", i, "")).slice(0, 2000)),
+    type: "pipe",
+    priority: "high",
+    transient: false,
+  };
+  if (buttonUrl) {
+    const type = buttonUrl.startsWith("screenpipe://") ? "deeplink" : "link";
+    body.actions = [{ type, label: buttonLabel, url: buttonUrl, primary: true }];
+    body.source_url = buttonUrl;
+  }
+  // The notification server only answers its own host name (no DNS rebinding).
+  const parsed = new URL(url);
+  const headers: IDataObject =
+    parsed.hostname === "host.docker.internal" ? { Host: `localhost${parsed.port ? `:${parsed.port}` : ""}` } : {};
+  let response: { statusCode: number; body: unknown };
+  try {
+    response = await ctx.helpers.httpRequest({
+      method: "POST",
+      url,
+      body,
+      headers,
+      json: true,
+      timeout: NOTIFY_TIMEOUT_MS,
+      returnFullResponse: true,
+      ignoreHttpStatusErrors: true,
+    });
+  } catch (error) {
+    const reason = (error as Error).message;
+    throw new NodeApiError(ctx.getNode(), { message: reason } as JsonObject, {
+      message: `Cannot reach ScreenPipe's notifications at ${url}: is ScreenPipe running?`,
+      description: reason,
+    });
+  }
+  const answer = (response.body && typeof response.body === "object" ? response.body : {}) as IDataObject;
+  const message = String(answer.message ?? answer.error ?? response.body ?? "");
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new NodeApiError(ctx.getNode(), { detail: message } as JsonObject, {
+      message: `ScreenPipe's notifications returned HTTP ${response.statusCode}`,
+      description: message,
+      httpCode: String(response.statusCode),
+    });
+  }
+  return [{ id, shown: message === "Notification sent successfully", message }];
+};
+
+/** Shows Markdown characters as typed: an email's text cannot add links or formatting. */
+function escapeMarkdown(text: string): string {
+  return text.replace(/[\\`*_{}\[\]()<>#+\-.!|~&]/g, "\\$&");
+}
 
 /** GET a ScreenPipe API path; any non-2xx answer becomes a NodeApiError. */
 async function getJson(

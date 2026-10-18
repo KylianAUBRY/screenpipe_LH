@@ -10,6 +10,7 @@ import { NodeApiError } from "n8n-workflow";
 import { basename, join } from "node:path";
 import { ScreenPipeApi } from "../credentials/ScreenPipeApi.credentials";
 import { ScreenPipe } from "../nodes/ScreenPipe/ScreenPipe.node";
+import type { IHttpRequestOptions } from "n8n-workflow";
 import { executeContext, fakeScreenpipe } from "./harness";
 
 const ROOT = join(import.meta.dir, "..");
@@ -17,8 +18,10 @@ const API_KEY = "sp-test-fixture-key";
 let api: ReturnType<typeof fakeScreenpipe> | undefined;
 afterEach(() => api?.stop());
 
-function run(parameters: Record<string, unknown>, apiKey = API_KEY, extra: { continueOnFail?: boolean } = {}) {
-  const ctx = executeContext({ parameters, credentials: { baseUrl: api!.baseUrl, apiKey }, ...extra });
+type RunExtra = Omit<Parameters<typeof executeContext>[0], "parameters" | "credentials">;
+
+function run(parameters: Record<string, unknown>, apiKey = API_KEY, extra: RunExtra = {}) {
+  const ctx = executeContext({ parameters, credentials: { baseUrl: api?.baseUrl ?? "http://127.0.0.1:9", apiKey }, ...extra });
   return new ScreenPipe().execute.call(ctx);
 }
 
@@ -195,5 +198,179 @@ describe("ScreenPipe node: errors", () => {
 
     expect(error).toBeInstanceOf(NodeApiError);
     expect(error.message).toContain(api.baseUrl);
+  });
+});
+
+describe("ScreenPipe node: parameters", () => {
+  const properties = new ScreenPipe().description.properties;
+  const shownFor = (name: string) => properties.find((p) => p.name === name)?.displayOptions?.show?.operation;
+
+  test("the notification fields show for Send Notification only, the text length for the two reads only", () => {
+    const operations = properties.find((p) => p.name === "operation")!.options as { value: string }[];
+    expect(operations.map((o) => o.value)).toEqual(["searchContent", "activitySummary", "notify"]);
+    for (const name of ["title", "body", "buttonLabel", "buttonUrl", "notificationId", "notifyUrl"]) {
+      expect(shownFor(name), name).toEqual(["notify"]);
+    }
+    expect(shownFor("maxTextLength")).toEqual(["searchContent", "activitySummary"]);
+    expect(properties.find((p) => p.name === "notifyUrl")!.default).toBe("http://host.docker.internal:11435/notify");
+  });
+});
+
+describe("ScreenPipe node: send notification", () => {
+  const SENT = { success: true, message: "Notification sent successfully" };
+  const JIRA_URL = "https://kylianaubry.atlassian.net/browse/NOVA-42";
+
+  /** Markdown backslash escapes undone: what the user reads in the notification. */
+  const unescapeMarkdown = (text: string) => text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+
+  /** Records what the node asks n8n to send, for hosts this test cannot reach. */
+  function capture(reply: { statusCode: number; body: unknown } = { statusCode: 200, body: SENT }) {
+    const sent: IHttpRequestOptions[] = [];
+    const httpRequest = async (request: IHttpRequestOptions) => {
+      sent.push(request);
+      return reply;
+    };
+    return { sent, httpRequest };
+  }
+
+  test("POSTs the title, the body shown as typed and a link button to the notify server, and says it was shown", async () => {
+    api = fakeScreenpipe({ "/notify": { body: SENT } });
+    const text = "NovaCRM - Export [vide](https://evil.example) **now** <b>#1</b>";
+
+    const [output] = await run({
+      operation: "notify",
+      notifyUrl: `${api.baseUrl}/notify`,
+      title: "  Ticket NOVA-42 created ",
+      body: text,
+      buttonLabel: "Open in Jira",
+      buttonUrl: JIRA_URL,
+      notificationId: "automation-flow:wfNova:ticket:7",
+    });
+
+    expect(api.requests).toHaveLength(1);
+    const [request] = api.requests;
+    expect(request.method).toBe("POST");
+    expect(request.path).toBe("/notify");
+    expect(request.headers["content-type"]).toBe("application/json");
+    // The ScreenPipe API key is for the API, never sent to the notify server.
+    expect(request.authorization).toBeNull();
+    // A host other than host.docker.internal keeps its own Host header.
+    expect(request.headers.host).toBe(new URL(api.baseUrl).host);
+    const body = request.body as Record<string, any>;
+    expect(body).toEqual({
+      id: "automation-flow:wfNova:ticket:7",
+      title: "Ticket NOVA-42 created",
+      body: expect.any(String),
+      type: "pipe",
+      priority: "high",
+      transient: false,
+      actions: [{ type: "link", label: "Open in Jira", url: JIRA_URL, primary: true }],
+      source_url: JIRA_URL,
+    });
+    // Every Markdown character is escaped: no link, emphasis, HTML or heading.
+    for (const mark of ["[", "]", "(", ")", "*", "<", ">", "#", "-", "."]) {
+      const bare = [...body.body.matchAll(/\\?./gsu)].filter((m) => m[0] === mark);
+      expect(bare, `unescaped ${mark}`).toEqual([]);
+    }
+    expect(unescapeMarkdown(body.body)).toBe(text);
+
+    expect(output.map((item) => item.json)).toEqual([
+      { id: "automation-flow:wfNova:ticket:7", shown: true, message: "Notification sent successfully" },
+    ]);
+    expect(output[0].pairedItem).toEqual({ item: 0 });
+  });
+
+  test("reaches the app through host.docker.internal by default, with the Host the notify server accepts, within 5 s", async () => {
+    const { sent, httpRequest } = capture();
+
+    await run({ operation: "notify", title: "Sort by hand" }, API_KEY, { httpRequest });
+    await run({ operation: "notify", title: "Sort by hand", notifyUrl: "http://host.docker.internal/notify" }, API_KEY, { httpRequest });
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toMatchObject({
+      method: "POST",
+      url: "http://host.docker.internal:11435/notify",
+      // The notify server answers its own host name only (DNS-rebinding guard).
+      headers: { Host: "localhost:11435" },
+      json: true,
+      timeout: 5000,
+      ignoreHttpStatusErrors: true,
+      returnFullResponse: true,
+    });
+    expect(sent[1].headers).toEqual({ Host: "localhost" });
+  });
+
+  test("a screenpipe:// button opens inside ScreenPipe, a button without a label reads « Open », no URL means no button", async () => {
+    const { sent, httpRequest } = capture();
+
+    await run({ operation: "notify", title: "Sort by hand", buttonUrl: "screenpipe://flows/wfNova", buttonLabel: " " }, API_KEY, {
+      httpRequest,
+    });
+    await run({ operation: "notify", title: "Sort by hand", buttonUrl: "  ", buttonLabel: "View Flow" }, API_KEY, { httpRequest });
+
+    const [deeplink, none] = sent.map((request) => request.body as Record<string, any>);
+    expect(deeplink.actions).toEqual([{ type: "deeplink", label: "Open", url: "screenpipe://flows/wfNova", primary: true }]);
+    expect(deeplink.source_url).toBe("screenpipe://flows/wfNova");
+    expect(none).not.toHaveProperty("actions");
+    expect(none).not.toHaveProperty("source_url");
+  });
+
+  test("without a notification ID, each run and item gets its own, so none is dropped as a repeat", async () => {
+    const { sent, httpRequest } = capture();
+
+    const [output] = await run({ operation: "notify", title: "Sort by hand", notificationId: "  " }, API_KEY, {
+      httpRequest,
+      workflowId: "wfNova",
+      executionId: "4242",
+      items: [{ json: {} }, { json: {} }],
+    });
+
+    const ids = sent.map((request) => (request.body as Record<string, any>).id);
+    expect(ids).toEqual(["n8n:wfNova:4242:ScreenPipe:0", "n8n:wfNova:4242:ScreenPipe:1"]);
+    expect(output.map((item) => item.json.id)).toEqual(ids);
+  });
+
+  test("keeps a huge title and body short", async () => {
+    const { sent, httpRequest } = capture();
+
+    await run({ operation: "notify", title: "T".repeat(5_000), body: "b".repeat(50_000) }, API_KEY, { httpRequest });
+
+    const body = sent[0].body as Record<string, any>;
+    expect(body.title).toBe("T".repeat(200));
+    expect(body.body).toBe("b".repeat(2_000));
+  });
+
+  test("a notification ScreenPipe holds back (paused, a repeat) is not an error: it comes back with shown false", async () => {
+    api = fakeScreenpipe({ "/notify": { body: { success: true, message: "notifications paused" } } });
+
+    const [output] = await run({ operation: "notify", notifyUrl: `${api.baseUrl}/notify`, title: "Sort by hand", notificationId: "n1" });
+
+    expect(output.map((item) => item.json)).toEqual([{ id: "n1", shown: false, message: "notifications paused" }]);
+  });
+
+  test("an HTTP error from the notify server fails the node with the status and its message", async () => {
+    api = fakeScreenpipe({ "/notify": { status: 403, body: { error: "invalid host header" } } });
+    const parameters = { operation: "notify", notifyUrl: `${api.baseUrl}/notify`, title: "Sort by hand" };
+
+    const error = await run(parameters).catch((e) => e);
+    const [output] = await run(parameters, API_KEY, { continueOnFail: true });
+
+    expect(error).toBeInstanceOf(NodeApiError);
+    expect(error.httpCode).toBe("403");
+    expect(error.message).toContain("HTTP 403");
+    expect(error.description).toContain("invalid host header");
+    expect(String(output[0].json.error)).toContain("invalid host header");
+  });
+
+  test("when ScreenPipe is not running, the node fails and names the notify URL it tried", async () => {
+    api = fakeScreenpipe({});
+    api.stop();
+    const url = `${api.baseUrl}/notify`;
+
+    const error = await run({ operation: "notify", notifyUrl: url, title: "Sort by hand" }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(NodeApiError);
+    expect(error.message).toContain(url);
+    expect(error.message).toContain("is ScreenPipe running?");
   });
 });

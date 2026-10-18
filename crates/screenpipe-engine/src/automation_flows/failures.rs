@@ -283,8 +283,9 @@ pub(super) fn failure_notice(
 }
 
 /// Sender and subject of the email the run handled: the first item of the
-/// node n8n ran first (the trigger), in the IMAP node's simple (`from`
-/// string) or resolved (`from.text`) format.
+/// node n8n ran first (the trigger): `from` is a string (the IMAP trigger's
+/// simple format) or `{value, text}` (the demo's Gmail trigger, and IMAP's
+/// resolved format).
 pub(super) fn handled_email(result: &Value) -> Option<(String, String)> {
     let mut runs: Vec<(&Value, &Value)> = result["runData"]
         .as_object()?

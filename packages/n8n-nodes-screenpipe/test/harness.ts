@@ -20,6 +20,8 @@ export type RecordedRequest = {
   path: string;
   query: Record<string, string>;
   authorization: string | null;
+  /** Every request header, lowercased names. */
+  headers: Record<string, string>;
   /** Parsed JSON body (raw text if not JSON); absent when the request had none. */
   body?: unknown;
 };
@@ -40,6 +42,7 @@ export function fakeScreenpipe(routes: Record<string, Reply | ((req: RecordedReq
         path: url.pathname,
         query: Object.fromEntries(url.searchParams),
         authorization: req.headers.get("authorization"),
+        headers: Object.fromEntries(req.headers),
         ...(text ? { body: parseJson(text) } : {}),
       };
       requests.push(recorded);
@@ -61,6 +64,10 @@ type ContextOptions = {
   credentials: { baseUrl: string; apiKey: string };
   items?: INodeExecutionData[];
   continueOnFail?: boolean;
+  workflowId?: string;
+  executionId?: string;
+  /** Replaces `helpers.httpRequest`, e.g. to see a request to a host the test cannot reach. */
+  httpRequest?: (request: IHttpRequestOptions) => Promise<unknown>;
 };
 
 /** Minimal `this` for `INodeType.execute`, backed by real HTTP. */
@@ -77,6 +84,8 @@ export function executeContext(options: ContextOptions): IExecuteFunctions {
   const context = {
     getInputData: () => items,
     getNode: () => node,
+    getWorkflow: () => ({ id: options.workflowId ?? "wfTest000000001", name: "Test workflow", active: true }),
+    getExecutionId: () => options.executionId ?? "101",
     continueOnFail: () => options.continueOnFail ?? false,
     getNodeParameter(name: string, _itemIndex: number, fallback?: unknown) {
       const value = options.parameters[name];
@@ -90,7 +99,7 @@ export function executeContext(options: ContextOptions): IExecuteFunctions {
       if (type !== "screenpipeApi") throw new Error(`unexpected credential type ${type}`);
       return { ...options.credentials };
     },
-    helpers: { httpRequest },
+    helpers: { httpRequest: options.httpRequest ?? httpRequest },
   };
   return context as unknown as IExecuteFunctions;
 }

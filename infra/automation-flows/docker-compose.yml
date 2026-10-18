@@ -3,8 +3,11 @@
 
 # Local n8n for the Automation Flows hackathon (see .scratch/hackathon/SPEC.md).
 # Start: docker compose -f infra/automation-flows/docker-compose.yml up -d
-# Credentials (IMAP, Jira, OpenAI-compatible, ScreenPipe API) and the API key
+# Credentials (Gmail OAuth, Jira, OpenAI-compatible, ScreenPipe API) and the API key
 # are created in the n8n UI and stay in the n8n_data volume, never in the repo.
+# The project name is pinned so every checkout reuses the same container and
+# volume (automation-flows_n8n_data: credentials, API key, workflows).
+name: automation-flows
 services:
   n8n:
     image: n8nio/n8n:2.42.2

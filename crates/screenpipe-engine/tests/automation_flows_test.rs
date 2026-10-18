@@ -223,10 +223,12 @@ impl Respond for FakeN8n {
             ("GET", ["credentials"]) if state.credentials.is_some() => {
                 json_response(200, json!({"data": state.credentials, "nextCursor": null}))
             }
-            // The credentials the demo workflow uses, as the user's n8n holds them.
+            // The credentials the demo workflow uses, as the user's n8n holds
+            // them, plus an IMAP account for the guide's IMAP example.
             ("GET", ["credentials"]) => json_response(
                 200,
                 json!({"data": [
+                    {"id": "iI1juBmbWgqjr8Yo", "name": "Gmail account", "type": "gmailOAuth2"},
                     {"id": "spNovaImap000001", "name": "NovaDesk Gmail (IMAP)", "type": "imap"},
                     {"id": "spProxyOpenAI001", "name": "ScreenPipe AI proxy", "type": "openAiApi"},
                     {"id": "spScreenpipeApi1", "name": "ScreenPipe API (local)", "type": "screenpipeApi"},
@@ -696,7 +698,7 @@ impl App {
         self.call(
             "POST",
             "/automation-flows/from-task",
-            Some(json!({"taskId": TASK_ID, "answers": {"q1": "oui, en Tâche"}})),
+            Some(json!({"taskId": TASK_ID, "answers": {"q1": "yes, as a Task"}})),
         )
         .await
     }
@@ -926,7 +928,7 @@ async fn create_from_task_imports_switched_off_and_tagged() {
     let store = app.store();
     assert_eq!(store["flows"][id]["sourceTaskId"], TASK_ID);
     assert_eq!(store["flows"][id]["summary"], flow["summary"]);
-    assert_eq!(store["flows"][id]["answers"]["q1"], "oui, en Tâche");
+    assert_eq!(store["flows"][id]["answers"]["q1"], "yes, as a Task");
 }
 
 #[tokio::test]
@@ -1069,7 +1071,7 @@ async fn create_never_takes_over_a_flow_the_user_already_has() {
     assert_eq!(store["flows"]["spNovaFlow000001"]["sourceTaskId"], TASK_ID);
     assert_eq!(
         store["flows"]["spNovaFlow000001"]["answers"]["q1"],
-        "oui, en Tâche"
+        "yes, as a Task"
     );
 }
 
@@ -1229,7 +1231,7 @@ async fn no_step_shows_n8n_credentials_or_called_hosts() {
         "Identifiant n8n",
         "n8n credential",
         "NovaDesk Jira",
-        "NovaDesk Gmail (IMAP)",
+        "Gmail account",
         "kylianaubry.atlassian.net",
         "hooks.example.org",
     ] {
@@ -1727,7 +1729,7 @@ async fn activation_is_refused_without_publishing_or_logging() {
     assert!(posts_ending_with(&server, "/publish").await.is_empty());
 
     // n8n refuses to publish: its reason reaches the user.
-    n8n.0.lock().unwrap().refuse_publish = Some("IMAP credentials are invalid".into());
+    n8n.0.lock().unwrap().refuse_publish = Some("Gmail credentials are invalid".into());
     let (status, body) = app
         .ui_call("POST", &activate, Some(json!({"versionId": "version-2"})))
         .await;
@@ -1736,7 +1738,7 @@ async fn activation_is_refused_without_publishing_or_logging() {
     assert!(body["detail"]
         .as_str()
         .unwrap()
-        .contains("IMAP credentials are invalid"));
+        .contains("Gmail credentials are invalid"));
 
     // Still a Draft with an empty history.
     let (_, flow) = app
@@ -2429,10 +2431,10 @@ async fn chat_update_keeps_the_users_credentials_and_never_takes_the_chats() {
     let (_, created) = app.create_from_task().await;
     let id = created["id"].as_str().unwrap().to_string();
     let jira = "Create the Jira ticket";
-    let imap = "New support email";
+    let gmail = "New support email";
     let user_jira = credentials_of(&n8n.workflows()[0], jira);
-    let user_imap = credentials_of(&n8n.workflows()[0], imap);
-    assert!(user_jira.is_object() && user_imap.is_object());
+    let user_gmail = credentials_of(&n8n.workflows()[0], gmail);
+    assert!(user_jira.is_object() && user_gmail.is_object());
 
     let workflow = edited_workflow(&n8n, &id, |workflow| {
         let nodes = workflow["nodes"].as_array_mut().unwrap();
@@ -2442,7 +2444,7 @@ async fn chat_update_keeps_the_users_credentials_and_never_takes_the_chats() {
                 node["credentials"] = json!({
                     "jiraSoftwareCloudApi": {"id": "attackerJira0001", "name": "Autre Jira"}
                 });
-            } else if node["name"] == imap {
+            } else if node["name"] == gmail {
                 // Same name and type, credentials dropped by the chat.
                 node.as_object_mut().unwrap().remove("credentials");
             }
@@ -2459,7 +2461,7 @@ async fn chat_update_keeps_the_users_credentials_and_never_takes_the_chats() {
     assert_eq!(status, StatusCode::OK, "{flow}");
     let stored = n8n.workflows()[0].clone();
     assert_eq!(credentials_of(&stored, jira), user_jira);
-    assert_eq!(credentials_of(&stored, imap), user_imap);
+    assert_eq!(credentials_of(&stored, gmail), user_gmail);
 }
 
 /// The demo Flow, activated, and the n8n writes made so far.
@@ -3648,6 +3650,24 @@ async fn every_flow_reports_its_failed_runs_through_one_error_workflow() {
     assert_eq!(n8n.error_workflows().len(), 1);
 }
 
+/// An email as the demo's Gmail trigger outputs it (`simple: false`): `from`
+/// is `{value, text}`, the body is `text` and `html`.
+fn gmail_email(sender: &str, subject: &str, text: &str) -> Value {
+    let (name, address) = match sender.split_once('<') {
+        Some((name, address)) => (name.trim(), address.trim_end_matches('>').trim()),
+        None => ("", sender.trim()),
+    };
+    json!({
+        "id": "18f2c0a1b2c3d4e5",
+        "threadId": "18f2c0a1b2c3d4e5",
+        "from": {"value": [{"address": address, "name": name}], "text": sender},
+        "subject": subject,
+        "date": "2026-10-17T08:59:50.000Z",
+        "text": text,
+        "html": format!("<p>{text}</p>"),
+    })
+}
+
 /// A run of the demo Flow that failed creating the Jira ticket, as n8n keeps
 /// it (`GET /executions/:id?includeData=true`).
 fn failed_run(id: &str, workflow_id: &str) -> Value {
@@ -3656,11 +3676,11 @@ fn failed_run(id: &str, workflow_id: &str) -> Value {
         "startedAt": "2026-10-17T09:00:00.000Z", "stoppedAt": "2026-10-17T09:00:09.000Z",
         "data": {"resultData": {
             "runData": {
-                "New support email": [{"startTime": 1, "data": {"main": [[{"json": {
-                    "from": "Claire Martin <claire.martin@client.fr>",
-                    "subject": "Export PDF vide depuis la mise à jour",
-                    "textPlain": "Bonjour, l'export PDF sort une page blanche."
-                }}]]}}],
+                "New support email": [{"startTime": 1, "data": {"main": [[{"json": gmail_email(
+                    "Claire Martin <claire.martin@client.fr>",
+                    "Export PDF vide depuis la mise à jour",
+                    "Bonjour, l'export PDF sort une page blanche."
+                )}]]}}],
                 "Create the Jira ticket": [{"startTime": 5, "error": {"message": "503 Service Unavailable"}}]
             },
             "lastNodeExecuted": "Create the Jira ticket",
@@ -3834,9 +3854,9 @@ fn demo_run(
 ) -> Value {
     let item = |json: Value| json!([{"json": json}]);
     let mut run_data = json!({
-        "New support email": [{"startTime": 1, "data": {"main": [item(json!({
-            "from": sender, "subject": subject, "textPlain": "Bonjour…"
-        }))]}}],
+        "New support email": [{"startTime": 1, "data": {"main": [item(gmail_email(
+            sender, subject, "Bonjour…"
+        ))]}}],
         "Read the email (AI)": [{"startTime": 2, "data": {"main": [item(json!({"output": answer}))]}}]
     });
     for (n, (name, branches)) in steps.iter().enumerate() {
@@ -3955,7 +3975,7 @@ async fn activity_shows_an_email_the_ai_was_unsure_about_as_abstained() {
             ("Confident enough", json!([null, {"output": answer}])),
             (
                 "Sort by hand",
-                json!([{"success": true, "message": "Notification sent successfully"}]),
+                json!([{"id": "automation-flow:wf1:abstained:exec-unsure", "shown": true, "message": "Notification sent successfully"}]),
             ),
         ],
     ));
@@ -4808,10 +4828,11 @@ fn ticket_created_on_retry() -> Value {
         "status": "success", "finished": true,
         "data": {"resultData": {
             "runData": {
-                "New support email": [{"startTime": 1, "data": {"main": [[{"json": {
-                    "from": "Claire Martin <claire.martin@client.fr>",
-                    "subject": "Export PDF vide depuis la mise à jour"
-                }}]]}}],
+                "New support email": [{"startTime": 1, "data": {"main": [[{"json": gmail_email(
+                    "Claire Martin <claire.martin@client.fr>",
+                    "Export PDF vide depuis la mise à jour",
+                    "Bonjour, l'export PDF sort une page blanche."
+                )}]]}}],
                 "Read the email (AI)": [{"startTime": 2, "data": {"main": [[{"json": {
                     "output": {"type": "Bug", "confidence": "high", "reason": "L'export PDF est cassé."}
                 }}]]}}],

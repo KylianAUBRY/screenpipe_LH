@@ -5142,7 +5142,7 @@ mod tests {
         let demo = include_str!(
             "../../../../infra/automation-flows/workflows/novadesk-support-tickets.json"
         );
-        assert!(demo.contains("\"CUSTOM.screenPipeTool\""));
+        assert!(demo.contains("\"CUSTOM.screenPipe\""));
         for node_type in [
             "CUSTOM.screenPipe`",
             "CUSTOM.screenPipeTool`",
