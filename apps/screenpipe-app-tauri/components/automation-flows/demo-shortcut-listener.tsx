@@ -14,6 +14,8 @@ import { useToast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
 import { DEMO_SHORTCUT_EVENT, demoShortcutHandler } from "@/lib/automation-flows/demo-shortcut";
 import { desktopFindAutomationDeps, openDemoTaskPage } from "@/lib/automation-flows/find-automation";
+import { resetDemoFlows } from "@/lib/automation-flows/reset-demo-flows";
+import { flowsApi } from "./api";
 
 export function DemoShortcutListener() {
   const { toast } = useToast();
@@ -27,6 +29,7 @@ export function DemoShortcutListener() {
     };
     const press = demoShortcutHandler({
       installer: desktopFindAutomationDeps(),
+      resetFlows: async () => { await resetDemoFlows(flowsApi); },
       openTask: openDemoTaskPage,
       tell: ({ title, description, destructive }) => tell(title, description, destructive),
     });

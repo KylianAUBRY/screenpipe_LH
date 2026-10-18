@@ -68,12 +68,12 @@ export async function openDemoTaskPage(): Promise<void> {
 
 async function evidenceDataUrl(image: string): Promise<string> {
   const response = await fetch(`${EVIDENCE_PATH}/${image}.webp`);
-  if (!response.ok) throw new Error(`Image de preuve ${image} introuvable (HTTP ${response.status}).`);
+  if (!response.ok) throw new Error(`Evidence image ${image} not found (HTTP ${response.status}).`);
   const blob = await response.blob();
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error(`Image de preuve ${image} illisible.`));
+    reader.onerror = () => reject(reader.error ?? new Error(`Evidence image ${image} is unreadable.`));
     reader.readAsDataURL(blob);
   });
 }

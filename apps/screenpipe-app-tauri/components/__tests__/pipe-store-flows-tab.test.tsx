@@ -102,6 +102,30 @@ describe("Automations → Flows tab", () => {
     expect(screen.queryByText(/a changé depuis que vous l'avez ouvert/)).toBeNull();
   });
 
+  it("shows « Loading the Flow… » on the first open after creation, then the Flow, read once", async () => {
+    // « Create automation » lands here: Home mounts Automations on the new Flow.
+    let answer!: () => void;
+    let reads = 0;
+    mocks.localFetch.mockImplementation(async (url: string) => {
+      if (url === "/pipes") return jsonResponse([{ config: { name: "installed" } }]);
+      if (url === `/automation-flows/${fixtureFlow.id}`) {
+        reads += 1;
+        await new Promise<void>(resolve => { answer = resolve; });
+        return jsonResponse(fixtureFlow);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    window.history.replaceState({}, "", `/home?section=pipes&tab=flows&flow=${fixtureFlow.id}`);
+    render(<PipeStoreView />);
+
+    expect(await screen.findByText("Loading the Flow…")).toBeTruthy();
+    expect(document.querySelector(`[data-flow-review="${fixtureFlow.id}"]`)).toBeTruthy();
+    await act(async () => { answer(); });
+    expect(await screen.findByRole("heading", { name: fixtureFlow.name })).toBeTruthy();
+    expect(screen.queryByText("Loading the Flow…")).toBeNull();
+    expect(reads).toBe(1);
+  });
+
   it("opens the Review Screen from ?tab=flows&flow=<id>", async () => {
     window.history.replaceState({}, "", `/home?section=pipes&tab=flows&flow=${fixtureFlow.id}`);
     render(<PipeStoreView />);

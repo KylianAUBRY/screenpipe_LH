@@ -43,7 +43,9 @@ export function FlowReview({
   const [flow, reload, replace] = useFlowsLoad(() => api.get(flowId), flowId);
 
   return (
-    <div className="space-y-6">
+    // `data-flow-review`: the Task Page keeps its progress until this is on
+    // screen (lib/workflows/automation-flows.ts `reviewScreenShown`).
+    <div className="space-y-6" data-flow-review={flowId}>
       <button
         type="button"
         onClick={onBack}

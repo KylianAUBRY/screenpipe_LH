@@ -15,13 +15,22 @@ export const DEMO_TASK_URL = `screenpipe://workflows?workflow=${DEMO_TASK_ID}&so
 /** The embedded key frames, `<name>.webp`: served by the app at this path, under `public/` in the repo. */
 export const EVIDENCE_PATH = "/automation-flows/demo-evidence";
 
+/**
+ * Zero-width marks unique to `now` (to the tenth of a second, repeating after
+ * ~7 minutes). The notification server drops the same title and body within
+ * 90 s, and every ⌃⌥⌘D press must show the notification.
+ */
+function invisibleMark(now: number): string {
+  return (Math.floor(now / 100) % 4096).toString(2).padStart(12, "0").replace(/0/g, "\u200B").replace(/1/g, "\u200C");
+}
+
 /** Same deeplink action shape as the native workflow notification (`notifications/workflow.rs`). */
 export function notificationPayload(now = Date.now()) {
   return {
     // Unique per run: the route drops a repeated id ("Notification already sent").
     id: `automation-flows-demo:${DEMO_TASK_ID}:${now}`,
     title: "Repetitive task detected",
-    body: "You turned 3 bug emails into NOVA Jira tickets. Answer 2 questions to automate it.",
+    body: `You turned 3 bug emails into NOVA Jira tickets. Answer 2 questions to automate it.${invisibleMark(now)}`,
     type: "pipe",
     priority: "normal",
     transient: false,

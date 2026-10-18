@@ -52,7 +52,7 @@ const COPY = {
     footer: "Saved answers refine future workflow updates.",
     save: "Save answers", saving: "Saving…",
     choices: "Suggested answers", created: "", open: "", pending: "", confirm: "", applying: "",
-    thinkingLabel: "", thinking: (_percent: number) => "",
+    thinkingLabel: "", creatingLabel: "", thinking: (_percent: number) => "",
   },
   creation: {
     section: "Questions and feedback",
@@ -81,14 +81,14 @@ const COPY = {
     created: "This automation is already created. Open it from the top of the page.",
     pending: "Confirm to apply your changes to the automation.",
     confirm: "Confirm changes", applying: "Applying…",
-    thinkingLabel: "Applying your changes",
+    thinkingLabel: "Applying your changes", creatingLabel: "Creating the automation",
     thinking: (percent: number) => percent < 25 ? "Reading your changes…" : percent < 55 ? "Thinking through the automation…" : percent < 85 ? "Checking each step…" : "Finishing up…",
   },
 };
-/** How long « Confirm changes » shows the AI thinking before it applies the answers. */
+/** How long « Create automation » and « Confirm changes » show the AI thinking before they act. */
 export const THINKING_MS = 5000;
 /**
- * Simulated AI thinking for « Confirm changes »: 0 → 100 % over `ms`, in uneven
+ * Simulated AI thinking for « Create automation » and « Confirm changes »: 0 → 100 % over `ms`, in uneven
  * jumps with pauses, never going back. It reports a percentage only, no time.
  */
 function think(ms: number, onProgress: (percent: number) => void) {
@@ -147,7 +147,8 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
   const [filling, setFilling] = useState(false);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
-  // « Confirm changes »: the simulated thinking, in percent, while it runs.
+  // « Create automation » / « Confirm changes »: the simulated thinking, in
+  // percent. Held at 100 % until the host has opened the Review Screen.
   const [progress, setProgress] = useState<number | null>(null);
   // The Flow already created from this task: the page header opens it.
   const [existingFlow, setExistingFlow] = useState<string | null>(null);
@@ -252,7 +253,9 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
   /**
    * Saves the answers first, so the Flow is never created from answers that
    * were not kept. Once the Flow exists, the same call applies changed
-   * answers to it (« Confirm changes »), after a simulated AI thinking.
+   * answers to it (« Confirm changes »). Both show a simulated AI thinking;
+   * the form stays locked until `createFlow` resolves, which the host does
+   * once its Review Screen is on screen.
    */
   async function create() {
     if (!createFlow || !complete || (existingFlow && !changed) || saving.current) return;
@@ -260,7 +263,7 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
     saving.current = true; setBusy(true); setCreating(true); setError(""); setNotice("");
     try {
       const kept = save && changed ? await persist(save) : answers;
-      if (existingFlow) await think(THINKING_MS, setProgress);
+      await think(THINKING_MS, setProgress);
       await createFlow(fields.filter(q => kept[q]?.trim()).map(question => ({ question, answer: kept[question].trim() })));
     } catch (cause) { setError(cause instanceof Error ? cause.message : existingFlow ? "Could not apply the changes. Your answers are kept. Try again." : "Could not create the automation. Your answers are kept. Try again."); }
     finally { saving.current = false; setBusy(false); setCreating(false); setProgress(null); }
@@ -305,7 +308,7 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
       </div>)}
       {error && <p className={styles.error} role="alert">{error}</p>}
       {save && <div className={styles.actions}>{progress !== null
-        ? <div className={styles.thinking} role="progressbar" aria-label={t.thinkingLabel} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+        ? <div className={styles.thinking} role="progressbar" aria-label={existingFlow ? t.thinkingLabel : t.creatingLabel} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
           <div><div>{t.thinking(progress)}</div><div>{progress}%</div></div>
           <div className={styles.track}><div style={{ width: `${progress}%` }} /></div>
         </div>

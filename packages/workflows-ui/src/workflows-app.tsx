@@ -964,9 +964,23 @@ export function WorkflowsApp({ modelControl, readyWorkflowIds, reviewRequest, on
   }, [readyWorkflowIds]);
 
   const handledReview = useRef<string | null>(null);
+  // A review request (a notification, a deeplink) reads the catalog again
+  // before opening its workflow: an open page may show an older copy, whose
+  // answers would then be refused as changed. The opened page is mounted
+  // afresh on that copy.
+  const reloadedForReview = useRef<string | null>(null);
+  const [reviewVisit, setReviewVisit] = useState(0);
   useEffect(() => {
-    if (!active || !catalogReady || catalogLoadError || !reviewRequest || handledReview.current === reviewRequest.key) return;
+    if (!active || !reviewRequest || handledReview.current === reviewRequest.key) return;
+    if (platform.loadCapturedWork && reloadedForReview.current !== reviewRequest.key) {
+      reloadedForReview.current = reviewRequest.key;
+      setCatalogReady(false);
+      setCatalogLoadRevision(value => value + 1);
+      return;
+    }
+    if (!catalogReady || catalogLoadError) return;
     handledReview.current = reviewRequest.key;
+    setReviewVisit(value => value + 1);
     setReviewError("");
     setReviewIds(new Set(reviewRequest.workflowIds ?? []));
     setQuery("");
@@ -977,7 +991,7 @@ export function WorkflowsApp({ modelControl, readyWorkflowIds, reviewRequest, on
       if (reviewRequest.workflowId) setReviewError("This workflow is no longer available. Your other workflows are shown below.");
     }
     onReviewRequestHandled?.(!reviewRequest.workflowId || index >= 0);
-  }, [active, catalogReady, catalogLoadError, reviewRequest, workflows, openWorkflow, navigate, onReviewRequestHandled]);
+  }, [active, catalogReady, catalogLoadError, reviewRequest, workflows, openWorkflow, navigate, onReviewRequestHandled, platform.loadCapturedWork]);
 
   const focusWorkflowSearch = useCallback(() => {
     navigate("workflows");
@@ -1281,7 +1295,7 @@ export function WorkflowsApp({ modelControl, readyWorkflowIds, reviewRequest, on
   let content: React.ReactNode;
   switch (view) {
     case "workflows": content = <WorkflowsView reviewIds={reviewIds} activityState={runActivity} analysisUnavailableReason={onAnalysisUnavailable ? undefined : analysisUnavailableReason} workflows={workflows} knownWorkflowCount={knownWorkflows.length} query={query} setQuery={setQuery} openWorkflow={openWorkflow} analyze={() => void analyze()} analyzing={analyzing} error={analysisError || reviewError} stop={platform.cancelAnalysisJob ? () => { void platform.cancelAnalysisJob!().catch(error => setAnalysisError(String(error))); } : undefined} updatedAt={analysis?.analyzedAt} checkedThrough={analysis?.checkedThrough} changes={analysis?.changes} job={analysisJob} subscribe={platform.subscribeAnalysisActivity} />; break;
-    case "workflow": content = <WorkflowDetail canSaveAnswers={catalogReady && (!activeScope || activeScope.kind === "personal")} composerAccessory={composerAccessory} active={active} onAnswersSaved={saved => setAnalysis(current => current ? { ...current, analysis: { ...current.analysis, workflows: current.analysis.workflows.map(w => (w.id ?? w.title) === (saved.id ?? saved.title) && (saved.revision ?? 0) >= (w.revision ?? 0) ? saved : w) } } : current)} key={activeWorkflow?.id || activeWorkflow?.title} onShareWorkflow={onShareWorkflow} onShareDocument={onShareDocument} workflowAgentActions={workflowAgentActions} workflow={activeWorkflow} navigate={navigate} platform={platform} workProfile={workProfile} saveEdits={catalogReady && platform.saveWorkflowEdits && (!activeScope || activeScope.kind === "personal") ? async (draft) => {
+    case "workflow": content = <WorkflowDetail canSaveAnswers={catalogReady && (!activeScope || activeScope.kind === "personal")} composerAccessory={composerAccessory} active={active} onAnswersSaved={saved => setAnalysis(current => current ? { ...current, analysis: { ...current.analysis, workflows: current.analysis.workflows.map(w => (w.id ?? w.title) === (saved.id ?? saved.title) && (saved.revision ?? 0) >= (w.revision ?? 0) ? saved : w) } } : current)} key={`${activeWorkflow?.id || activeWorkflow?.title}:${reviewVisit}`} onShareWorkflow={onShareWorkflow} onShareDocument={onShareDocument} workflowAgentActions={workflowAgentActions} workflow={activeWorkflow} navigate={navigate} platform={platform} workProfile={workProfile} saveEdits={catalogReady && platform.saveWorkflowEdits && (!activeScope || activeScope.kind === "personal") ? async (draft) => {
       let saved: WorkflowMap;
       try { saved = await platform.saveWorkflowEdits!(draft); }
       catch (error) {

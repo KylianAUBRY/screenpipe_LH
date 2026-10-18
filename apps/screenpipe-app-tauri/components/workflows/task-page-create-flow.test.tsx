@@ -30,6 +30,15 @@ async function openTaskPage(extra: Partial<WorkflowsPlatform> = {}, taskId = DEM
 const answer = (question: string, value: string) =>
   fireEvent.change(screen.getByRole("textbox", { name: question }), { target: { value } });
 
+/** Clicks or submits, then lets the simulated AI thinking run to its end. */
+async function withThinking(action: () => void) {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    action();
+    await act(() => vi.advanceTimersByTimeAsync(THINKING_MS));
+  } finally { vi.useRealTimers(); }
+}
+
 describe("Task Page: Clarification Questions unlock Flow creation", () => {
   it("keeps the action disabled until every question is answered", async () => {
     await openTaskPage({ createAutomationFlow: vi.fn(async () => {}) });
@@ -203,7 +212,7 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     await openTaskPage({ createAutomationFlow });
     answer(CLARIFICATION_QUESTIONS[0], "Yes, as a Task.");
     answer(CLARIFICATION_QUESTIONS[1], "Blocking = Highest.");
-    fireEvent.submit(screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[1] }).closest("form")!);
+    await withThinking(() => fireEvent.submit(screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[1] }).closest("form")!));
     await waitFor(() => expect(createAutomationFlow).toHaveBeenCalledTimes(1));
   });
 
@@ -216,7 +225,7 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     answer(CLARIFICATION_QUESTIONS[0], "Oui, en Tâche.");
     answer(CLARIFICATION_QUESTIONS[1], "Bloquant = Highest.");
     const create = screen.getByRole("button", { name: CREATE });
-    fireEvent.click(create); fireEvent.click(create);
+    await withThinking(() => { fireEvent.click(create); fireEvent.click(create); });
     await waitFor(() => expect(createAutomationFlow).toHaveBeenCalledTimes(1));
     expect(order).toEqual(["save", "create"]);
     expect(createAutomationFlow).toHaveBeenCalledWith(DEMO_TASK_ID, [
@@ -251,11 +260,64 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     await openTaskPage({ createAutomationFlow });
     answer(CLARIFICATION_QUESTIONS[0], "Oui, en Tâche.");
     answer(CLARIFICATION_QUESTIONS[1], "Bloquant = Highest.");
-    fireEvent.click(screen.getByRole("button", { name: CREATE }));
+    await withThinking(() => fireEvent.click(screen.getByRole("button", { name: CREATE })));
     expect(await screen.findByText("n8n is not set up.")).toHaveAttribute("role", "alert");
     expect(screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] })).toHaveValue("Oui, en Tâche.");
-    fireEvent.click(screen.getByRole("button", { name: CREATE }));
+    await withThinking(() => fireEvent.click(screen.getByRole("button", { name: CREATE })));
     await waitFor(() => expect(createAutomationFlow).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText("n8n is not set up.")).toBeNull());
+  });
+  it("shows the AI thinking on « Create automation » and stays locked until the Review Screen is shown", async () => {
+    let shown!: () => void;
+    const createAutomationFlow = vi.fn(() => new Promise<void>(resolve => { shown = resolve; }));
+    await openTaskPage({ createAutomationFlow });
+    answer(CLARIFICATION_QUESTIONS[0], "Yes, as a Task.");
+    answer(CLARIFICATION_QUESTIONS[1], "Blocking = Highest.");
+    const form = screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] }).closest("form")!;
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: CREATE }));
+      // Same thinking as « Confirm changes »: percent only, no time.
+      const thinking = await within(form).findByRole("progressbar", { name: "Creating the automation" });
+      expect(thinking).toHaveTextContent(/\d+%/);
+      expect(thinking).not.toHaveTextContent(/second|\d\s?s\b/);
+      expect(within(form).getByRole("button", { name: "Creating…" })).toBeDisabled();
+      expect(createAutomationFlow).not.toHaveBeenCalled();
+      await act(() => vi.advanceTimersByTimeAsync(THINKING_MS));
+      await waitFor(() => expect(createAutomationFlow).toHaveBeenCalledTimes(1));
+    } finally { vi.useRealTimers(); }
+
+    // The host is still opening the Review Screen: the bar and the lock stay.
+    expect(within(form).getByRole("progressbar", { name: "Creating the automation" })).toHaveAttribute("aria-valuenow", "100");
+    expect(within(form).getByRole("button", { name: "Creating…" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] })).toBeDisabled();
+    await act(async () => { shown(); });
+    expect(within(form).queryByRole("progressbar")).toBeNull();
+  });
+
+  it("creates on the first click after the task was reinstalled under an open Task Page (ticket 17)", async () => {
+    const createAutomationFlow = vi.fn(async () => {});
+    const platform = await openTaskPage({ createAutomationFlow });
+    // ⌃⌥⌘D reinstalls the task (a newer revision) while this page stays open.
+    const before = (await platform.loadCapturedWork!(30))!;
+    const task = before.analysis.workflows.find(w => w.id === DEMO_TASK_ID)!;
+    window.localStorage.setItem("screenpipe:fictional-workflow-editor-preview",
+      JSON.stringify(upsertTask(before, { ...task, userCorrection: null }, at)));
+    // Its notification opens the Task Page again.
+    cleanup();
+    const app = (key: string) => <WorkflowsApp platform={platform} storageKey={null} reviewRequest={{ key, workflowId: DEMO_TASK_ID }} />;
+    const { rerender } = render(app("demo"));
+    await screen.findByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] });
+    window.localStorage.setItem("screenpipe:fictional-workflow-editor-preview",
+      JSON.stringify(upsertTask((await platform.loadCapturedWork!(30))!, { ...task, userCorrection: null }, at)));
+    await act(async () => { rerender(app("demo-again")); });
+    await waitFor(() => expect(screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] })).toBeEnabled());
+
+    answer(CLARIFICATION_QUESTIONS[0], "Yes, as a Task.");
+    answer(CLARIFICATION_QUESTIONS[1], "Blocking = Highest.");
+    await withThinking(() => fireEvent.click(screen.getByRole("button", { name: CREATE })));
+    await waitFor(() => expect(createAutomationFlow).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

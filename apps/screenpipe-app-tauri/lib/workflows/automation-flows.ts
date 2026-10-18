@@ -52,7 +52,7 @@ export const createAutomationFlow: NonNullable<WorkflowsPlatform["createAutomati
 };
 
 /** Which Flow was created from a Detected Task, kept on this device. */
-const flowOfTaskKey = (taskId: string) => `screenpipe:automation-flow-of-task:${taskId}`;
+export const flowOfTaskKey = (taskId: string) => `screenpipe:automation-flow-of-task:${taskId}`;
 
 function rememberFlow(taskId: string, flowId: string | null) {
   try {
@@ -130,11 +130,38 @@ export async function openFlowReviewLink(href: string): Promise<boolean> {
   return true;
 }
 
+/** How long the Task Page keeps its progress while waiting for the Review Screen. */
+export const REVIEW_SCREEN_WAIT_MS = 10_000;
+
+/**
+ * Resolves once the Review Screen of `flowId` is on screen (loading or
+ * loaded), or after `timeoutMs`. Home hides the views it keeps mounted with
+ * the `hidden` class, so a Review Screen inside one is not shown yet.
+ */
+export function reviewScreenShown(flowId: string, timeoutMs = REVIEW_SCREEN_WAIT_MS): Promise<void> {
+  const visible = () => Array.from(document.querySelectorAll<HTMLElement>("[data-flow-review]")).some(
+    (element) => element.dataset.flowReview === flowId && !element.closest(".hidden, [hidden]"),
+  );
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const check = () => {
+      if (visible() || Date.now() - started >= timeoutMs) resolve();
+      else setTimeout(check, 50);
+    };
+    check();
+  });
+}
+
+/**
+ * Opens the Review Screen and resolves once it is on screen, so the Task Page
+ * keeps its progress until then. Home's `navigate` listener does the switch
+ * (`followFlowsNavigation`), once: switching here too opened the Flow twice.
+ */
 async function openFlowReview(flowId: string): Promise<void> {
   const url = `/home?section=${flowReviewPage(flowId)}`;
   window.history.replaceState(window.history.state, "", url);
   await emit("navigate", { url });
-  showFlowsTab(flowId);
+  await reviewScreenShown(flowId);
 }
 
 /**

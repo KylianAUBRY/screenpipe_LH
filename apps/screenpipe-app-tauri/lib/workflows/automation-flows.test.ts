@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   localFetch: vi.fn(),
-  emit: vi.fn(async () => {}),
+  emit: vi.fn(async (_event: string, _payload?: unknown) => {}),
   showWindowActivated: vi.fn(async (_window: unknown) => ({ status: "ok" as const, data: null })),
 }));
 vi.mock("@/lib/api", () => ({ localFetch: mocks.localFetch }));
@@ -22,6 +22,7 @@ import {
   followFlowsNavigation,
   openAutomationFlow,
   openFlowReviewLink,
+  reviewScreenShown,
 } from "./automation-flows";
 import { DEMO_TASK_ID, fixtureFlow } from "@/components/automation-flows/fixtures";
 import { mockAutomationFlowsResponse } from "@/components/automation-flows/mock";
@@ -29,8 +30,22 @@ import { mockAutomationFlowsResponse } from "@/components/automation-flows/mock"
 const answers = [{ question: "Should ideas become tickets?", answer: "Yes, as a Task." }];
 const reviewUrl = `/home?section=pipes&tab=flows&flow=${fixtureFlow.id}`;
 
+// Home's `navigate` listener, as far as these tests need it: the Review
+// Screen of the Flow in the URL appears a moment later.
+function homeShowsReviewScreen(_event: string, payload?: unknown) {
+  const flow = new URL((payload as { url: string }).url, "http://localhost").searchParams.get("flow");
+  if (flow) setTimeout(() => {
+    const screen = document.createElement("div");
+    screen.dataset.flowReview = flow;
+    document.body.append(screen);
+  }, 30);
+  return Promise.resolve();
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  document.body.innerHTML = "";
+  mocks.emit.mockImplementation(homeShowsReviewScreen);
   window.history.replaceState({}, "", `/home?mode=workflows&workflow=${DEMO_TASK_ID}`);
   // The Flow service as the browser mock (`bun run dev:web`) answers it.
   mocks.localFetch.mockImplementation(async (path: string, init?: RequestInit) =>
@@ -49,16 +64,40 @@ describe("desktop createAutomationFlow", () => {
     expect(mocks.emit).toHaveBeenCalledWith("navigate", { url: reviewUrl });
   });
 
-  it("switches an Automations view that is already open to the Flow's Review Screen", async () => {
+  it("leaves the switch to Home's navigate listener, so the Flow opens once", async () => {
     const switched = vi.fn();
-    const listen = (event: Event) => switched((event as CustomEvent).detail);
-    window.addEventListener("switch-pipes-tab", listen);
+    window.addEventListener("switch-pipes-tab", switched);
     try {
       await createAutomationFlow(DEMO_TASK_ID, answers);
     } finally {
-      window.removeEventListener("switch-pipes-tab", listen);
+      window.removeEventListener("switch-pipes-tab", switched);
     }
-    expect(switched).toHaveBeenCalledWith({ tab: "flows", flow: fixtureFlow.id });
+    expect(switched).not.toHaveBeenCalled();
+    expect(mocks.emit).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves only once the Review Screen is on screen, not while Home keeps it hidden", async () => {
+    mocks.emit.mockImplementation(async () => {});
+    const hidden = document.createElement("div");
+    hidden.className = "hidden";
+    const screen = document.createElement("div");
+    screen.dataset.flowReview = fixtureFlow.id;
+    hidden.append(screen);
+    document.body.append(hidden);
+    let done = false;
+    const creation = createAutomationFlow(DEMO_TASK_ID, answers).then(() => { done = true; });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(done).toBe(false);
+    hidden.className = "";
+    await creation;
+    expect(done).toBe(true);
+  });
+
+  it("gives up waiting for the Review Screen after a while", async () => {
+    mocks.emit.mockImplementation(async () => {});
+    const started = Date.now();
+    await reviewScreenShown("never-shown", 120);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(100);
   });
 
   it("opens the same Flow when the action is clicked again", async () => {

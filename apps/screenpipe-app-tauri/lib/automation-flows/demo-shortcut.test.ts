@@ -60,11 +60,11 @@ describe("demo shortcut ⌃⌥⌘D", () => {
   });
 
   it("tells the presenter when the notification server is unreachable", async () => {
-    const { d } = deps({ notify: vi.fn(async () => { throw new Error("le serveur de notifications de Screenpipe ne répond pas"); }) });
+    const { d } = deps({ notify: vi.fn(async () => { throw new Error("Screenpipe's notification server does not answer"); }) });
     await demoShortcutHandler(d)();
 
     expect(d.tell).toHaveBeenCalledWith(expect.objectContaining({
-      description: expect.stringContaining("le serveur de notifications de Screenpipe ne répond pas"),
+      description: expect.stringContaining("Screenpipe's notification server does not answer"),
     }));
   });
 
@@ -79,6 +79,45 @@ describe("demo shortcut ⌃⌥⌘D", () => {
       description: "The saved workflow catalog is unreadable.",
       destructive: true,
     });
+  });
+
+  it("deletes the previous demo Flow before the notification is sent", async () => {
+    const order: string[] = [];
+    const { d } = deps({ notify: vi.fn(async () => { order.push("notify"); return json({ success: true, message: "Notification sent successfully" }); }) });
+    d.resetFlows = vi.fn(async () => { await new Promise(resolve => setTimeout(resolve, 20)); order.push("reset"); });
+    await expect(demoShortcutHandler(d)()).resolves.toEqual({ notified: true });
+    expect(order).toEqual(["reset", "notify"]);
+    expect(d.tell).not.toHaveBeenCalled();
+  });
+
+  it("still notifies when the previous Flow cannot be deleted, and says why", async () => {
+    const { d } = deps();
+    d.resetFlows = vi.fn(async () => { throw new Error("n8n_unreachable: connection refused"); });
+    await expect(demoShortcutHandler(d)()).resolves.toEqual({ notified: true });
+    expect(d.installer.notify).toHaveBeenCalledTimes(1);
+    expect(d.tell).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Previous demo Flow not deleted",
+      description: expect.stringContaining("n8n_unreachable: connection refused"),
+    }));
+  });
+
+  it("sends a notification the server never drops as a repeat, press after press", async () => {
+    const bodies: string[] = [];
+    let now = NOW.getTime();
+    const { d } = deps({
+      now: () => new Date(now),
+      notify: vi.fn(async (payload: { title: string; body: string }) => {
+        bodies.push(payload.body);
+        return json({ success: true, message: "Notification sent successfully" });
+      }),
+    });
+    const press = demoShortcutHandler(d);
+    for (let i = 0; i < 5; i++) { await press(); now += 1_500; }
+    // The notification server's repeat key is the title and the body.
+    expect(new Set(bodies).size).toBe(5);
+    for (const body of bodies) {
+      expect(body.replace(/[\u200B\u200C]/g, "")).toBe("You turned 3 bug emails into NOVA Jira tickets. Answer 2 questions to automate it.");
+    }
   });
 
   it("ignores a second press while the first one is still running", async () => {
