@@ -287,6 +287,24 @@ describe("SummaryCards", () => {
     expect(custom.className).toContain("motion-reduce:transition-none");
   });
 
+  it("wraps the Custom slot like the other chips, so its row lines up with the one above", () => {
+    render(
+      <SummaryCards
+        onSendMessage={vi.fn()}
+        customTemplates={[]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+      />,
+    );
+
+    // A bare button's padding and border would widen its flex basis.
+    const custom = screen.getByTestId("custom-summary-open");
+    expect(custom.parentElement).toHaveClass("min-w-[148px]", "flex-1");
+    expect(custom).toHaveClass("w-full");
+    expect(custom).not.toHaveClass("flex-1");
+  });
+
   it("previews a card prompt on hover and keyboard focus without sending", () => {
     const onPreviewPrompt = vi.fn();
     const onSendMessage = vi.fn();

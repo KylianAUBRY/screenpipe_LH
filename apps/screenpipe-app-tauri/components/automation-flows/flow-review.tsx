@@ -13,7 +13,7 @@
 // happens on the Task Page in Workflows. Plan:
 // .scratch/hackathon/flow-front-merge.md.
 
-import React from "react";
+import React, { useState } from "react";
 import { ArrowLeft, ExternalLink, Pause, Pencil, Power, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -122,6 +122,7 @@ function ReviewContent({
               Dismiss
             </Button>
           )}
+          <FlowDelete flow={flow} api={api} onDeleted={onBack} />
           {flow.sourceTaskId && (
             // Where the Flow is reviewed and changed: its Task Page in Workflows.
             <Button size="sm" variant="outline" onClick={() => void api.openTaskPage(flow.sourceTaskId!)}>
@@ -151,7 +152,6 @@ function ReviewContent({
               Turn on
             </Button>
           )}
-          <FlowDelete flow={flow} api={api} onDeleted={onBack} />
         </div>
       </header>
 
@@ -173,28 +173,54 @@ function ReviewContent({
 
       <FlowActivity flowId={flow.id} api={api} />
 
-      <section className="space-y-2">
-        <SectionLabel>History</SectionLabel>
-        {flow.activationLog.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Never turned on.</p>
-        ) : (
-          <ul className="divide-y divide-border border border-border" aria-label="History">
-            {[...flow.activationLog].reverse().map((entry) => (
-              <li
-                key={`${entry.at}-${entry.event}`}
-                className="flex items-center gap-3 px-4 py-2.5 text-sm"
-              >
-                <HistoryMarker event={entry.event} />
-                <span className="min-w-0 flex-1">{activationEventLabel(entry)}</span>
-                <time dateTime={entry.at} className="shrink-0 font-mono text-xs text-muted-foreground">
-                  {formatDate(entry.at)}
-                </time>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <FlowHistory log={flow.activationLog} />
     </article>
+  );
+}
+
+/** History entries shown before « Show all »: the newest ones. */
+const HISTORY_PREVIEW = 3;
+
+/** Who turned the Flow on, paused or changed it, newest first. */
+function FlowHistory({ log }: { log: ActivationEvent[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const newestFirst = [...log].reverse();
+  const shown = expanded ? newestFirst : newestFirst.slice(0, HISTORY_PREVIEW);
+  return (
+    <section className="space-y-2">
+      <SectionLabel>
+        History {log.length > 0 && <span className="font-mono">{log.length}</span>}
+      </SectionLabel>
+      {log.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Never turned on.</p>
+      ) : (
+        <ul className="divide-y divide-border border border-border" aria-label="History">
+          {shown.map((entry) => (
+            <li
+              key={`${entry.at}-${entry.event}`}
+              className="flex items-center gap-3 px-4 py-2.5 text-sm"
+            >
+              <HistoryMarker event={entry.event} />
+              <span className="min-w-0 flex-1">{activationEventLabel(entry)}</span>
+              <time dateTime={entry.at} className="shrink-0 font-mono text-xs text-muted-foreground">
+                {formatDate(entry.at)}
+              </time>
+            </li>
+          ))}
+        </ul>
+      )}
+      {log.length > HISTORY_PREVIEW && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="text-muted-foreground"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "Show less" : `Show all ${log.length}`}
+        </Button>
+      )}
+    </section>
   );
 }
 

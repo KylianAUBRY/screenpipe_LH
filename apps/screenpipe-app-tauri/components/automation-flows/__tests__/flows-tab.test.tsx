@@ -562,6 +562,47 @@ describe("Review Screen", () => {
     expect(screen.getByRole("button", { name: "Turn on" })).toBeTruthy();
   });
 
+  it("shows the three newest History entries, and the rest on Show all", async () => {
+    const events = ["activated", "paused_for_edit", "modified", "activated", "deactivated"] as const;
+    const longHistory: Flow = {
+      ...pausedFlow,
+      activationLog: events.map((event, index) => ({ ...activation, event, at: `2026-10-17T10:0${index}:00.000Z` })),
+    };
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => longHistory) })} />);
+
+    const history = await screen.findByRole("list", { name: "History" });
+    const entries = () => within(history).getAllByRole("listitem").map((item) => item.textContent);
+    expect(entries()).toHaveLength(3);
+    expect(entries()[0]).toMatch(/^Paused by you/);
+    const more = screen.getByRole("button", { name: "Show all 5" });
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(more);
+    expect(entries()).toHaveLength(5);
+    expect(entries()[4]).toMatch(/^Turned on by you/);
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    expect(entries()).toHaveLength(3);
+  });
+
+  it("offers no Show all while the History fits", async () => {
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ get: vi.fn(async () => pausedFlow) })} />);
+    const history = await screen.findByRole("list", { name: "History" });
+    expect(within(history).getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /^Show all/ })).toBeNull();
+  });
+
+  it("keeps Dismiss and Delete quiet and first, Turn on last", async () => {
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi()} />);
+    const header = await screen.findByTestId("flow-header");
+    await within(header).findByRole("button", { name: "Turn on" });
+
+    const names = within(header).getAllByRole("button").map((button) => button.textContent);
+    expect(names).toEqual(["Dismiss", "Delete", "Review and edit", "Open in n8n", "Turn on"]);
+    for (const name of ["Dismiss", "Delete"]) {
+      expect(within(header).getByRole("button", { name }).className).toMatch(/\btext-muted-foreground\b/);
+    }
+  });
+
   it("says why n8n refused the activation and leaves the Flow as it was", async () => {
     const api = fakeApi({
       activate: vi.fn(async () => {

@@ -7,10 +7,10 @@
 // « Delete » on the Flows list and the Review Screen. The engine switches
 // an active Flow off first (waiting for the email n8n processes), deletes the
 // n8n workflow for good and removes the ScreenPipe record. Deletion cannot be
-// undone, so the click asks once more here.
+// undone, so the click asks once more here. It reads like « Dismiss »: a
+// quiet text action, never as loud as Turn on.
 
 import React, { useState } from "react";
-import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FlowsApiError, type FlowSummary, type FlowsApi } from "./api";
 
@@ -71,11 +71,11 @@ export function FlowDelete({
       ) : (
         <Button
           size="sm"
-          variant="outline"
+          variant="ghost"
+          className="text-muted-foreground"
           aria-label={label}
           onClick={() => setConfirming(true)}
         >
-          <Trash2 className="mr-1 h-4 w-4" aria-hidden />
           Delete
         </Button>
       )}

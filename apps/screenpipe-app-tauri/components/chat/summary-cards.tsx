@@ -452,18 +452,22 @@ export function SummaryCards({
         ))}
         {/* An empty slot, not a ready action. Hover inverts like the other
             chips, but the dashes take the background colour: in the fill's
-            colour they vanish and the slot reads as a solid block. */}
-        <button
-          type="button"
-          onClick={() => {
-            posthog.capture("home_card_clicked", { kind: "custom_summary_open" });
-            setShowBuilder(true);
-          }}
-          data-testid="custom-summary-open"
-          className="h-10 min-w-[148px] flex-1 cursor-pointer rounded-md border border-dashed border-foreground/25 px-1 text-[11px] text-muted-foreground transition-colors duration-150 ease-out hover:border-background/50 hover:bg-foreground hover:text-background focus-visible:border-background/50 focus-visible:bg-foreground focus-visible:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
-        >
-          + Custom
-        </button>
+            colour they vanish and the slot reads as a solid block. Wrapped
+            like the other chips: a bare button's padding and border widen
+            its flex basis, and its row stops lining up with the one above. */}
+        <div className="relative min-w-[148px] flex-1">
+          <button
+            type="button"
+            onClick={() => {
+              posthog.capture("home_card_clicked", { kind: "custom_summary_open" });
+              setShowBuilder(true);
+            }}
+            data-testid="custom-summary-open"
+            className="h-10 w-full cursor-pointer rounded-md border border-dashed border-foreground/25 px-1 text-[11px] text-muted-foreground transition-colors duration-150 ease-out hover:border-background/50 hover:bg-foreground hover:text-background focus-visible:border-background/50 focus-visible:bg-foreground focus-visible:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
+          >
+            + Custom
+          </button>
+        </div>
       </div>
 
       {/* Expanded: more templates */}
