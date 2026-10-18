@@ -17,14 +17,16 @@ import path from "node:path";
 import {
   canCreateAutomationFlow,
   createAutomationFlow,
+  findAutomationFlow,
   flowReviewLink,
   followFlowsNavigation,
+  openAutomationFlow,
   openFlowReviewLink,
 } from "./automation-flows";
 import { DEMO_TASK_ID, fixtureFlow } from "@/components/automation-flows/fixtures";
 import { mockAutomationFlowsResponse } from "@/components/automation-flows/mock";
 
-const answers = [{ question: "Les idées deviennent-elles des tickets ?", answer: "Oui, en Tâche." }];
+const answers = [{ question: "Should ideas become tickets?", answer: "Yes, as a Task." }];
 const reviewUrl = `/home?section=pipes&tab=flows&flow=${fixtureFlow.id}`;
 
 beforeEach(() => {
@@ -66,9 +68,9 @@ describe("desktop createAutomationFlow", () => {
   });
 
   it.each([
-    ["not-configured", /n8n n'est pas configuré.*Connexions/],
-    ["unauthorized", /n8n a refusé la clé API.*Connexions → n8n/],
-    ["unreachable", /Impossible de joindre n8n/],
+    ["not-configured", /n8n is not set up.*Connections/],
+    ["unauthorized", /n8n refused the API key.*Connections → n8n/],
+    ["unreachable", /Could not reach n8n/],
   ])("explains a %s Flow service and stays on the Task Page", async (state, message) => {
     window.history.replaceState({}, "", `/home?mode=workflows&flowsState=${state}`);
     await expect(createAutomationFlow(DEMO_TASK_ID, answers)).rejects.toThrow(message);
@@ -77,8 +79,31 @@ describe("desktop createAutomationFlow", () => {
   });
 
   it("explains a task that cannot become a Flow yet", async () => {
-    await expect(createAutomationFlow("wf-other-task", answers)).rejects.toThrow("Cette tâche ne peut pas encore devenir une automatisation.");
+    await expect(createAutomationFlow("wf-other-task", answers)).rejects.toThrow("This task cannot become an automation yet.");
     expect(mocks.emit).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Flow created from a task", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("is unknown before creation, then found after it", async () => {
+    expect(await findAutomationFlow(DEMO_TASK_ID)).toBeNull();
+    await createAutomationFlow(DEMO_TASK_ID, answers);
+    expect(await findAutomationFlow(DEMO_TASK_ID)).toBe(fixtureFlow.id);
+    expect(await findAutomationFlow("wf-other-task")).toBeNull();
+  });
+
+  it("is forgotten once the Flow no longer exists (a demo reset deletes it)", async () => {
+    await createAutomationFlow(DEMO_TASK_ID, answers);
+    mocks.localFetch.mockImplementation(async () => Response.json({ error: "flow_not_found" }, { status: 404 }));
+    expect(await findAutomationFlow(DEMO_TASK_ID)).toBeNull();
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it("opens its Review Screen in Automations → Flows", async () => {
+    await openAutomationFlow(fixtureFlow.id);
+    expect(mocks.emit).toHaveBeenCalledWith("navigate", { url: reviewUrl });
   });
 });
 

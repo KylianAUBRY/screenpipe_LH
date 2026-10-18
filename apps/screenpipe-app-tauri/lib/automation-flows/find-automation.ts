@@ -5,7 +5,7 @@
 // Demo contract (AGENTS.md, Hackathon mode): no detection runs; finding
 // repeated work installs the scripted Detected Task, its captures pointing at this
 // machine's recorder frames when found, then sends the notification whose
-// « Voir la tâche » opens its Task Page. Same result as
+// "View task" opens its Task Page. Same result as
 // `infra/automation-flows/demo/demo.ts`, without a terminal.
 import { appServerFetch } from "@/lib/notifications/app-server";
 import { localFetch } from "@/lib/api";
@@ -60,7 +60,7 @@ export async function findAutomation(deps: FindAutomationDeps): Promise<FindAuto
   return { notified: true };
 }
 
-/** What the notification's « Voir la tâche » does: the Task Page of the demo task. */
+/** What the notification's "View task" does: the Task Page of the demo task. */
 export async function openDemoTaskPage(): Promise<void> {
   const { routeNotificationDeeplink } = await import("@/lib/notifications/actions");
   await routeNotificationDeeplink(DEMO_TASK_URL);
@@ -102,14 +102,14 @@ export function desktopFindAutomationDeps(): FindAutomationDeps {
       // `bun run dev:web` must never reach the notification server of a
       // ScreenPipe app running on this machine.
       if (process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV) {
-        throw new Error("pas de notification dans le navigateur de développement");
+        throw new Error("no notification in the browser dev loop");
       }
       return appServerFetch("/notify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       }).catch(() => {
-        throw new Error("le serveur de notifications de Screenpipe ne répond pas");
+        throw new Error("Screenpipe's notification server does not answer");
       });
     },
   };

@@ -50,6 +50,11 @@ export type WorkflowsPlatform = {
    * task keeps the ordinary Task Page (optional answers, no creation action).
    * Absent: every task. */
   canCreateAutomationFlow?: (taskId: string) => boolean;
+  /** The Flow already created from this Detected Task, if it still exists. With
+   * it, the Task Page offers to open the automation instead of creating it. */
+  findAutomationFlow?: (taskId: string) => Promise<string | null>;
+  /** Opens a Flow's Review Screen in Automations → Flows. */
+  openAutomationFlow?: (flowId: string) => Promise<void>;
   modelPreference?: import("./model-choice").WorkflowModelPreference;
   /** The existing scheduled-task runtime owns reconciliation and persistence. */
   managesAnalysis?: boolean;

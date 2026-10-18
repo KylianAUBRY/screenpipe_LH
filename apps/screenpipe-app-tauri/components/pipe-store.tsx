@@ -430,7 +430,7 @@ export function PipeStoreView() {
         {activeTab === "discover"
           ? ui("Browse, install, and review community automations")
           : activeTab === "flows"
-            ? ui("Automations backed by n8n that you review and switch on yourself.")
+            ? ui("Automations screenpipe built from work you repeat. Nothing runs until you turn it on.")
             : ui("Run tasks on a schedule, after meetings, or when events happen.")}
       </p>
 

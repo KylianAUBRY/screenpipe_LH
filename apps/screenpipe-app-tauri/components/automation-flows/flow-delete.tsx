@@ -4,7 +4,7 @@
 
 "use client";
 
-// « Supprimer » on the Flows list and the Review Screen. The engine switches
+// « Delete » on the Flows list and the Review Screen. The engine switches
 // an active Flow off first (waiting for the email n8n processes), deletes the
 // n8n workflow for good and removes the ScreenPipe record. Deletion cannot be
 // undone, so the click asks once more here.
@@ -15,13 +15,13 @@ import { Button } from "@/components/ui/button";
 import { FlowsApiError, type FlowSummary, type FlowsApi } from "./api";
 
 const FLOW_RUNNING_MESSAGE =
-  "n8n traite encore un e-mail avec ce Flow : rien n'a été supprimé. Réessayez dans un instant.";
+  "n8n is still handling an email with this Flow: nothing was deleted. Try again in a moment.";
 
 export function FlowDelete({
   flow,
   api,
   onDeleted,
-  label = "Supprimer",
+  label = "Delete",
 }: {
   flow: Pick<FlowSummary, "id" | "name">;
   api: FlowsApi;
@@ -54,7 +54,7 @@ export function FlowDelete({
       {confirming ? (
         <span className="inline-flex flex-wrap items-center gap-2">
           <Button size="sm" variant="destructive" disabled={busy} onClick={() => void remove()}>
-            Supprimer définitivement
+            Delete for good
           </Button>
           <Button
             size="sm"
@@ -65,7 +65,7 @@ export function FlowDelete({
               setError(null);
             }}
           >
-            Annuler
+            Cancel
           </Button>
         </span>
       ) : (
@@ -76,12 +76,12 @@ export function FlowDelete({
           onClick={() => setConfirming(true)}
         >
           <Trash2 className="mr-1 h-4 w-4" aria-hidden />
-          Supprimer
+          Delete
         </Button>
       )}
       {error && (
         <div role="alert" className="w-full space-y-1 border border-border p-3">
-          <p className="text-sm font-medium">Suppression impossible</p>
+          <p className="text-sm font-medium">Could not delete</p>
           {error.code === "flow_running" ? (
             <p className="text-sm text-muted-foreground">{FLOW_RUNNING_MESSAGE}</p>
           ) : (

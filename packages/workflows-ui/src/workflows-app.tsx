@@ -724,13 +724,21 @@ export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailab
   const actionableFriction = workflow.bottlenecks.filter(isActionableBottleneck);
   const constraints = workflow.bottlenecks.filter((item) => !isActionableBottleneck(item));
   const agentActions = workflowAgentActions?.(workflow);
-  // The host can turn this task into an Automation Flow: required answers, French copy.
+  // The host can turn this task into an Automation Flow: required answers, worded buttons.
   const createsFlow = !!(platform.createAutomationFlow && workflow.id && (platform.canCreateAutomationFlow?.(workflow.id) ?? true));
-  const timelineLabel = createsFlow ? "Voir dans la timeline" : undefined;
+  const timelineLabel = createsFlow ? "View in timeline" : undefined;
   const workflowActions = <div className={styles.workflowActions}>{agentActions}{platform.guides && <button className={styles.skillButton} type="button" aria-label={hasGuide ? "Open SOP" : "Create SOP"} title={hasGuide ? "Open SOP" : "Create SOP"} onClick={() => setGuideOpen(true)}><BookOpen size={16} aria-hidden="true"/>{hasGuide ? ui("Open SOP") : ui("Create SOP")}</button>}{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? ui("Creating skill…") : skillSaved ? platform.skillInstallMode === "preview" ? ui("Skill preview") : ui("Skill installed") : skillDraft ? ui("Review skill") : ui("Create skill")}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div>;
   return (
     <>
-      <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
+      {/* Pinned while scrolling, like the Flow page header, so "Open
+          automation" stays in reach. */}
+      <header className={styles.taskHeader} data-testid="task-header">
+        <div className={styles.taskHeaderTitle}>
+          <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
+          <strong>{workflow.title}</strong>
+        </div>
+        {createsFlow && platform.findAutomationFlow && platform.openAutomationFlow && <OpenAutomationButton taskId={workflow.id!} active={active} find={platform.findAutomationFlow} open={platform.openAutomationFlow} />}
+      </header>
       {saveEdits ? <WorkflowEditor {...editorOptions} key={workflow.id || workflow.title} workflow={workflow} save={saveEdits} actions={workflowActions} renderSource={observationsAvailable ? stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} timelineLabel={timelineLabel} /> : undefined} /> : <WorkflowDocument workflow={workflow} actions={workflowActions} sourceLabel={sourceLabel}
         renderSource={observationsAvailable ? stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} timelineLabel={timelineLabel} /> : undefined} />}
       <div className={styles.workflowNotes}>
@@ -749,7 +757,8 @@ export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailab
           }
           throw error;
         }
-      } : undefined} createFlow={createsFlow ? answers => platform.createAutomationFlow!(workflow.id!, answers) : undefined} />}
+      } : undefined} createFlow={createsFlow ? answers => platform.createAutomationFlow!(workflow.id!, answers) : undefined}
+        findFlow={createsFlow && platform.findAutomationFlow ? () => platform.findAutomationFlow!(workflow.id!) : undefined} />}
       {!!workflow.variations.length && <section className={styles.panel}><h2>Variations</h2><ul className={styles.plainList}>{workflow.variations.map(item => <li key={item}>{item}</li>)}</ul></section>}
       {!!actionableFriction.length && <section><div className={styles.sectionHeading}><div><h2>Friction you can affect</h2></div></div><BottleneckList items={actionableFriction.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} /></section>}
       {!!constraints.length && <section><div className={styles.sectionHeading}><div><h2>External and required constraints</h2></div></div><BottleneckList items={constraints.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} numbered={false} /></section>}
@@ -762,6 +771,31 @@ export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailab
       }} retry={generateSkill} save={saveSkill} close={() => setSkillOpen(false)} />}
     </>
   );
+}
+
+/**
+ * "Open automation" in the Task Page header, once an Automation Flow was
+ * created from this task.
+ */
+function OpenAutomationButton({ taskId, active, find, open }: {
+  taskId: string;
+  active: boolean;
+  find: (taskId: string) => Promise<string | null>;
+  open: (flowId: string) => Promise<void>;
+}) {
+  const [flowId, setFlowId] = useState<string | null>(null);
+  // Looked up per task, and again each time the page is shown: the host keeps
+  // it mounted while hidden, and a Flow may be created meanwhile. The host may
+  // pass a new function on every render.
+  const findRef = useRef(find); findRef.current = find;
+  useEffect(() => {
+    if (!active) return;
+    let current = true;
+    findRef.current(taskId).then(id => { if (current) setFlowId(id); }, () => {});
+    return () => { current = false; };
+  }, [active, taskId]);
+  if (!flowId) return null;
+  return <button className={styles.skillButton} type="button" onClick={() => void open(flowId).catch(() => {})}><Workflow size={14} aria-hidden="true" />Open automation</button>;
 }
 
 type RankedBottleneck = WorkflowBottleneck & { workflowTitle: string; repetitions: number };

@@ -51,7 +51,7 @@ async function notify() {
       ? "The same alert was shown less than 90 s ago; wait and retry."
       : "Check ScreenPipe Settings > Notifications (pipe notifications, pause, quiet hours)."}`);
   }
-  console.log("Notification shown. Click « Voir la tâche » to open the Task Page.");
+  console.log("Notification shown. Click “View task” to open the Task Page.");
 }
 
 function printEvidence(evidence: Awaited<ReturnType<typeof buildDemoTask>>["evidence"]) {

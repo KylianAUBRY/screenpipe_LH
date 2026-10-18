@@ -189,7 +189,7 @@ describe("flowsApi", () => {
     expect(showChatWithPrefill).toHaveBeenCalledTimes(1);
     const [prefill] = showChatWithPrefill.mock.lastCall!;
     expect(prefill).toMatchObject({ autoSend: false, useHomeChat: true });
-    expect(prefill.prompt).toContain(`id : ${fixtureFlow.id}`);
+    expect(prefill.prompt).toContain(`id: ${fixtureFlow.id}`);
     expect(prefill.prompt).toContain(fixtureFlow.name);
     expect(prefill.prompt).toContain("automation-flows");
     // Opening the chat changes nothing in the Flow service.
@@ -223,7 +223,7 @@ describe("flowsApi", () => {
     const [prefill] = showChatWithPrefill.mock.lastCall!;
     expect(prefill).toMatchObject({ autoSend: false, useHomeChat: true, context: "" });
     expect(prefill.prompt).toContain("automation-flows");
-    expect(prefill.prompt).toContain("crée");
+    expect(prefill.prompt).toContain("create");
     expect(localFetch).not.toHaveBeenCalled();
   });
 });
@@ -395,7 +395,7 @@ describe("browser mock", () => {
 describe("withCreationPrompt (Create flow in the main chat)", () => {
   it("starts an empty composer with the automation-flows skill prompt", () => {
     expect(withCreationPrompt("")).toBe(CREATION_PROMPT);
-    expect(CREATION_PROMPT).toContain("skill automation-flows");
+    expect(CREATION_PROMPT).toContain("automation-flows skill");
   });
 
   it("keeps what the user already typed as the description", () => {

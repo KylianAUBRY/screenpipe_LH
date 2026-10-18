@@ -19,6 +19,12 @@ const stage = fixtureWorkflowAnalysis.analysis.workflows[0].stages[0];
 const at = "2026-10-17T02:05:41Z";
 const evidence = (name: string) => `data:image/webp;base64,${readFileSync(join(__dirname, "../../public/automation-flows/demo-evidence", `${name}.webp`)).toString("base64")}`;
 const shownTime = (timestamp: string) => new Date(timestamp).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+/** Walks a step's capture carousel once, collecting what each capture shows. */
+const walkCaptures = (step: HTMLElement, name: string, count: number, read: () => string | null | undefined) => Array.from({ length: count }, (_, index) => {
+  if (index) fireEvent.click(within(step).getByRole("button", { name: `Next capture for ${name}` }));
+  expect(within(step).getByText(`${index + 1} / ${count}`)).toBeVisible();
+  return read();
+});
 
 describe("embedded evidence (scripted Detected Task)", () => {
   it("survives saving and is still shown as step evidence, while recorder frames drop copied pixels", () => {
@@ -35,13 +41,15 @@ describe("embedded evidence (scripted Detected Task)", () => {
     await act(async () => {
       render(<WorkflowsApp platform={createFixtureWorkflowsPlatform(saved)} storageKey={null} reviewRequest={{ key: "demo", workflowId: DEMO_TASK_ID }} />);
     });
-    for (const [index, ticket] of ["NOVA-25 (Bug)", "NOVA-26 (Bug)", "NOVA-27 (Tâche)"].entries()) {
+    for (const [index, ticket] of ["NOVA-25 (Bug)", "NOVA-26 (Bug)", "NOVA-27 (Task)"].entries()) {
       expect((await screen.findByRole<HTMLInputElement>("textbox", { name: `Step ${index + 1} title` })).value).toContain(ticket);
       const step = screen.getByRole("article", { name: `Step ${index + 1}` });
-      const images = within(step).getAllByRole("img", { name: /^Captured reference/ });
-      expect(images.map(image => image.getAttribute("src")?.slice(0, 23))).toEqual(Array(3).fill("data:image/webp;base64,"));
-      expect(within(step).getAllByText(/^(Gmail|Jira) · /).map(caption => caption.textContent))
-        .toEqual(task.stages[index].screenshots!.map(capture => `${capture.app} · ${shownTime(capture.timestamp)}`));
+      const shown = walkCaptures(step, task.stages[index].name, 3, () => {
+        const images = within(step).getAllByRole("img", { name: /^Captured reference/ });
+        expect(images).toHaveLength(1);
+        return `${images[0].getAttribute("src")?.slice(0, 23)} ${within(step).getByText(/^(Gmail|Jira) · /).textContent}`;
+      });
+      expect(shown).toEqual(task.stages[index].screenshots!.map(capture => `data:image/webp;base64, ${capture.app} · ${shownTime(capture.timestamp)}`));
     }
     for (const question of CLARIFICATION_QUESTIONS) expect(screen.getByRole("textbox", { name: question })).toBeVisible();
   });
@@ -66,18 +74,23 @@ describe("recorded evidence (captures found on this machine)", () => {
       render(<WorkflowsApp platform={platform} storageKey={null} reviewRequest={{ key: "demo-recorded", workflowId: DEMO_TASK_ID }} />);
     });
     const step = await screen.findByRole("article", { name: "Step 1" });
-    await waitFor(() => expect(within(step).getAllByRole("img", { name: /^Captured reference/ }).map(image => image.getAttribute("src")?.slice(0, 23)))
-      .toEqual(["data:image/webp;base64,", "blob:frame-4242", "data:image/webp;base64,"]));
-    expect(within(step).getByText(`Jira · ${shownTime(live.timestamp)}`)).toBeVisible();
-    // "View in timeline" exists only for the recorder frame, and opens that exact moment.
     const name = task.stages[0].name;
-    expect(within(step).queryByRole("button", { name: `Open recording 1 for ${name}` })).toBeNull();
-    expect(within(step).queryByRole("button", { name: `Open recording 3 for ${name}` })).toBeNull();
-    fireEvent.click(within(step).getByRole("button", { name: `Open recording 2 for ${name}` }));
+    const image = () => within(step).getByRole("img", { name: /^Captured reference/ }).getAttribute("src")?.slice(0, 23);
+    expect(image()).toBe("data:image/webp;base64,");
+    // "View in timeline" exists only for the recorder frame, and opens that exact moment.
+    expect(within(step).queryByRole("button", { name: /^Open recording/ })).toBeNull();
+    fireEvent.click(within(step).getByRole("button", { name: `Next capture for ${name}` }));
+    await waitFor(() => expect(image()).toBe("blob:frame-4242"));
+    expect(within(step).getByText(`Jira · ${shownTime(live.timestamp)}`)).toBeVisible();
+    fireEvent.click(within(step).getByRole("button", { name: `Next capture for ${name}` }));
+    expect(image()).toBe("data:image/webp;base64,");
+    expect(within(step).queryByRole("button", { name: /^Open recording/ })).toBeNull();
+    fireEvent.click(within(step).getByRole("button", { name: `Previous capture for ${name}` }));
+    fireEvent.click(await within(step).findByRole("button", { name: `Open recording 2 for ${name}` }));
     await waitFor(() => expect(openCapturedMoment).toHaveBeenCalledWith(4242, live.timestamp));
   });
 
-  it("says « Voir dans la timeline » in words on the Task Page that creates a Flow", async () => {
+  it("says View in timeline in words on the Task Page that creates a Flow", async () => {
     window.history.replaceState(null, "", "/home?mode=workflows");
     const live = { frameId: 4242, timestamp: "2026-10-17T02:07:12.733417Z" };
     const task = buildDetectedTask(evidence, at, { "r1-form": live });
@@ -97,10 +110,11 @@ describe("recorded evidence (captures found on this machine)", () => {
       render(<WorkflowsApp platform={platform} storageKey={null} reviewRequest={{ key: "demo-create", workflowId: DEMO_TASK_ID }} />);
     });
     const step = await screen.findByRole("article", { name: "Step 1" });
-    const open = await within(step).findByRole("button", { name: /^Voir dans la timeline/ });
+    fireEvent.click(within(step).getByRole("button", { name: `Next capture for ${task.stages[0].name}` }));
+    const open = await within(step).findByRole("button", { name: /^View in timeline/ });
     // The words are on screen, not only in the accessible name.
-    expect(open).toHaveTextContent("Voir dans la timeline");
-    expect(within(step).getAllByRole("button", { name: /^Voir dans la timeline/ })).toHaveLength(1);
+    expect(open).toHaveTextContent("View in timeline");
+    expect(within(step).getAllByRole("button", { name: /^View in timeline/ })).toHaveLength(1);
     expect(within(step).queryByRole("button", { name: /^Open recording/ })).toBeNull();
     fireEvent.click(open);
     await waitFor(() => expect(openCapturedMoment).toHaveBeenCalledWith(4242, live.timestamp));

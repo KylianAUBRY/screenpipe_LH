@@ -31,7 +31,7 @@ export function DemoShortcutListener() {
       tell: ({ title, description, destructive }) => tell(title, description, destructive),
     });
     const unlisten = getCurrentWebviewWindow().listen(DEMO_SHORTCUT_EVENT, () => {
-      press().catch(error => tell("Démo non lancée", error instanceof Error ? error.message : String(error), true));
+      press().catch(error => tell("Demo not started", error instanceof Error ? error.message : String(error), true));
     });
     return () => { void unlisten.then(stop => stop()).catch(() => {}); };
   }, [toast]);

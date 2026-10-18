@@ -7,7 +7,7 @@
 // The Review Screen's Activity (D18): per handled email, what the Flow did
 // (ticket, ignored, abstained, failed) and why, newest first, as the engine
 // reads it from n8n's executions. Re-read with the rest of the screen.
-// « Relancer » on a failed run (D17) has n8n run it again with the input it
+// « Retry » on a failed run (D17) has n8n run it again with the input it
 // kept; the demo Flow's ticket search (D20) makes that never a second ticket.
 
 import React, { useState } from "react";
@@ -18,7 +18,7 @@ import { FlowsApiError, type FlowRun, type FlowsApi } from "./api";
 import { SectionLabel, useFlowsLoad } from "./common";
 import { formatDate, outcomeLabel } from "./labels";
 
-/** What « Relancer » gave, per failed run on screen. */
+/** What « Retry » gave, per failed run on screen. */
 type Retry = { state: "busy" } | { state: "done"; run: FlowRun } | { state: "error"; error: FlowsApiError };
 
 export function FlowActivity({ flowId, api }: { flowId: string; api: FlowsApi }) {
@@ -44,20 +44,20 @@ export function FlowActivity({ flowId, api }: { flowId: string; api: FlowsApi })
 
   return (
     <section className="space-y-2">
-      <SectionLabel>Activité</SectionLabel>
+      <SectionLabel>Activity</SectionLabel>
       {runs.state === "loading" && (
-        <p className="text-sm text-muted-foreground">Chargement de l&apos;activité…</p>
+        <p className="text-sm text-muted-foreground">Loading the activity…</p>
       )}
       {runs.state === "error" && (
         <p className="text-sm text-muted-foreground">
-          Impossible de lire l&apos;activité dans n8n pour l&apos;instant.
+          Could not read the activity from n8n right now.
         </p>
       )}
       {runs.state === "ready" && runs.data.length === 0 && (
-        <p className="text-sm text-muted-foreground">Aucun e-mail traité pour l&apos;instant.</p>
+        <p className="text-sm text-muted-foreground">No email handled yet.</p>
       )}
       {runs.state === "ready" && runs.data.length > 0 && (
-        <ul className="divide-y divide-border border border-border" aria-label="Activité du Flow">
+        <ul className="divide-y divide-border border border-border" aria-label="Flow activity">
           {runs.data.map((run) => (
             <RunRow
               key={run.executionId}
@@ -91,27 +91,27 @@ function RunRow({
       </div>
       {run.email && (
         <p className="break-words">
-          {run.email.sender} · « {run.email.subject} »
+          {run.email.sender} · “{run.email.subject}”
         </p>
       )}
       {run.reason && <p className="break-words text-muted-foreground">{run.reason}</p>}
       {failed && retried && (
         <p className="text-muted-foreground">
-          {retry?.state === "done" ? `Relancé : ${outcomeLabel(retry.run)}` : "Relancé"}
+          {retry?.state === "done" ? `Retried: ${outcomeLabel(retry.run)}` : "Retried"}
         </p>
       )}
       {failed && !retried && (
         <div className="flex flex-wrap items-center gap-3 pt-1">
           <Button size="sm" variant="outline" disabled={retry?.state === "busy"} onClick={onRetry}>
             <RotateCcw className="mr-1 h-4 w-4" aria-hidden />
-            Relancer
+            Retry
           </Button>
           {retry?.state === "busy" && (
-            <span className="text-xs text-muted-foreground">n8n relance l&apos;exécution…</span>
+            <span className="text-xs text-muted-foreground">n8n is running it again…</span>
           )}
           {retry?.state === "done" && (
             <span role="status" className="break-words text-xs text-red-600">
-              {`La relance a encore échoué : ${retry.run.reason ?? "erreur inconnue"}`}
+              {`The retry failed again: ${retry.run.reason ?? "unknown error"}`}
             </span>
           )}
           {retry?.state === "error" && (
@@ -128,16 +128,16 @@ function RunRow({
 function retryErrorMessage(error: FlowsApiError): string {
   switch (error.code) {
     case "n8n_unreachable":
-      return "n8n est injoignable : rien n'a été relancé. Vérifiez que n8n tourne, puis réessayez.";
+      return "n8n is unreachable: nothing was retried. Check that n8n is running, then try again.";
     case "run_not_failed":
-      return "Cette exécution n'a pas échoué, ou tourne encore : rien à relancer.";
+      return "This run did not fail, or is still running: nothing to retry.";
     case "not_found":
-      return "n8n n'a plus cette exécution : elle ne peut pas être relancée.";
+      return "n8n no longer has this run: it cannot be retried.";
     case "retry_still_running":
-      return "La relance tourne encore dans n8n : son résultat apparaîtra ici.";
+      return "The retry is still running in n8n: its result will show here.";
     case "retry_requires_user":
-      return "Seule l'app ScreenPipe peut relancer une exécution : rien n'a été relancé.";
+      return "Only the screenpipe app can retry a run: nothing was retried.";
     default:
-      return `La relance n'a pas pu être lancée${error.detail ? ` : ${error.detail}` : "."}`;
+      return `The retry could not start${error.detail ? `: ${error.detail}` : "."}`;
   }
 }

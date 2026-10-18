@@ -294,6 +294,8 @@ where
         .route("/:id/failures", post(failures::report_failure))
         .route("/:id/activity", get(activity::flow_activity))
         .route("/:id/runs/:run/retry", post(retry::retry_run))
+        .route("/:id/dismiss", post(dismiss_flow))
+        .route("/:id/restore", post(restore_flow))
         .layer(middleware::from_fn(require_json))
         .with_state(state)
 }
@@ -437,6 +439,8 @@ enum FlowError {
     FlowRunning,
     /// n8n answered but refused to switch the workflow on or off.
     ActivationFailed(String),
+    /// Dismissing a Flow that n8n runs: it must be switched off first.
+    FlowActive,
     /// A chat modification the Review Screen could not explain, or that n8n
     /// rejected; the detail says what to fix.
     InvalidWorkflow(String),
@@ -502,6 +506,13 @@ impl IntoResponse for FlowError {
                 StatusCode::BAD_GATEWAY,
                 json!({"error": "activation_failed", "detail": detail}),
             ),
+            FlowError::FlowActive => (
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "flow_active",
+                    "detail": "This Flow is on. Pause it before dismissing it.",
+                }),
+            ),
             FlowError::InvalidWorkflow(detail) => (
                 StatusCode::BAD_REQUEST,
                 json!({"error": "invalid_workflow", "detail": detail}),
@@ -510,14 +521,14 @@ impl IntoResponse for FlowError {
                 StatusCode::FORBIDDEN,
                 json!({
                     "error": "activation_requires_user",
-                    "detail": "Only the user can activate a Flow, with the Activer button on its Review Screen in ScreenPipe.",
+                    "detail": "Only the user can activate a Flow, with the Turn on button on its Review Screen in ScreenPipe.",
                 }),
             ),
             FlowError::RetryRequiresUser => (
                 StatusCode::FORBIDDEN,
                 json!({
                     "error": "retry_requires_user",
-                    "detail": "Only the user can retry a Flow's run, with « Relancer » on its Review Screen or on the failure notification in ScreenPipe.",
+                    "detail": "Only the user can retry a Flow's run, with « Retry » on its Review Screen or on the failure notification in ScreenPipe.",
                 }),
             ),
             FlowError::VersionRequired => (
@@ -1052,6 +1063,9 @@ struct FlowRecord {
     reviewed_version_id: Option<String>,
     #[serde(default)]
     activation_log: Vec<ActivationEvent>,
+    /// Set by the Review Screen's Dismiss: listed apart until restored.
+    #[serde(default)]
+    dismissed: bool,
     created_at: String,
     /// Under construction by the chat (with [`BUILDING_TAG`] in n8n) until
     /// « Terminer ».
@@ -1105,6 +1119,7 @@ impl FlowStore {
                 answers: Value::Null,
                 reviewed_version_id: None,
                 activation_log: Vec::new(),
+                dismissed: false,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 building: false,
             })
@@ -1124,11 +1139,15 @@ impl FlowStore {
 // Flow derivation (n8n workflow + local record)
 // ---------------------------------------------------------------------------
 
-/// `active` if n8n runs it; otherwise `draft` until the first Activation,
-/// `needs_review` if n8n's version moved since then, else `paused`.
+/// `active` if n8n runs it; otherwise `dismissed` while the user has set it
+/// aside, `draft` until the first Activation, `needs_review` if n8n's version
+/// moved since then, else `paused`.
 fn derive_status(workflow: &Value, record: Option<&FlowRecord>) -> &'static str {
     if workflow["active"] == true {
         return "active";
+    }
+    if record.is_some_and(|r| r.dismissed) {
+        return "dismissed";
     }
     let version = workflow["versionId"].as_str().unwrap_or_default();
     match record.and_then(|r| r.reviewed_version_id.as_deref()) {
@@ -1445,7 +1464,7 @@ fn from_user(state: &FlowsState, headers: &HeaderMap) -> bool {
 
 /// Activation: publishes in n8n exactly the version the user reviewed, records
 /// it as the reviewed version and logs it. Only the Review Screen's
-/// "Activer" button calls this route; nothing in the engine calls it, and it
+/// "Turn on" button calls this route; nothing in the engine calls it, and it
 /// is refused without the UI credential ([`FlowActivationKey`]).
 async fn activate_flow(
     State(state): State<FlowsState>,
@@ -1498,6 +1517,8 @@ async fn activate_flow(
         .to_string();
     let record = store.record_mut(&id);
     record.reviewed_version_id = Some(published_version.clone());
+    // Turned on: no longer set aside.
+    record.dismissed = false;
     record.log("activated", published_version, "user");
     store.save(&state.screenpipe_dir)?;
 
@@ -1590,6 +1611,55 @@ async fn delete_flow(
         store.save(&state.screenpipe_dir)?;
     }
     Ok(Json(json!({"id": id, "deleted": true})))
+}
+
+/// Dismiss: the user sets a Flow that is not running aside. Nothing changes in
+/// n8n; the Flow is listed as Dismissed until restored. Refused while n8n runs
+/// it, so dismissing never hides a running automation.
+async fn dismiss_flow(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Flow>, FlowError> {
+    set_dismissed(state, id, headers, true).await
+}
+
+/// Restore: a dismissed Flow goes back to the status n8n and its review give it.
+async fn restore_flow(
+    State(state): State<FlowsState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Flow>, FlowError> {
+    set_dismissed(state, id, headers, false).await
+}
+
+async fn set_dismissed(
+    state: FlowsState,
+    id: String,
+    headers: HeaderMap,
+    dismissed: bool,
+) -> Result<Json<Flow>, FlowError> {
+    let by = if from_user(&state, &headers) {
+        "user"
+    } else {
+        "api"
+    };
+    let _guard = state.write_lock.lock().await;
+    let (api, mut store, workflow) = load_flow(&state, &id).await?;
+    if dismissed && workflow["active"] == true {
+        return Err(FlowError::FlowActive);
+    }
+    let record = store.record_mut(&id);
+    // Repeated clicks change and log it once.
+    if record.dismissed != dismissed {
+        record.dismissed = dismissed;
+        let version = workflow["versionId"].as_str().unwrap_or_default().to_string();
+        record.log(if dismissed { "dismissed" } else { "restored" }, version, by);
+        store.save(&state.screenpipe_dir)?;
+    }
+    Ok(Json(
+        build_flow(&state, &api, &workflow, store.flows.get(&id)).await,
+    ))
 }
 
 /// Chat modification (SPEC D7): an active Flow is switched off first, then the
@@ -1861,6 +1931,7 @@ async fn start_draft(
             answers: Value::Null,
             reviewed_version_id: None,
             activation_log: Vec::new(),
+            dismissed: false,
             created_at: chrono::Utc::now().to_rfc3339(),
             building: true,
         },
@@ -1907,7 +1978,7 @@ async fn update_draft(
     Ok(Json(draft_view(&api, &workflow, store.flows.get(&id), &credentials)))
 }
 
-/// `POST /drafts/:id/finish` (« Terminer »): the full check; refused while
+/// `POST /drafts/:id/finish` (« Finish »): the full check; refused while
 /// anything is missing, listing every problem. Accepted, the building mark
 /// is removed and the Flow is a Draft: listed, switched off, to review.
 async fn finish_draft(
@@ -1993,6 +2064,7 @@ async fn create_flow(
             answers: Value::Null,
             reviewed_version_id: None,
             activation_log: Vec::new(),
+            dismissed: false,
             created_at: chrono::Utc::now().to_rfc3339(),
             building: false,
         },
@@ -2101,6 +2173,7 @@ async fn create_from_task(
             answers: request.answers,
             reviewed_version_id: None,
             activation_log: Vec::new(),
+            dismissed: false,
             created_at: chrono::Utc::now().to_rfc3339(),
             building: false,
         },
@@ -2122,6 +2195,7 @@ mod tests {
             answers: Value::Null,
             reviewed_version_id: reviewed.map(str::to_string),
             activation_log: Vec::new(),
+            dismissed: false,
             created_at: String::new(),
             building: false,
         }
@@ -2139,6 +2213,13 @@ mod tests {
             "needs_review"
         );
         assert_eq!(derive_status(&on, Some(&record(Some("v1")))), "active");
+        let dismissed = FlowRecord {
+            dismissed: true,
+            ..record(Some("v2"))
+        };
+        assert_eq!(derive_status(&off, Some(&dismissed)), "dismissed");
+        // n8n switched it on elsewhere: what runs is shown, not the flag.
+        assert_eq!(derive_status(&on, Some(&dismissed)), "active");
     }
 
     #[test]

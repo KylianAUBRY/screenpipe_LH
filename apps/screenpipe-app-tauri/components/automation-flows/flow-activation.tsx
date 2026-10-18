@@ -4,108 +4,110 @@
 
 "use client";
 
-// Activate / Deactivate on the Review Screen. Activation is the only way a
-// Flow's n8n workflow gets switched on, and it happens here, on a click.
+// Turn on / Pause / Dismiss / Restore on the Review Screen. Activation is the
+// only way a Flow's n8n workflow gets switched on, and it happens here, on a
+// click. The buttons sit in the sticky header; what went wrong under it. The
+// review itself (questions, choices) happens on the Task Page, so this page
+// asks for no re-reading before a switch.
 
 import React, { useState } from "react";
-import { Button } from "@/components/ui/button";
 import { FlowsApiError, type Flow, type FlowsApi } from "./api";
 
 // The engine waits for the email n8n is processing, then gives up unchanged.
 const FLOW_RUNNING_MESSAGE =
-  "n8n traite encore un e-mail avec ce Flow : rien n'a changé. Réessayez dans un instant.";
+  "n8n is still processing an email with this Flow: nothing changed. Try again in a moment.";
 
-type Problem =
-  | { kind: "changed" }
-  | { kind: "failed"; action: "activate" | "deactivate"; error: FlowsApiError };
+type Action = "activate" | "deactivate" | "dismiss" | "restore";
 
-export function FlowActivation({
+const FAILURE_TITLE: Record<Action, string> = {
+  activate: "Could not turn it on",
+  deactivate: "Could not pause it",
+  dismiss: "Could not dismiss it",
+  restore: "Could not restore it",
+};
+
+type Problem = { action: Action; error: FlowsApiError };
+
+export type FlowActivationState = ReturnType<typeof useFlowActivation>;
+
+function asFlowsError(caught: unknown): FlowsApiError {
+  return caught instanceof FlowsApiError ? caught : new FlowsApiError("unknown", String(caught));
+}
+
+export function useFlowActivation({
   flow,
   readVersionId,
   api,
   onChange,
+  onDismissed,
 }: {
   flow: Flow;
-  /**
-   * The version the user loaded. "Activer" always names it: when a background
-   * read showed a newer one, the engine refuses it (409) and the user reloads.
-   */
+  /** The version the user loaded; the engine turns on exactly the version it is given. */
   readVersionId: string;
   api: FlowsApi;
   onChange: (flow: Flow, options?: { read?: boolean }) => void;
+  /** After Dismiss: the Flow now waits in the list's Dismissed group. */
+  onDismissed: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<Problem | null>(null);
 
-  async function run(action: "activate" | "deactivate") {
+  /**
+   * Turns on the version on screen. When n8n holds a newer one (changed in
+   * n8n or by the chat since the page loaded), it is shown and turned on in
+   * the same click: no re-reading is asked here.
+   */
+  async function activate(): Promise<Flow> {
+    try {
+      return await api.activate(flow.id, readVersionId);
+    } catch (caught) {
+      if (asFlowsError(caught).code !== "version_changed") throw caught;
+      const latest = await api.get(flow.id);
+      onChange(latest, { read: true });
+      return api.activate(flow.id, latest.versionId);
+    }
+  }
+
+  async function run(action: Action) {
     setBusy(true);
     setProblem(null);
     try {
-      onChange(
+      const next =
         action === "activate"
-          ? await api.activate(flow.id, readVersionId)
-          : await api.deactivate(flow.id),
-      );
+          ? await activate()
+          : action === "deactivate"
+            ? await api.deactivate(flow.id)
+            : action === "dismiss"
+              ? await api.dismiss(flow.id)
+              : await api.restore(flow.id);
+      onChange(next, { read: true });
+      if (action === "dismiss") onDismissed();
     } catch (caught) {
-      const error =
-        caught instanceof FlowsApiError ? caught : new FlowsApiError("unknown", String(caught));
-      if (error.code === "version_changed") {
-        // Show what n8n holds now, as the user's own reload: the banner asks
-        // them to read it, and their next click activates it.
-        setProblem({ kind: "changed" });
-        try {
-          onChange(await api.get(flow.id), { read: true });
-        } catch {
-          // The banner already asks to re-read; the old content stays visible.
-        }
-      } else {
-        setProblem({ kind: "failed", action, error });
-      }
+      setProblem({ action, error: asFlowsError(caught) });
     } finally {
       setBusy(false);
     }
   }
 
   const active = flow.status === "active";
-  // An active Flow edited in n8n still runs its old version: the user can
-  // activate the version shown here once they have read it.
-  const canActivate = !active || flow.reviewOutdated;
-  const changedSinceRead = canActivate && flow.versionId !== readVersionId;
+  const dismissed = flow.status === "dismissed";
+  const canActivate = !active && !dismissed;
+  return { busy, problem, run, active, dismissed, canActivate };
+}
+
+/** What went wrong with the last click. */
+export function FlowActivationNotices({ activation }: { activation: FlowActivationState }) {
+  const { problem } = activation;
+  if (!problem) return null;
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        {canActivate && (
-          <Button size="sm" disabled={busy} onClick={() => void run("activate")}>
-            {active ? "Activer cette version" : "Activer"}
-          </Button>
-        )}
-        {active && (
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => void run("deactivate")}>
-            Désactiver
-          </Button>
-        )}
-      </div>
-      {(problem?.kind === "changed" || changedSinceRead) && (
-        <p role="status" className="border border-border bg-accent p-3 text-sm">
-          Ce Flow a changé depuis que vous l&apos;avez ouvert : relisez cette
-          version avant de l&apos;activer.
-        </p>
-      )}
-      {problem?.kind === "failed" && (
-        <div role="alert" className="space-y-1 border border-border p-3">
-          <p className="text-sm font-medium">
-            {problem.action === "activate" ? "Activation impossible" : "Désactivation impossible"}
-          </p>
-          {problem.error.code === "flow_running" ? (
-            <p className="text-sm text-muted-foreground">{FLOW_RUNNING_MESSAGE}</p>
-          ) : (
-            problem.error.detail && (
-              <p className="break-all font-mono text-xs text-muted-foreground">
-                {problem.error.detail}
-              </p>
-            )
-          )}
-        </div>
+    <div role="alert" className="space-y-1 border border-border p-3">
+      <p className="text-sm font-medium">{FAILURE_TITLE[problem.action]}</p>
+      {problem.error.code === "flow_running" ? (
+        <p className="text-sm text-muted-foreground">{FLOW_RUNNING_MESSAGE}</p>
+      ) : (
+        problem.error.detail && (
+          <p className="break-all font-mono text-xs text-muted-foreground">{problem.error.detail}</p>
+        )
       )}
     </div>
   );

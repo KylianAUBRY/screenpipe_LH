@@ -342,6 +342,12 @@
 .backButton { display: inline-flex; align-items: center; gap: 6px; padding: 7px; border: 0; background: transparent; color: var(--ink-soft); font-size: 10px; font-weight: 650; cursor: pointer; }
 .backButton:hover { color: var(--ink); }
 .backButton { margin-bottom: 22px; padding-left: 0; }
+/* Task Page header: pinned under the topbar while the page scrolls. */
+.taskHeader { position: sticky; top: 59px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -12px 0 22px; padding: 10px 0; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 94%, transparent); backdrop-filter: blur(14px); }
+.taskHeaderTitle { min-width: 0; display: flex; align-items: center; gap: 12px; }
+.taskHeaderTitle strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--ink); }
+.taskHeader .backButton { flex: 0 0 auto; margin-bottom: 0; }
+.taskHeader .skillButton { flex: 0 0 auto; margin-top: 0; }
 .bigTimeBar { height: 8px; display: flex; overflow: hidden; border-radius: 999px; background: var(--soft); }
 .bigTimeBar i { height: 100%; background: var(--ink); }
 .bigTimeBar b { height: 100%; background: var(--chart-secondary); }

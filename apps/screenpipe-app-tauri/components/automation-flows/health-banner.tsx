@@ -13,7 +13,7 @@ import React from "react";
 import type { FlowsApi } from "./api";
 import { useFlowsLoad } from "./common";
 
-export const N8N_DOWN_BANNER = "n8n injoignable, tes Flows ne tournent pas";
+export const N8N_DOWN_BANNER = "n8n is unreachable: your Flows are not running";
 
 export function FlowsHealthBanner({ api }: { api: FlowsApi }) {
   // Any failure to read it (engine down, an older engine) shows nothing.

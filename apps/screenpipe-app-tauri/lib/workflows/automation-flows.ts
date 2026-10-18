@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-// Desktop side of the Task Page's "Créer l'automatisation": the Flow service
+// Desktop side of the Task Page's "Create automation": the Flow service
 // creates the Flow from the Detected Task (idempotent per task), then the
 // app opens its Review Screen in Automations → Flows. Also opens that Review
 // Screen from the chat's `screenpipe://flows/<id>` link.
@@ -12,16 +12,17 @@ import { commands } from "@/lib/utils/tauri";
 import { flowsApi, FlowsApiError, type FlowsErrorCode } from "@/components/automation-flows/api";
 
 // Shown on the Task Page, under the action; the answers stay on screen.
-const CREATION_FAILED = "Impossible de créer l'automatisation. Vos réponses sont conservées. Réessayez.";
+const CREATION_FAILED = "Could not create the automation. Your answers are kept. Try again.";
 const CREATION_ERROR: Record<FlowsErrorCode, string> = {
-  n8n_not_configured: "n8n n'est pas configuré. Renseignez l'URL de l'API n8n et une clé API dans Connexions → n8n, puis réessayez.",
-  n8n_unauthorized: "n8n a refusé la clé API. Vérifiez la clé API dans Connexions → n8n, puis réessayez.",
-  n8n_unreachable: "Impossible de joindre n8n. Vérifiez qu'il tourne, puis réessayez.",
-  n8n_failed: "n8n a rencontré une erreur. Réessayez dans un instant.",
+  n8n_not_configured: "n8n is not set up. Enter the n8n API URL and an API key in Connections → n8n, then try again.",
+  n8n_unauthorized: "n8n refused the API key. Check the API key in Connections → n8n, then try again.",
+  n8n_unreachable: "Could not reach n8n. Check that it is running, then try again.",
+  n8n_failed: "n8n ran into an error. Try again in a moment.",
   // A copy of the Flow left on in n8n is still processing an email.
-  flow_running: "n8n traite encore un e-mail avec ce Flow. Réessayez dans un instant.",
-  not_found: "Cette tâche ne peut pas encore devenir une automatisation.",
-  // Activation and retry codes; creation never returns them.
+  flow_running: "n8n is still processing an email with this Flow. Try again in a moment.",
+  not_found: "This task cannot become an automation yet.",
+  // Activation, Dismiss and retry codes; creation never returns them.
+  flow_active: CREATION_FAILED,
   version_changed: CREATION_FAILED,
   activation_failed: CREATION_FAILED,
   activation_requires_user: CREATION_FAILED,
@@ -46,8 +47,48 @@ export const createAutomationFlow: NonNullable<WorkflowsPlatform["createAutomati
   } catch (error) {
     throw new Error(CREATION_ERROR[error instanceof FlowsApiError ? error.code : "unknown"], { cause: error });
   }
+  rememberFlow(taskId, flowId);
   await openFlowReview(flowId);
 };
+
+/** Which Flow was created from a Detected Task, kept on this device. */
+const flowOfTaskKey = (taskId: string) => `screenpipe:automation-flow-of-task:${taskId}`;
+
+function rememberFlow(taskId: string, flowId: string | null) {
+  try {
+    if (flowId) window.localStorage.setItem(flowOfTaskKey(taskId), flowId);
+    else window.localStorage.removeItem(flowOfTaskKey(taskId));
+  } catch {
+    // Storage off: the Task Page offers creation again, which reopens the same Flow.
+  }
+}
+
+/**
+ * The Flow created from this task, when it still exists (a demo reset deletes
+ * it): the Task Page then opens it instead of creating it.
+ */
+export const findAutomationFlow: NonNullable<WorkflowsPlatform["findAutomationFlow"]> = async taskId => {
+  let flowId: string | null = null;
+  try {
+    flowId = window.localStorage.getItem(flowOfTaskKey(taskId));
+  } catch {
+    return null;
+  }
+  if (!flowId) return null;
+  try {
+    await flowsApi.get(flowId);
+    return flowId;
+  } catch (error) {
+    if (error instanceof FlowsApiError && error.code === "not_found") {
+      rememberFlow(taskId, null);
+      return null;
+    }
+    // n8n unreachable or the like: the Flow is most likely still there.
+    return flowId;
+  }
+};
+
+export const openAutomationFlow: NonNullable<WorkflowsPlatform["openAutomationFlow"]> = flowId => openFlowReview(flowId);
 
 /**
  * The Review Screen link the `automation-flows` chat skill ends with

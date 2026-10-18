@@ -5,9 +5,10 @@
 "use client";
 
 // Read-only picture of a Flow's n8n workflow for the Review Screen: each node
-// with its one-sentence explanation. Editing happens in n8n ("Voir le graphe").
+// by its name and three lines of its one-sentence explanation (all of it on
+// hover). Editing happens in n8n ("Open in n8n").
 
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Controls,
   Handle,
@@ -18,28 +19,42 @@ import {
   type Node,
   type NodeHandle,
   type NodeProps,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import type { Flow, FlowNode } from "./api";
-import { shortNodeType } from "./labels";
 
-// Cards are narrow so the fitted picture stays readable; a sentence makes
-// them taller than n8n's ~100 px nodes, so rows are spread further apart.
-const NODE_WIDTH = 160;
-const NODE_GAP = 32;
-const N8N_NODE_SIZE = 100;
-const SPREAD_Y = 1.3;
-// First-render estimate only: the browser measures the real card height.
-const NODE_HEIGHT = 200;
+// Cards hold the name and three lines of the sentence. Narrow cards and short
+// links keep the whole workflow inside the frame at a readable zoom.
+const NODE_WIDTH = 190;
+const NODE_GAP = 44;
+const COLUMN = NODE_WIDTH + NODE_GAP;
+// Arrow heads sized to the short links (React Flow's default is 12.5).
+const ARROW_SIZE = 8;
+// Every card has this height: React Flow then knows the picture's real size
+// before measuring, and fits it centred in the frame.
+const NODE_HEIGHT = 136;
+// One row of cards plus room for the links between rows.
+const ROW_HEIGHT = 216;
+const FIT_VIEW = { padding: 0.08, maxZoom: 1 };
+// n8n positions this close are the same row / the same column.
+const SAME_ROW = 100;
+const SAME_COLUMN = 60;
+// Links leave and enter at the middle of the card's side; every card has the
+// same height, so a row's links stay horizontal.
+const HANDLE_Y = NODE_HEIGHT / 2;
+const NO_SENTENCE = "No explanation for this step.";
 
 type StepNode = Node<{ node: FlowNode }, "step">;
 
 // Main connections run left to right; an AI agent's model and tools sit
-// below it in n8n and plug in from underneath.
+// below it and plug in from underneath. A branch to a row above leaves from
+// the top; a link back to an earlier step leaves from the bottom.
 const HANDLES: NodeHandle[] = [
-  { id: "in", type: "target", position: Position.Left, x: 0, y: NODE_HEIGHT / 2 },
-  { id: "out", type: "source", position: Position.Right, x: NODE_WIDTH, y: NODE_HEIGHT / 2 },
+  { id: "in", type: "target", position: Position.Left, x: 0, y: HANDLE_Y },
+  { id: "out", type: "source", position: Position.Right, x: NODE_WIDTH, y: HANDLE_Y },
   { id: "up", type: "source", position: Position.Top, x: NODE_WIDTH / 2, y: 0 },
   { id: "under", type: "target", position: Position.Bottom, x: NODE_WIDTH / 2, y: NODE_HEIGHT },
+  { id: "down", type: "source", position: Position.Bottom, x: NODE_WIDTH / 2, y: NODE_HEIGHT },
 ];
 
 const EDGE_COLOR = "hsl(var(--muted-foreground))";
@@ -48,7 +63,12 @@ const HIDDEN_HANDLE = "!h-px !w-px !min-h-0 !min-w-0 !border-0 !bg-transparent";
 
 function StepCard({ data: { node } }: NodeProps<StepNode>) {
   return (
-    <div data-testid={`flow-node-${node.id}`} className="border border-border bg-background p-3">
+    <div
+      data-testid={`flow-node-${node.id}`}
+      title={node.sentence ?? NO_SENTENCE}
+      style={{ height: NODE_HEIGHT }}
+      className="overflow-hidden border border-border bg-background p-3"
+    >
       {HANDLES.map((handle) => (
         <Handle
           key={handle.id}
@@ -57,12 +77,15 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
           position={handle.position}
           isConnectable={false}
           className={HIDDEN_HANDLE}
+          style={handle.position === Position.Left || handle.position === Position.Right ? { top: HANDLE_Y } : undefined}
         />
       ))}
-      <p className="text-sm font-medium leading-tight">{node.name}</p>
-      <p className="mt-0.5 break-all font-mono text-[10px] text-muted-foreground">{shortNodeType(node.type)}</p>
-      <p className="mt-1.5 break-words text-xs leading-snug text-muted-foreground">
-        {node.sentence ?? "Pas d'explication pour cette étape."}
+      {/* The step's name, large enough to read in the fitted picture, then
+          three lines at most of what it does; the whole sentence is on hover.
+          The n8n node type and fixed facts stay in n8n ("Open in n8n"). */}
+      <p className="line-clamp-2 break-words text-lg font-medium leading-snug">{node.name}</p>
+      <p className="mt-1 line-clamp-3 break-words text-xs leading-snug text-muted-foreground">
+        {node.sentence ?? NO_SENTENCE}
       </p>
     </div>
   );
@@ -71,10 +94,10 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
 const NODE_TYPES = { step: StepCard };
 
 const ARIA_LABELS = {
-  "controls.ariaLabel": "Zoom du graphe",
-  "controls.zoomIn.ariaLabel": "Zoom avant",
-  "controls.zoomOut.ariaLabel": "Zoom arrière",
-  "controls.fitView.ariaLabel": "Voir tout le graphe",
+  "controls.ariaLabel": "Graph zoom",
+  "controls.zoomIn.ariaLabel": "Zoom in",
+  "controls.zoomOut.ariaLabel": "Zoom out",
+  "controls.fitView.ariaLabel": "Show the whole graph",
 };
 
 const CONTROLS_STYLE = {
@@ -86,30 +109,126 @@ const CONTROLS_STYLE = {
   "--xy-controls-button-border-color": "hsl(var(--border))",
 } as React.CSSProperties;
 
+/** Index of each value's group once sorted: values closer than `tolerance` share one. */
+function groups(values: number[], tolerance: number): (value: number) => number {
+  const starts: number[] = [];
+  for (const value of [...values].sort((a, b) => a - b)) {
+    if (starts.length === 0 || value - starts[starts.length - 1] >= tolerance) starts.push(value);
+  }
+  return (value) => {
+    let index = 0;
+    while (index + 1 < starts.length && value >= starts[index + 1]) index += 1;
+    return index;
+  };
+}
+
 /**
- * Horizontal scale for n8n positions: the two closest nodes of a row end up
- * one card plus a gap apart, so no card covers its neighbour.
+ * The context nodes (an AI step's model, parser or tool) and the step each
+ * plugs into. A context node links only up to nodes above it in n8n, and
+ * nothing but other context nodes links into it: a branch that n8n draws
+ * higher, or a step looped back to from below, stays a step.
  */
-function horizontalSpread(nodes: FlowNode[]): number {
-  let closest = Infinity;
-  for (const [i, a] of nodes.entries()) {
-    for (const b of nodes.slice(i + 1)) {
-      const dx = Math.abs(a.position[0] - b.position[0]);
-      const sameRow = Math.abs(a.position[1] - b.position[1]) < N8N_NODE_SIZE;
-      if (sameRow && dx > 0) closest = Math.min(closest, dx);
+function contextParents(nodes: FlowNode[], edges: Flow["edges"]): Map<string, string> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const links = edges.filter(({ from, to }) => byId.has(from) && byId.has(to));
+  const context = new Set(
+    nodes
+      .filter((node) => {
+        const out = links.filter((edge) => edge.from === node.id);
+        return out.length > 0 && out.every((edge) => byId.get(edge.to)!.position[1] < node.position[1]);
+      })
+      .map((node) => node.id),
+  );
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const { from, to } of links) {
+      if (context.has(to) && !context.has(from)) {
+        context.delete(to);
+        changed = true;
+      }
     }
   }
-  return Number.isFinite(closest) ? (NODE_WIDTH + NODE_GAP) / closest : 1;
+  const parentOf = new Map<string, string>();
+  for (const { from, to } of links) {
+    if (context.has(from) && !parentOf.has(from)) parentOf.set(from, to);
+  }
+  return parentOf;
+}
+
+/**
+ * Where each card goes. The steps keep n8n's order but sit one column apart,
+ * so every link along a row has the same length; n8n's rows (a branch above,
+ * an error path below) stay rows. A context node sits on the row below its
+ * step, centred under it, next to its siblings.
+ */
+function layout(
+  nodes: FlowNode[],
+  parentOf: Map<string, string>,
+): Map<string, { x: number; y: number }> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const steps = nodes.filter((node) => !parentOf.has(node.id));
+  const column = groups(steps.map((node) => node.position[0]), SAME_COLUMN);
+  const row = groups(steps.map((node) => node.position[1]), SAME_ROW);
+  // Leave a row free under each row of steps for their context nodes.
+  const rowStride = parentOf.size > 0 ? 2 * ROW_HEIGHT : ROW_HEIGHT;
+  const placed = new Map<string, { x: number; y: number }>();
+  for (const node of steps) {
+    placed.set(node.id, { x: column(node.position[0]) * COLUMN, y: row(node.position[1]) * rowStride });
+  }
+
+  const children = new Map<string, FlowNode[]>();
+  for (const [child, parent] of parentOf) {
+    children.set(parent, [...(children.get(parent) ?? []), byId.get(child)!]);
+  }
+  // Context nodes can hang off context nodes: place each level under the last.
+  for (let pass = 0; pass < nodes.length && placed.size < nodes.length; pass += 1) {
+    for (const [parent, kids] of children) {
+      const anchor = placed.get(parent);
+      if (!anchor || kids.every((kid) => placed.has(kid.id))) continue;
+      const sorted = [...kids].sort((a, b) => a.position[0] - b.position[0]);
+      for (const [index, kid] of sorted.entries()) {
+        placed.set(kid.id, {
+          x: anchor.x + (index - (sorted.length - 1) / 2) * COLUMN,
+          y: anchor.y + ROW_HEIGHT,
+        });
+      }
+    }
+  }
+  // A context node whose step is missing keeps its n8n place.
+  for (const node of nodes) {
+    if (!placed.has(node.id)) placed.set(node.id, { x: node.position[0], y: node.position[1] });
+  }
+  return placed;
+}
+
+/**
+ * How a link is drawn: straight along a row; a context node plugs in from
+ * underneath with a dashed curve; a branch to a row above leaves from the
+ * top, one to a row below curves down; a link back to an earlier step on the
+ * same row loops under both cards.
+ */
+function route(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  context: boolean,
+): Pick<Edge, "type" | "sourceHandle" | "targetHandle"> {
+  if (context) return { type: "default", sourceHandle: "up", targetHandle: "under" };
+  if (to.y < from.y) return { type: "default", sourceHandle: "up", targetHandle: "under" };
+  if (to.y > from.y) return { type: "default", sourceHandle: "out", targetHandle: "in" };
+  if (to.x > from.x) return { type: "straight", sourceHandle: "out", targetHandle: "in" };
+  return { type: "default", sourceHandle: "down", targetHandle: "under" };
 }
 
 function toGraph(nodes: FlowNode[], edges: Flow["edges"]) {
   const byId = new Map(nodes.map((node) => [node.id, node]));
-  const spreadX = horizontalSpread(nodes);
+  const parentOf = contextParents(nodes, edges);
+  const positions = layout(nodes, parentOf);
   const stepNodes: StepNode[] = nodes.map((node) => ({
     id: node.id,
     type: "step",
-    position: { x: node.position[0] * spreadX, y: node.position[1] * SPREAD_Y },
+    position: positions.get(node.id)!,
     width: NODE_WIDTH,
+    height: NODE_HEIGHT,
     handles: HANDLES,
     data: { node },
   }));
@@ -117,17 +236,16 @@ function toGraph(nodes: FlowNode[], edges: Flow["edges"]) {
     const source = byId.get(from);
     const target = byId.get(to);
     if (!source || !target) return [];
-    const fromBelow = source.position[1] > target.position[1];
+    const context = parentOf.has(from);
     return [
       {
         id: `${index}:${from}->${to}`,
+        ...route(positions.get(from)!, positions.get(to)!, context),
         source: from,
         target: to,
-        sourceHandle: fromBelow ? "up" : "out",
-        targetHandle: fromBelow ? "under" : "in",
         ariaLabel: `${source.name} → ${target.name}`,
-        markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR },
-        style: { stroke: EDGE_COLOR, strokeDasharray: fromBelow ? "4 4" : undefined },
+        markerEnd: { type: MarkerType.ArrowClosed, color: EDGE_COLOR, width: ARROW_SIZE, height: ARROW_SIZE },
+        style: { stroke: EDGE_COLOR, strokeDasharray: context ? "4 4" : undefined },
       },
     ];
   });
@@ -136,16 +254,28 @@ function toGraph(nodes: FlowNode[], edges: Flow["edges"]) {
 
 export function FlowGraph({ nodes, edges }: { nodes: FlowNode[]; edges: Flow["edges"] }) {
   const { stepNodes, links } = useMemo(() => toGraph(nodes, edges), [nodes, edges]);
+  const frame = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState<ReactFlowInstance<StepNode> | null>(null);
+
+  // Keep the picture centred when the frame changes size (window resize,
+  // scrollbar, sidebar): React Flow fits it only once on its own.
+  useEffect(() => {
+    if (!view || !frame.current || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => void view.fitView(FIT_VIEW));
+    observer.observe(frame.current);
+    return () => observer.disconnect();
+  }, [view]);
 
   return (
-    <div className="h-[420px] border border-border">
+    <div ref={frame} className="h-[420px] border border-border">
       <ReactFlow
-        aria-label="Graphe du Flow"
+        aria-label="Flow graph"
         nodes={stepNodes}
         edges={links}
         nodeTypes={NODE_TYPES}
+        onInit={setView}
         fitView
-        fitViewOptions={{ padding: 0.04, maxZoom: 1 }}
+        fitViewOptions={FIT_VIEW}
         minZoom={0.2}
         // Wheel scrolls the page; drag pans, pinch and double click zoom.
         zoomOnScroll={false}

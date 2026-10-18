@@ -232,7 +232,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect([...reachable]).toEqual([abstention().name]);
   });
 
-  test("an unsure AI sends the ScreenPipe notification « À trier à la main » with the sender, the subject and its reason", () => {
+  test("an unsure AI sends the ScreenPipe notification « Sort by hand » with the sender, the subject and its reason", () => {
     const reason = "Je ne sais pas si c'est un bug ou une demande de formation.";
     const request = abstentionRequest(aiAnswer({ confidence: "low", reason }));
     // ScreenPipe's notify server on the host, seen from the n8n container.
@@ -243,12 +243,12 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(request.headers).toEqual({ Host: "localhost:11435" });
 
     const { body } = request;
-    expect(body.title).toBe("À trier à la main");
+    expect(body.title).toBe("Sort by hand");
     const shown = unescapeMarkdown(body.body);
     expect(shown).toContain(EMAIL.from);
     expect(shown).toContain(EMAIL.subject);
     expect(shown).toContain(reason);
-    expect(shown).toMatch(/aucun ticket/i);
+    expect(shown).toMatch(/no ticket/i);
     // Kept in the bell until read, and one per run: the server drops a repeated id.
     expect(body.transient).toBe(false);
     expect(body.id).toBe("automation-flow:spNovaFlow000001:abstained:4242");
@@ -259,7 +259,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(abstention().onError).toBeUndefined();
   });
 
-  test("an email cannot put a link or markup in the « À trier à la main » notification", () => {
+  test("an email cannot put a link or markup in the « Sort by hand » notification", () => {
     const hostile = {
       ...EMAIL,
       from: "Support <phish@evil.example>",
@@ -276,7 +276,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     // One line per field: an email cannot start a new Markdown block.
     const subjectLines = text.split("\n").filter((line) => line.includes("Titre"));
     expect(subjectLines).toHaveLength(1);
-    expect(subjectLines[0].startsWith("Objet : Facture")).toBe(true);
+    expect(subjectLines[0].startsWith("Subject: Facture")).toBe(true);
     // Still readable once rendered.
     const shown = unescapeMarkdown(text);
     expect(shown).toContain("Facture [à payer](https://evil.example/pay)");
@@ -291,7 +291,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     }).body;
     expect(huge.body.length).toBeLessThanOrEqual(1_500);
     const empty = abstentionRequest(aiAnswer({ confidence: "low" }), { ...EMAIL, from: "", subject: "" }).body;
-    expect(unescapeMarkdown(empty.body)).toContain("(sans objet)");
+    expect(unescapeMarkdown(empty.body)).toContain("(no subject)");
   });
 
   test("stops without a ticket when the AI answers none", () => {
@@ -487,11 +487,13 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(String(evaluate(stop.parameters.errorMessage, { $json: {} })).length).toBeGreaterThan(10);
   });
 
-  test("an improvement idea becomes a Tâche with the AI's priority and label", () => {
+  test("an improvement idea becomes a Jira Task with the AI's priority and label", () => {
     const issue = jiraRequestFor(
       aiAnswer({ type: "Tâche", summary: "Filtre Dernière relance", priority: "Low", label: "front" }),
     );
-    expect(issue.fields.issuetype).toEqual({ name: "Tâche" });
+    // The AI answers in the demo's French vocabulary; the NOVA project's
+    // issue types are English (Bug, Task). Jira rejects "Tâche".
+    expect(issue.fields.issuetype).toEqual({ name: "Task" });
     expect(issue.fields.summary).toBe("NovaCRM - Filtre Dernière relance");
     expect(issue.fields.priority).toEqual({ name: "Low" });
     expect(issue.fields.labels).toEqual(["front", expect.stringMatching(/^mail-[0-9a-f]{8}$/)]);
@@ -550,7 +552,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(review.workflowId).toBe(workflow.id);
     expect(review.sourceTaskId).toBe("wf-novadesk-support-tickets");
     expect(typeof review.summary).toBe("string");
-    for (const word of ["email", "IA", "Jira", "NOVA", "Screenpipe", "confiance", "« À trier à la main »", "doublon"]) {
+    for (const word of ["email", "AI", "Jira", "NOVA", "screenpipe", "not sure", "\"Sort by hand\"", "duplicate"]) {
       expect(review.summary).toContain(word);
     }
     expect(review.summary.length).toBeLessThan(1200);
@@ -663,7 +665,7 @@ function quotedEmail(description: any): string {
 
 const PRODUCTS = ["NovaCRM", "NovaPay", "NovaPlanning", "NovaDesk", "Autre"];
 const SUMMARY_MAX = 80;
-/** The AI's one-sentence reason, shown in the « À trier à la main » notification. */
+/** The AI's one-sentence reason, shown in the « Sort by hand » notification. */
 const REASON_MAX = 200;
 /** Jira Cloud refuses a description over 32 767 characters; the quoted email stays well below. */
 const DESCRIPTION_MAX = 20_000;

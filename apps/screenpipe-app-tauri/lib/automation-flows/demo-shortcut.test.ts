@@ -43,7 +43,7 @@ describe("demo shortcut ⌃⌥⌘D", () => {
     const task = saved()!.analysis.workflows.find(w => w.id === DEMO_TASK_ID)!;
     expect(task.userCorrection).toBeNull();
     expect(d.installer.notify).toHaveBeenCalledTimes(1);
-    expect((d.installer.notify as ReturnType<typeof vi.fn>).mock.calls[0][0].title).toBe("Tâche répétitive détectée");
+    expect((d.installer.notify as ReturnType<typeof vi.fn>).mock.calls[0][0].title).toBe("Repetitive task detected");
     expect(d.tell).not.toHaveBeenCalled();
     expect(d.openTask).not.toHaveBeenCalled();
   });
@@ -54,8 +54,8 @@ describe("demo shortcut ⌃⌥⌘D", () => {
 
     expect(d.openTask).toHaveBeenCalledTimes(1);
     expect(d.tell).toHaveBeenCalledWith({
-      title: "Notification non affichée",
-      description: "duplicate notification suppressed. La tâche s'ouvre directement.",
+      title: "Notification not shown",
+      description: "duplicate notification suppressed. The task opens directly.",
     });
   });
 
@@ -75,7 +75,7 @@ describe("demo shortcut ⌃⌥⌘D", () => {
     expect(d.installer.notify).not.toHaveBeenCalled();
     expect(d.openTask).not.toHaveBeenCalled();
     expect(d.tell).toHaveBeenCalledWith({
-      title: "Démo non lancée",
+      title: "Demo not started",
       description: "The saved workflow catalog is unreadable.",
       destructive: true,
     });

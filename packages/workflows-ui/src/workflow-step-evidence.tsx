@@ -3,7 +3,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Maximize2, Minimize2, Play, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2, Play, X } from "lucide-react";
 import type { WorkflowMap, WorkflowStage, WorkflowScreenshot } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 import { WorkflowReplay } from "./workflow-replay";
@@ -17,11 +17,12 @@ const when = (value: string) => Number.isFinite(Date.parse(value))
 export function WorkflowStepEvidence({ workflow, stage, platform, timelineLabel }: {
   workflow: WorkflowMap; stage: WorkflowStage; platform: WorkflowsPlatform;
   /** Visible text of the button that opens a capture in the Timeline (the
-   * Automation Flow Task Page says « Voir dans la timeline »); icon only when absent. */
+   * Automation Flow Task Page says "View in timeline"); icon only when absent. */
   timelineLabel?: string;
 }) {
   const label = platform.openCapturedMoment ? timelineLabel : undefined;
-  const [reduced, setReduced] = useState<Set<number>>(() => new Set());
+  const [enlarged, setEnlarged] = useState<Set<number>>(() => new Set());
+  const [index, setIndex] = useState(0);
   const [previewHeight, setPreviewHeight] = useState(0);
   const [selected, setSelected] = useState<WorkflowScreenshot | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -37,6 +38,12 @@ export function WorkflowStepEvidence({ workflow, stage, platform, timelineLabel 
   const preview = useSourceScreenshot(stage, attached.length > 0, platform.loadWorkflowScreenshot);
   const screenshots = attached.length ? attached : preview.image ? [preview.image] : [];
   const screenshot = screenshots[0];
+  // One capture at a time; the position survives catalog refreshes that shorten the list.
+  const count = screenshots.length;
+  const position = Math.min(index, Math.max(count - 1, 0));
+  const current = screenshots[position];
+  const suffix = count > 1 ? ` ${position + 1}` : "";
+  const move = (delta: number) => setIndex((position + delta + count) % count);
   const canReplay = platform.loadWorkflowRecording && stage.evidence.some(e => !["audio", "meeting"].includes(e.source ?? "") && Number.isFinite(Date.parse(e.timestamp)));
   const openRecording = async (capture = screenshot) => {
     if (!platform.openCapturedMoment) { setSelected(capture ?? null); setPlaying(true); return; }
@@ -63,14 +70,22 @@ export function WorkflowStepEvidence({ workflow, stage, platform, timelineLabel 
       {preview.status === "loading" ? "Loading source screenshot…" : preview.status === "error" ? "Could not load the source screenshot." : "No screenshot available for this step."}
       {preview.canRetry && preview.status !== "loading" && <button type="button" onClick={preview.retry}>Retry screenshot</button>}
     </div>}
-    {!playing && screenshots.map((capture, index) => {
-      const expanded = !reduced.has(capture.frameId);
-      const suffix = screenshots.length > 1 ? ` ${index + 1}` : "";
-      return <EvidenceFigure key={`${capture.frameId}:${capture.timestamp}`} capture={capture} stage={stage} platform={platform} suffix={suffix} expanded={expanded} opening={opening} label={label}
-        toggle={() => setReduced(previous => { const next = new Set(previous); if (expanded) next.add(capture.frameId); else next.delete(capture.frameId); return next; })}
-        replay={!isEmbeddedScreenshot(capture) && (canReplay || !!platform.openCapturedMoment) ? () => void openRecording(capture) : undefined}
-        resolved={capture === preview.image} />;
-    })}
+    {!playing && current && <div className={`${styles.carousel} ${count > 1 ? styles.paged : ""} ${enlarged.has(current.frameId) ? styles.carouselExpanded : ""}`} role="group" aria-roledescription="carousel" aria-label={`Captures for ${stage.name}`}
+      tabIndex={count > 1 ? 0 : undefined} onKeyDown={count > 1 ? event => {
+        if (event.altKey || event.ctrlKey || event.metaKey || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
+        event.preventDefault(); move(event.key === "ArrowLeft" ? -1 : 1);
+      } : undefined}>
+      <EvidenceFigure key={`${current.frameId}:${current.timestamp}`} capture={current} stage={stage} platform={platform} suffix={suffix} expanded={enlarged.has(current.frameId)} opening={opening} label={label}
+        toggle={() => setEnlarged(previous => { const next = new Set(previous); if (!next.delete(current.frameId)) next.add(current.frameId); return next; })}
+        replay={!isEmbeddedScreenshot(current) && (canReplay || !!platform.openCapturedMoment) ? () => void openRecording(current) : undefined}
+        resolved={current === preview.image} />
+      {/* Outside the keyed figure, so focus stays on the control that was used. */}
+      {count > 1 && <div className={styles.carouselNav}>
+        <button type="button" aria-label={`Previous capture for ${stage.name}`} title="Previous capture" onClick={() => move(-1)}><ChevronLeft size={15} aria-hidden="true" /></button>
+        <span aria-live="polite">{position + 1} / {count}</span>
+        <button type="button" aria-label={`Next capture for ${stage.name}`} title="Next capture" onClick={() => move(1)}><ChevronRight size={15} aria-hidden="true" /></button>
+      </div>}
+    </div>}
     {playing && <div ref={playerRef} className={styles.player}>
       <button type="button" className={styles.close} aria-label={`Close recording for ${stage.name}`} title="Close recording" onClick={() => setPlaying(false)}><X size={15} /></button>
       <WorkflowReplay workflow={replay} loadRecording={platform.loadWorkflowRecording} releaseRecording={platform.releaseWorkflowRecording} openCapturedMoment={platform.openCapturedMoment} />
@@ -102,13 +117,13 @@ function EvidenceFigure({ capture, stage, platform, suffix, expanded, opening, l
   // legacy positive-ID copies. Only scripted negative-ID images use their own pixels.
   const url = load ? preview.image?.dataUrl : capture.dataUrl;
   const [failed, setFailed] = useState(false);
-  const [ratio, setRatio] = useState("16 / 10");
   useEffect(() => setFailed(false), [url]);
+  // A fixed frame keeps the page short and steady while captures load or change.
   return <figure ref={preview.ref} className={`${styles.figure} ${expanded ? styles.expanded : ""}`}>
     {url && !failed ? <button className={styles.imageButton} type="button" aria-label={`${expanded ? "Reduce" : "Enlarge"} screenshot${suffix} for ${stage.name}`} aria-expanded={expanded} onClick={toggle}>
-      <img src={url} alt={`Captured reference${suffix} for ${stage.name}`} loading="lazy" decoding="async" draggable={false} data-lm-disable="true" onLoad={event => { const image = event.currentTarget; if (image.naturalWidth && image.naturalHeight) setRatio(`${image.naturalWidth} / ${image.naturalHeight}`); }} onError={() => setFailed(true)} />
+      <img src={url} alt={`Captured reference${suffix} for ${stage.name}`} loading="lazy" decoding="async" draggable={false} data-lm-disable="true" onError={() => setFailed(true)} />
       <span className={styles.zoom}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</span>
-    </button> : <div className={styles.previewStatus} role="status" style={preview.status === "loading" && !failed ? { aspectRatio: ratio } : undefined}>
+    </button> : <div className={`${styles.previewStatus} ${styles.frameStatus}`} role="status">
       {failed || preview.status === "error" ? "Could not load the source screenshot." : preview.status === "loading" ? "Loading source screenshot…" : "This screenshot is no longer available."}
       {(failed || preview.status === "error") && load && <button onClick={() => { setFailed(false); preview.retry(); }}>Retry screenshot</button>}
     </div>}

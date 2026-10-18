@@ -16,8 +16,8 @@ type Load<T> =
   | { state: "loading" }
   /**
    * `data` is what is on screen; `read` is the data as the user last loaded
-   * it on purpose (opening the screen, "Réessayer", or a `replace` marked
-   * `read`). A background read updates `data` only, so "Activer" can keep
+   * it on purpose (opening the screen, "Try again", or a `replace` marked
+   * `read`). A background read updates `data` only, so "Turn on" can keep
    * naming the version the user actually loaded.
    */
   | { state: "ready"; data: T; read: T }
@@ -44,7 +44,7 @@ export function useFlowsLoad<T>(load: () => Promise<T>, key: string) {
   const loadRef = useRef(load);
   loadRef.current = load;
   // Bumped by every read and by `replace`: an answer older than what is on
-  // screen is dropped (e.g. a read sent before a click on "Activer").
+  // screen is dropped (e.g. a read sent before a click on "Turn on").
   const latest = useRef(0);
   // The read in flight; background reads wait for it instead of piling up.
   const pending = useRef<number | null>(null);
@@ -131,10 +131,13 @@ export function StatusBadge({
   status,
   running = false,
   failed = false,
+  squareOnly = false,
 }: {
   status: FlowStatus;
   running?: boolean;
   failed?: boolean;
+  /** In the grouped list the group already says it: the label stays for screen readers only. */
+  squareOnly?: boolean;
 }) {
   return (
     <span className="inline-flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground">
@@ -149,10 +152,14 @@ export function StatusBadge({
               ? "border-red-600 bg-red-600 dark:border-red-400 dark:bg-red-400"
               : status === "active"
               ? "border-foreground bg-foreground"
-              : "border-muted-foreground/60",
+              : status === "dismissed"
+                ? "border-dashed border-muted-foreground/40"
+                : "border-muted-foreground/60",
         )}
       />
-      <span data-testid="flow-status">{STATUS_LABEL[status]}</span>
+      <span data-testid="flow-status" className={squareOnly ? "sr-only" : undefined}>
+        {STATUS_LABEL[status]}
+      </span>
     </span>
   );
 }
@@ -163,7 +170,7 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Opens the Screenpipe chat ("Ajouter", "Demander une modification"). The
+ * Opens the Screenpipe chat ("New Flow", "Change it"). The
  * work happens there; the button only says when the chat could not open.
  */
 export function ChatButton(props: {
@@ -171,7 +178,7 @@ export function ChatButton(props: {
   icon: React.ReactNode;
   children: React.ReactNode;
 }) {
-  return <OpenButton {...props} failure="Impossible d'ouvrir le chat. Réessayez." />;
+  return <OpenButton {...props} failure="Could not open the chat. Try again." />;
 }
 
 /**
@@ -236,13 +243,13 @@ export function FlowsErrorMessage({
   if (error.code === "n8n_not_configured") {
     return (
       <div role="alert" className="space-y-3 border border-border p-4">
-        <p className="text-sm font-medium">n8n n&apos;est pas configuré</p>
+        <p className="text-sm font-medium">n8n is not set up</p>
         <p className="text-sm text-muted-foreground">
-          Renseignez l&apos;URL de l&apos;API n8n et une clé API dans Connexions → n8n,
-          puis revenez ici.
+          Enter the n8n API URL and an API key in Connections → n8n, then come
+          back here.
         </p>
         <Button size="sm" variant="outline" onClick={() => void api.openN8nConnection()}>
-          Ouvrir Connexions
+          Open Connections
         </Button>
       </div>
     );
@@ -250,18 +257,18 @@ export function FlowsErrorMessage({
   if (error.code === "n8n_unauthorized") {
     return (
       <div role="alert" className="space-y-3 border border-border p-4">
-        <p className="text-sm font-medium">n8n a refusé la clé API</p>
+        <p className="text-sm font-medium">n8n refused the API key</p>
         <p className="text-sm text-muted-foreground">
-          n8n répond, mais refuse la clé API renseignée dans Connexions → n8n.
-          Créez une clé dans n8n (Settings → n8n API), collez-la dans Connexions → n8n,
-          puis revenez ici.
+          n8n answers, but refuses the API key entered in Connections → n8n.
+          Create a key in n8n (Settings → n8n API), paste it in Connections → n8n,
+          then come back here.
         </p>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" onClick={() => void api.openN8nConnection()}>
-            Ouvrir Connexions
+            Open Connections
           </Button>
           <Button size="sm" variant="outline" onClick={onRetry}>
-            Réessayer
+            Try again
           </Button>
         </div>
       </div>
@@ -269,24 +276,24 @@ export function FlowsErrorMessage({
   }
   const title =
     error.code === "n8n_unreachable"
-      ? "Impossible de joindre n8n"
+      ? "Could not reach n8n"
       : error.code === "not_found"
-        ? "Ce Flow n'existe plus dans n8n"
-        : "Les Flows n'ont pas pu être chargés";
+        ? "This Flow no longer exists in n8n"
+        : "The Flows could not be loaded";
   return (
     <div role="alert" className="space-y-3 border border-border p-4">
       <p className="text-sm font-medium">{title}</p>
       {error.code === "n8n_unreachable" && (
         <p className="text-sm text-muted-foreground">
-          Vérifiez que n8n tourne et que l&apos;URL de l&apos;API est correcte dans
-          Connexions → n8n.
+          Check that n8n is running and that the API URL is right in
+          Connections → n8n.
         </p>
       )}
       {error.detail && (
         <p className="break-all font-mono text-xs text-muted-foreground">{error.detail}</p>
       )}
       <Button size="sm" variant="outline" onClick={onRetry}>
-        Réessayer
+        Try again
       </Button>
     </div>
   );

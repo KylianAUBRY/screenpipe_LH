@@ -5,8 +5,8 @@
 //! The Flow health check (SPEC D19).
 //!
 //! At engine start and then every [`HealthSchedule::every`], the engine
-//! checks its Flows: whether n8n answers (the app shows « n8n injoignable,
-//! tes Flows ne tournent pas » while it does not), the failed runs since the
+//! checks its Flows: whether n8n answers (the app shows « n8n is unreachable:
+//! your Flows are not running » while it does not), the failed runs since the
 //! last check, each notified once (the D16 error workflow cannot report a
 //! failure while the app's notification server or n8n is down), and the
 //! drafts the chat left under construction for 24 hours, deleted.
@@ -377,9 +377,12 @@ async fn report_failed_runs(
         let Some(flow_id) = workflow["id"].as_str() else {
             continue;
         };
+        // A dismissed Flow is set aside: its old failures are not news. One
+        // n8n switched back on is shown as on, and reported as such.
         if !has_flow_tag(workflow)
             || workflow["isArchived"] == true
             || is_building(workflow, store.flows.get(flow_id))
+            || derive_status(workflow, store.flows.get(flow_id)) == "dismissed"
         {
             continue;
         }

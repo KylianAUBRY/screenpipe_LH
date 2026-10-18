@@ -13,7 +13,7 @@
 //!
 //! Like activation, a retry needs the user's click: the route refuses a
 //! request without the UI credential ([`FlowActivationKey`]), which only the
-//! Review Screen and the failure notification's « Relancer » (handled by the
+//! Review Screen and the failure notification's « Retry » (handled by the
 //! app's webview) send. The chat agent, pipes and MCP clients share the local
 //! API key and cannot rerun a Flow's emails. A Flow switched off since its run
 //! failed can still be retried by the user: it is their explicit click.

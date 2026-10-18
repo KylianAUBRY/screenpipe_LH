@@ -24,7 +24,7 @@ use super::*;
 
 /// n8n tag of ScreenPipe's error workflow.
 pub const ERROR_WORKFLOW_TAG: &str = "screenpipe-flow-errors";
-const ERROR_WORKFLOW_NAME: &str = "ScreenPipe — échecs des Flows";
+const ERROR_WORKFLOW_NAME: &str = "ScreenPipe — Flow failures";
 const ERROR_TRIGGER: &str = "n8n-nodes-base.errorTrigger";
 
 /// Where a failed run is reported.
@@ -69,16 +69,16 @@ fn error_workflow(screenpipe_url: &str) -> Value {
         "nodes": [
             {
                 "id": "screenpipe-flow-failed",
-                "name": "Un Flow a échoué",
+                "name": "A Flow failed",
                 "type": ERROR_TRIGGER,
                 "typeVersion": 1,
                 "position": [0, 0],
                 "parameters": {},
-                "notes": "n8n lance ce workflow quand une exécution d'un Flow ScreenPipe échoue."
+                "notes": "n8n runs this workflow when a run of a ScreenPipe Flow fails."
             },
             {
                 "id": "screenpipe-flow-report",
-                "name": "Prévenir ScreenPipe",
+                "name": "Tell ScreenPipe",
                 "type": "n8n-nodes-base.httpRequest",
                 "typeVersion": 4.2,
                 "position": [260, 0],
@@ -92,11 +92,11 @@ fn error_workflow(screenpipe_url: &str) -> Value {
                     "jsonBody": "={{ JSON.stringify({ executionId: $json.execution ? $json.execution.id : null, error: $json.execution && $json.execution.error ? $json.execution.error.message : ($json.trigger && $json.trigger.error ? $json.trigger.error.message : null) }) }}",
                     "options": {}
                 },
-                "notes": "ScreenPipe affiche une notification avec l'expéditeur et le sujet de l'e-mail en échec."
+                "notes": "ScreenPipe shows a notification with the sender and subject of the email that failed."
             }
         ],
         "connections": {
-            "Un Flow a échoué": {"main": [[{"node": "Prévenir ScreenPipe", "type": "main", "index": 0}]]}
+            "A Flow failed": {"main": [[{"node": "Tell ScreenPipe", "type": "main", "index": 0}]]}
         },
         "settings": {"executionOrder": "v1"}
     })
@@ -224,7 +224,7 @@ pub(super) async fn report_failure(
 
 /// The notification of a failed run of Flow `flow_id`: the email's sender
 /// and subject when the run had one, the failing step and its error, the
-/// Review Screen link and « Relancer ». Its id names the run, so the notification server
+/// Review Screen link and « Retry ». Its id names the run, so the notification server
 /// shows each failed run once however many times it is reported.
 pub(super) fn failure_notice(
     flow_id: &str,
@@ -235,27 +235,27 @@ pub(super) fn failure_notice(
     let result = execution.map(|e| &e["data"]["resultData"]);
     let mut lines = Vec::new();
     if let Some((sender, subject)) = result.and_then(handled_email) {
-        lines.push(format!("E-mail de {sender} : « {subject} »."));
+        lines.push(format!("Email from {sender}: “{subject}”."));
     }
     let error = result
         .and_then(|r| r["error"]["message"].as_str())
         .or(reported_error)
         .map(str::trim)
         .filter(|message| !message.is_empty())
-        .unwrap_or("erreur inconnue");
+        .unwrap_or("unknown error");
     match result.and_then(|r| r["lastNodeExecuted"].as_str()) {
-        Some(step) => lines.push(format!("Échec à l'étape « {step} » : {error}")),
-        None => lines.push(format!("Échec : {error}")),
+        Some(step) => lines.push(format!("Failed at step “{step}”: {error}")),
+        None => lines.push(format!("Failed: {error}")),
     }
-    lines.push("Le Flow reste actif.".to_string());
+    lines.push("The Flow stays on.".to_string());
     let review = format!("screenpipe://flows/{flow_id}");
     let execution_id = execution.and_then(|e| e["id"].as_str());
     let run = execution_id
         .map(str::to_string)
         .unwrap_or_else(|| format!("trigger-{}", chrono::Utc::now().timestamp_millis()));
     let mut actions =
-        vec![json!({"type": "deeplink", "label": "Voir le Flow", "url": review, "primary": true})];
-    // « Relancer » (D17): the app's webview calls the retry route with its
+        vec![json!({"type": "deeplink", "label": "View Flow", "url": review, "primary": true})];
+    // « Retry » (D17): the app's webview calls the retry route with its
     // local API key and the UI credential (the click is the user's; the
     // route refuses any other caller), then opens the Review Screen, whose
     // Activity shows how it ended.
@@ -263,7 +263,7 @@ pub(super) fn failure_notice(
     if let Some(execution_id) = execution_id {
         actions.push(json!({
             "type": "api",
-            "label": "Relancer",
+            "label": "Retry",
             "method": "POST",
             "url": format!("/automation-flows/{flow_id}/runs/{execution_id}/retry"),
             "body": {},
@@ -272,7 +272,7 @@ pub(super) fn failure_notice(
     }
     json!({
         "id": format!("automation-flow-failure:{flow_id}:{run}"),
-        "title": format!("Échec du Flow « {flow_name} »"),
+        "title": format!("Flow “{flow_name}” failed"),
         "body": lines.join("\n"),
         "type": "pipe",
         "priority": "high",

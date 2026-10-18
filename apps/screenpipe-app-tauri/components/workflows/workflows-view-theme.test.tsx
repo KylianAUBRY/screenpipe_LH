@@ -13,8 +13,8 @@ import { IntegratedWorkflows } from "./integrated-workflows";
 import { WorkflowAccessNotice } from "./workflow-access";
 import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
 
-// The Workflows view (library, Task Page, evidence, questions, « Créer
-// l'automatisation ») rendered with its real stylesheets under the app's
+// The Workflows view (library, Task Page, evidence, questions, « Create
+// automation ») rendered with its real stylesheets under the app's
 // `dark` class: no element may paint a light neutral surface or force a light
 // colour scheme.
 
@@ -149,7 +149,7 @@ async function renderTaskPage() {
     ({ container } = render(<WorkflowsApp platform={platform} storageKey={null} reviewRequest={{ key: "demo", workflowId: DEMO_TASK_ID }} />));
   });
   await screen.findByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] });
-  expect(screen.getByRole("button", { name: "Créer l'automatisation" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Create automation" })).toBeInTheDocument();
   return container;
 }
 

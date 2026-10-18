@@ -1227,6 +1227,7 @@ async fn no_step_shows_n8n_credentials_or_called_hosts() {
     let shown = flow.to_string();
     for hidden in [
         "Identifiant n8n",
+        "n8n credential",
         "NovaDesk Jira",
         "NovaDesk Gmail (IMAP)",
         "kylianaubry.atlassian.net",
@@ -1657,6 +1658,54 @@ async fn deactivation_is_logged_as_the_users_only_with_the_ui_credential() {
         &event("deactivated", "version-1", "user")
     );
     assert_eq!(n8n.workflows()[0]["active"], false);
+}
+
+#[tokio::test]
+async fn dismiss_sets_a_flow_aside_until_restored_and_never_hides_a_running_one() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    let (_, created) = app.create_from_task().await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let dismiss = format!("/automation-flows/{id}/dismiss");
+    let restore = format!("/automation-flows/{id}/restore");
+
+    // A Draft is set aside: the list says so, n8n is untouched.
+    let (status, flow) = app.ui_call("POST", &dismiss, None).await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["status"], "dismissed");
+    let (_, list) = app.call("GET", "/automation-flows", None).await;
+    assert_eq!(list[0]["status"], "dismissed");
+    assert_eq!(n8n.workflows()[0]["active"], false);
+
+    // A second click logs nothing more; Restore gives back its status.
+    app.ui_call("POST", &dismiss, None).await;
+    let (status, flow) = app.ui_call("POST", &restore, None).await;
+    assert_eq!(status, StatusCode::OK, "{flow}");
+    assert_eq!(flow["status"], "draft");
+    assert_eq!(
+        events(&flow),
+        vec![
+            event("dismissed", "version-1", "user"),
+            event("restored", "version-1", "user")
+        ]
+    );
+
+    // A Flow n8n runs must be paused first.
+    app.ui_call(
+        "POST",
+        &format!("/automation-flows/{id}/activate"),
+        Some(json!({"versionId": "version-1"})),
+    )
+    .await;
+    let (status, body) = app.ui_call("POST", &dismiss, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "flow_active");
+    let (_, flow) = app
+        .call("GET", &format!("/automation-flows/{id}"), None)
+        .await;
+    assert_eq!(flow["status"], "active");
+    assert_eq!(events(&flow).last().unwrap(), &event("activated", "version-1", "user"));
 }
 
 #[tokio::test]
@@ -2379,8 +2428,8 @@ async fn chat_update_keeps_the_users_credentials_and_never_takes_the_chats() {
     app.configure_n8n(&server.uri());
     let (_, created) = app.create_from_task().await;
     let id = created["id"].as_str().unwrap().to_string();
-    let jira = "Créer le ticket Jira";
-    let imap = "Nouvel email support";
+    let jira = "Create the Jira ticket";
+    let imap = "New support email";
     let user_jira = credentials_of(&n8n.workflows()[0], jira);
     let user_imap = credentials_of(&n8n.workflows()[0], imap);
     assert!(user_jira.is_object() && user_imap.is_object());
@@ -2445,7 +2494,7 @@ async fn chat_update_with_a_node_n8n_cannot_run_is_refused_untouched() {
         }));
         let model = nodes
             .iter_mut()
-            .find(|n| n["name"] == "Modèle IA ScreenPipe")
+            .find(|n| n["name"] == "screenpipe AI model")
             .unwrap();
         model["type"] = json!("@n8n/n8n-nodes-langchain.lmChatAnthropic");
         model["typeVersion"] = json!(1.3);
@@ -3607,15 +3656,15 @@ fn failed_run(id: &str, workflow_id: &str) -> Value {
         "startedAt": "2026-10-17T09:00:00.000Z", "stoppedAt": "2026-10-17T09:00:09.000Z",
         "data": {"resultData": {
             "runData": {
-                "Nouvel email support": [{"startTime": 1, "data": {"main": [[{"json": {
+                "New support email": [{"startTime": 1, "data": {"main": [[{"json": {
                     "from": "Claire Martin <claire.martin@client.fr>",
                     "subject": "Export PDF vide depuis la mise à jour",
                     "textPlain": "Bonjour, l'export PDF sort une page blanche."
                 }}]]}}],
-                "Créer le ticket Jira": [{"startTime": 5, "error": {"message": "503 Service Unavailable"}}]
+                "Create the Jira ticket": [{"startTime": 5, "error": {"message": "503 Service Unavailable"}}]
             },
-            "lastNodeExecuted": "Créer le ticket Jira",
-            "error": {"message": "503 Service Unavailable", "node": {"name": "Créer le ticket Jira"}}
+            "lastNodeExecuted": "Create the Jira ticket",
+            "error": {"message": "503 Service Unavailable", "node": {"name": "Create the Jira ticket"}}
         }}
     })
 }
@@ -3656,7 +3705,7 @@ async fn a_failed_run_is_notified_with_its_email_and_the_flow_keeps_running() {
     assert_eq!(sent.len(), 1);
     let notice = &sent[0];
     let name = n8n.workflows()[0]["name"].as_str().unwrap().to_string();
-    assert_eq!(notice["title"], format!("Échec du Flow « {name} »"));
+    assert_eq!(notice["title"], format!("Flow “{name}” failed"));
     let body = notice["body"].as_str().unwrap();
     assert!(
         body.contains("Claire Martin <claire.martin@client.fr>"),
@@ -3666,18 +3715,18 @@ async fn a_failed_run_is_notified_with_its_email_and_the_flow_keeps_running() {
         body.contains("Export PDF vide depuis la mise à jour"),
         "{body}"
     );
-    assert!(body.contains("Créer le ticket Jira"), "{body}");
+    assert!(body.contains("Create the Jira ticket"), "{body}");
     assert!(body.contains("503 Service Unavailable"), "{body}");
     let review = format!("screenpipe://flows/{id}");
     assert_eq!(notice["actions"][0]["type"], "deeplink");
     assert_eq!(notice["actions"][0]["url"], review);
     assert_eq!(notice["source_url"], review);
-    // « Relancer » (D17): the app calls the retry route of this run, then
+    // « Retry » (D17): the app calls the retry route of this run, then
     // opens the Review Screen, where the Activity shows how it ended.
     assert_eq!(
         notice["actions"][1],
         json!({
-            "type": "api", "label": "Relancer", "method": "POST",
+            "type": "api", "label": "Retry", "method": "POST",
             "url": format!("/automation-flows/{id}/runs/exec-failed/retry"),
             "body": {}, "deeplink_url": review
         })
@@ -3785,10 +3834,10 @@ fn demo_run(
 ) -> Value {
     let item = |json: Value| json!([{"json": json}]);
     let mut run_data = json!({
-        "Nouvel email support": [{"startTime": 1, "data": {"main": [item(json!({
+        "New support email": [{"startTime": 1, "data": {"main": [item(json!({
             "from": sender, "subject": subject, "textPlain": "Bonjour…"
         }))]}}],
-        "Analyser l'email (IA)": [{"startTime": 2, "data": {"main": [item(json!({"output": answer}))]}}]
+        "Read the email (AI)": [{"startTime": 2, "data": {"main": [item(json!({"output": answer}))]}}]
     });
     for (n, (name, branches)) in steps.iter().enumerate() {
         let main: Vec<Value> = branches
@@ -3808,7 +3857,7 @@ fn demo_run(
     let last = steps
         .last()
         .map(|(name, _)| *name)
-        .unwrap_or("Analyser l'email (IA)");
+        .unwrap_or("Read the email (AI)");
     json!({
         "id": id, "workflowId": workflow_id, "status": "success", "finished": true,
         "startedAt": started_at, "stoppedAt": started_at,
@@ -3847,10 +3896,10 @@ async fn activity_shows_the_ticket_an_email_became_with_the_ais_reason() {
         ),
         answer.clone(),
         &[
-            ("Confiance suffisante", json!([{"output": answer}, null])),
-            ("Ticket nécessaire", json!([{"output": answer}, null])),
+            ("Confident enough", json!([{"output": answer}, null])),
+            ("Ticket needed", json!([{"output": answer}, null])),
             (
-                "Créer le ticket Jira",
+                "Create the Jira ticket",
                 json!([{
                     "id": "10042", "key": "NOVA-28",
                     "self": "https://novadesk.atlassian.net/rest/api/3/issue/10042"
@@ -3903,9 +3952,9 @@ async fn activity_shows_an_email_the_ai_was_unsure_about_as_abstained() {
         ),
         answer.clone(),
         &[
-            ("Confiance suffisante", json!([null, {"output": answer}])),
+            ("Confident enough", json!([null, {"output": answer}])),
             (
-                "À trier à la main",
+                "Sort by hand",
                 json!([{"success": true, "message": "Notification sent successfully"}]),
             ),
         ],
@@ -3944,8 +3993,8 @@ async fn activity_shows_an_email_that_needed_no_ticket_as_ignored() {
         ),
         answer.clone(),
         &[
-            ("Confiance suffisante", json!([{"output": answer}, null])),
-            ("Ticket nécessaire", json!([null, {"output": answer}])),
+            ("Confident enough", json!([{"output": answer}, null])),
+            ("Ticket needed", json!([null, {"output": answer}])),
         ],
     ));
 
@@ -3978,7 +4027,7 @@ async fn activity_lists_handled_emails_newest_first_with_the_failed_ones_and_why
         ),
         answer.clone(),
         &[(
-            "Créer le ticket Jira",
+            "Create the Jira ticket",
             json!([{"id": "1", "key": "NOVA-29", "self": "https://x.atlassian.net/rest/api/3/issue/1"}]),
         )],
     ));
@@ -4004,7 +4053,7 @@ async fn activity_lists_handled_emails_newest_first_with_the_failed_ones_and_why
     assert_eq!(failed["outcome"], "failed");
     assert_eq!(
         failed["reason"],
-        "Échec à l'étape « Créer le ticket Jira » : 503 Service Unavailable"
+        "Failed at step “Create the Jira ticket”: 503 Service Unavailable"
     );
     assert_eq!(
         failed["email"],
@@ -4032,10 +4081,10 @@ async fn activity_shows_the_ticket_an_email_already_had_when_creation_was_skippe
         ("Arthur Noteris <arthur@novadesk.fr>", "Export vide"),
         answer.clone(),
         &[
-            ("Confiance suffisante", json!([{"output": answer}, null])),
-            ("Ticket nécessaire", json!([{"output": answer}, null])),
+            ("Confident enough", json!([{"output": answer}, null])),
+            ("Ticket needed", json!([{"output": answer}, null])),
             (
-                "Ticket déjà créé ?",
+                "Ticket already created?",
                 json!([{"issues": [{"id": "10042", "key": "NOVA-28"}], "isLast": true}]),
             ),
         ],
@@ -4518,7 +4567,7 @@ async fn failed_runs_since_the_last_check_are_notified_once_each() {
     );
     let body = sent[0]["body"].as_str().unwrap();
     assert!(body.contains("Claire Martin <claire.martin@client.fr>"), "{body}");
-    assert!(body.contains("Créer le ticket Jira"), "{body}");
+    assert!(body.contains("Create the Jira ticket"), "{body}");
     assert_eq!(sent[0]["actions"][0]["url"], format!("screenpipe://flows/{id}"));
 
     // The next check finds nothing new: never twice.
@@ -4759,18 +4808,18 @@ fn ticket_created_on_retry() -> Value {
         "status": "success", "finished": true,
         "data": {"resultData": {
             "runData": {
-                "Nouvel email support": [{"startTime": 1, "data": {"main": [[{"json": {
+                "New support email": [{"startTime": 1, "data": {"main": [[{"json": {
                     "from": "Claire Martin <claire.martin@client.fr>",
                     "subject": "Export PDF vide depuis la mise à jour"
                 }}]]}}],
-                "Analyser l'email (IA)": [{"startTime": 2, "data": {"main": [[{"json": {
+                "Read the email (AI)": [{"startTime": 2, "data": {"main": [[{"json": {
                     "output": {"type": "Bug", "confidence": "high", "reason": "L'export PDF est cassé."}
                 }}]]}}],
-                "Créer le ticket Jira": [{"startTime": 5, "data": {"main": [[{"json": {
+                "Create the Jira ticket": [{"startTime": 5, "data": {"main": [[{"json": {
                     "id": "30", "key": "NOVA-30", "self": "https://x.atlassian.net/rest/api/3/issue/30"
                 }}]]}}]
             },
-            "lastNodeExecuted": "Créer le ticket Jira"
+            "lastNodeExecuted": "Create the Jira ticket"
         }}
     })
 }
@@ -4808,7 +4857,7 @@ async fn retrying_a_failed_run_runs_it_again_in_n8n_and_says_how_it_ended() {
 async fn only_the_users_click_retries_a_run() {
     // The chat agent, pipes and MCP clients share the local API key: they
     // cannot rerun a Flow's emails, only the Review Screen and the
-    // notification's « Relancer » (both hold the UI credential) can.
+    // notification's « Retry » (both hold the UI credential) can.
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;
     app.configure_n8n(&server.uri());
@@ -4839,7 +4888,7 @@ async fn a_retry_that_fails_again_says_where_and_why() {
         "status": "error", "finished": false,
         "data": {"resultData": {
             "runData": {},
-            "lastNodeExecuted": "Chercher le ticket de cet email",
+            "lastNodeExecuted": "Find the ticket for this email",
             "error": {"message": "503 Service Unavailable"}
         }}
     }));
@@ -4850,7 +4899,7 @@ async fn a_retry_that_fails_again_says_where_and_why() {
     assert_eq!(run["outcome"], "failed");
     assert_eq!(
         run["reason"],
-        "Échec à l'étape « Chercher le ticket de cet email » : 503 Service Unavailable"
+        "Failed at step “Find the ticket for this email”: 503 Service Unavailable"
     );
 }
 
@@ -4906,7 +4955,7 @@ async fn a_retry_n8n_refuses_is_reported_with_its_reason() {
     n8n.add_execution(failed_run("exec-failed", &id));
     n8n.0.lock().unwrap().refuse_retry = Some((
         500,
-        "Could not find the node \"Créer le ticket Jira\" in workflow.".to_string(),
+        "Could not find the node \"Create the Jira ticket\" in workflow.".to_string(),
     ));
 
     let (status, body) = retry(&app, &id, "exec-failed").await;
@@ -4990,7 +5039,7 @@ async fn activity_offers_to_retry_only_failed_runs_not_retried_yet() {
     retry(&app, &id, "exec-fixed").await;
     n8n.retry_ends_as(json!({
         "status": "error", "finished": false,
-        "data": {"resultData": {"runData": {}, "lastNodeExecuted": "Chercher le ticket de cet email",
+        "data": {"resultData": {"runData": {}, "lastNodeExecuted": "Find the ticket for this email",
             "error": {"message": "503 Service Unavailable"}}}
     }));
     let (_, failed_again) = retry(&app, &id, "exec-again").await;

@@ -45,8 +45,8 @@ describe("findAutomation (scripted demo detection)", () => {
     expect(workflows.map(w => w.id)).toEqual([DEMO_TASK_ID]);
     expect(workflows[0].userCorrection).toBeNull();
     const payload = d.notify.mock.calls[0][0];
-    expect(payload.title).toBe("Tâche répétitive détectée");
-    expect(payload.actions).toEqual([{ type: "deeplink", label: "Voir la tâche", url: DEMO_TASK_URL, primary: true }]);
+    expect(payload.title).toBe("Repetitive task detected");
+    expect(payload.actions).toEqual([{ type: "deeplink", label: "View task", url: DEMO_TASK_URL, primary: true }]);
     expect(payload.id).toBe(`automation-flows-demo:${DEMO_TASK_ID}:${NOW.getTime()}`);
   });
 
@@ -89,8 +89,8 @@ describe("findAutomation (scripted demo detection)", () => {
   });
 
   it("reports why the notification server could not be asked", async () => {
-    const { deps: d } = deps({ notify: vi.fn(async () => { throw new Error("le serveur ne répond pas"); }) });
-    await expect(findAutomation(d)).resolves.toEqual({ notified: false, reason: "le serveur ne répond pas" });
+    const { deps: d } = deps({ notify: vi.fn(async () => { throw new Error("the server does not answer"); }) });
+    await expect(findAutomation(d)).resolves.toEqual({ notified: false, reason: "the server does not answer" });
   });
 
   it("never overwrites an unreadable catalog and sends no notification", async () => {

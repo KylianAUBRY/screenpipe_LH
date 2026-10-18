@@ -5,7 +5,7 @@
 // src-tauri/src/shortcuts.rs, which emits DEMO_SHORTCUT_EVENT to the Home
 // window). Runs the same demo installer as `infra/automation-flows/demo/demo.ts`:
 // the detected task is reinstalled in its start state (answers cleared), then
-// « Tâche répétitive détectée » is sent. When the notification is not shown,
+// « Repetitive task detected » is sent. When the notification is not shown,
 // the presenter is told why and the Task Page opens directly.
 import { findAutomation, type FindAutomationDeps, type FindAutomationResult } from "./find-automation";
 
@@ -16,7 +16,7 @@ export type DemoShortcutMessage = { title: string; description: string; destruct
 
 export type DemoShortcutDeps = {
   installer: FindAutomationDeps;
-  /** What the notification's « Voir la tâche » does. */
+  /** What the notification's « View task » does. */
   openTask: () => Promise<void>;
   /** A message the presenter sees (a toast in the Home window). */
   tell: (message: DemoShortcutMessage) => void;
@@ -36,11 +36,11 @@ export function demoShortcutHandler(deps: DemoShortcutDeps): () => Promise<DemoS
         result = await findAutomation(deps.installer);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        deps.tell({ title: "Démo non lancée", description: reason, destructive: true });
+        deps.tell({ title: "Demo not started", description: reason, destructive: true });
         return { notified: false, reason };
       }
       if (!result.notified) {
-        deps.tell({ title: "Notification non affichée", description: `${result.reason}. La tâche s'ouvre directement.` });
+        deps.tell({ title: "Notification not shown", description: `${result.reason}. The task opens directly.` });
         await deps.openTask();
       }
       return result;

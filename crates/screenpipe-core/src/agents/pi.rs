@@ -5048,7 +5048,7 @@ mod tests {
     #[test]
     fn automation_flows_skill_builds_step_by_step_and_deletes_abandoned_drafts() {
         // flows-round-two 07: a hidden draft, a state read after every step,
-        // « Terminer » once nothing is missing, and no draft left behind.
+        // « Finish » once nothing is missing, and no draft left behind.
         let skill = include_str!("../../assets/skills/automation-flows/SKILL.md");
         for row in [
             "| `POST /automation-flows/drafts` ",

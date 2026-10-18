@@ -122,7 +122,7 @@ pub(super) fn flow_run(execution: &Value) -> Option<FlowRun> {
         _ if ticket.is_some() => "ticket",
         // A Flow without an AI decision: its run simply went through.
         None => "done",
-        // Same gate as the demo Flow's « Confiance suffisante »: only `high`
+        // Same gate as the demo Flow's « Confident enough »: only `high`
         // goes on to a ticket, anything else is the AI abstaining.
         Some(answer) if answer.get("confidence").and_then(Value::as_str) != Some("high") => {
             "abstained"
@@ -146,10 +146,10 @@ fn failure_reason(result: &Value) -> String {
         .as_str()
         .map(str::trim)
         .filter(|message| !message.is_empty())
-        .unwrap_or("erreur inconnue");
+        .unwrap_or("unknown error");
     match result["lastNodeExecuted"].as_str() {
-        Some(step) => format!("Échec à l'étape « {step} » : {error}"),
-        None => format!("Échec : {error}"),
+        Some(step) => format!("Failed at step “{step}”: {error}"),
+        None => format!("Failed: {error}"),
     }
 }
 

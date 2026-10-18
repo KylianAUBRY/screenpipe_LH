@@ -25,8 +25,8 @@ function writeDraft(key: string, draft: Record<string, string>) {
     else sessionStorage.removeItem(key);
   } catch { /* Answering still works when storage is unavailable. */ }
 }
-/** Every task keeps the English, optional block. Creation mode (required answers) is part of the
- * French Automation Flow demo, so it uses the French copy. */
+/** Every task keeps the optional block. Creation mode (an Automation Flow is created from the
+ * answers) makes every question required and says so. */
 const COPY = {
   en: {
     section: "Questions and feedback",
@@ -51,41 +51,46 @@ const COPY = {
     savingStopsVoice: "Saving stops voice and keeps the answers shown here.",
     footer: "Saved answers refine future workflow updates.",
     save: "Save answers", saving: "Saving…",
+    choices: "Suggested answers", created: "", open: "",
   },
-  fr: {
-    section: "Questions et remarques",
-    title: "Aidez Screenpipe à bien comprendre cette tâche",
-    unavailable: "Les réponses ne sont pas disponibles dans cette vue.",
-    hint: "Répondez à chaque question pour créer l'automatisation, par écrit ou à voix haute.",
-    progress: (answered: number, total: number) => `Réponses : ${answered} sur ${total} · Obligatoires pour créer l'automatisation`,
-    startVoice: "Répondre à voix haute", stopVoice: "Arrêter l'enregistrement",
-    connecting: "Connexion au micro…", listening: "À l'écoute", interrupted: "Enregistrement interrompu", stopped: "Enregistrement arrêté",
-    level: "Niveau du micro", remaining: (time: string) => `${time} restantes`,
-    voiceHint: "Parlez naturellement. Les réponses et un résumé se remplissent pendant que vous parlez. Ce que vous modifiez à la main ne change pas.",
-    updating: "Mise à jour des réponses et du résumé…", byHand: "Vous pouvez toujours répondre par écrit.", review: "Vérifiez vos réponses et le résumé ci-dessous.", waiting: "En attente de vos paroles…",
-    liveTranscript: "Transcription en direct", originalTranscript: "Transcription d'origine", retryVoice: "Réessayer de remplir depuis la voix",
-    fillFailed: "Impossible de remplir les réponses. Vos paroles sont conservées. Réessayez.",
-    answered: "Répondu", extra: "Autre chose à savoir ?",
-    extraHint: "Ajoutez une étape manquante, une exception ou une autre remarque. Quand vous parlez, votre résumé apparaît ici.",
-    extraPlaceholder: "Autre remarque…", placeholder: "Votre réponse…",
-    clear: "Effacer", fromVoice: "Rempli à la voix", summaryFromVoice: "Résumé de la voix",
-    undo: "Annuler", undoLabel: (question: string) => `Annuler la réponse vocale : ${question}`,
-    saved: "Réponses enregistrées.",
-    saveFailed: "Impossible d'enregistrer les réponses. Votre brouillon est conservé. Réessayez.",
-    savingStopsVoice: "Enregistrer arrête la voix et garde les réponses affichées ici.",
-    footer: "Vos réponses restent ici si vous quittez la page.",
-    save: "Enregistrer les réponses", saving: "Enregistrement…",
+  creation: {
+    section: "Questions and feedback",
+    title: "Help screenpipe understand this task",
+    unavailable: "Answers are unavailable in this view.",
+    hint: "Answer each question to create the automation, in writing or out loud.",
+    progress: (answered: number, total: number) => `${answered} of ${total} answered · Required to create the automation`,
+    startVoice: "Answer with voice", stopVoice: "Stop recording",
+    connecting: "Connecting microphone…", listening: "Listening", interrupted: "Recording interrupted", stopped: "Recording stopped",
+    level: "Microphone level", remaining: (time: string) => `${time} left`,
+    voiceHint: "Talk naturally. Answers and a summary fill in as you speak. Anything you edit by hand stays unchanged.",
+    updating: "Updating answers and summary…", byHand: "You can still answer in writing.", review: "Check your answers and the summary below.", waiting: "Waiting for your words…",
+    liveTranscript: "Live transcript", originalTranscript: "Original transcript", retryVoice: "Retry filling from voice",
+    fillFailed: "Could not fill the answers. Your words are kept. Try again.",
+    answered: "Answered", extra: "Anything else to know?",
+    extraHint: "Add a missing step, an exception or another remark. When you speak, your summary shows up here.",
+    extraPlaceholder: "Another remark…", placeholder: "Your answer…",
+    clear: "Clear", fromVoice: "Filled from voice", summaryFromVoice: "Summary from voice",
+    undo: "Undo", undoLabel: (question: string) => `Undo voice answer: ${question}`,
+    saved: "Answers saved.",
+    saveFailed: "Could not save the answers. Your draft is kept. Try again.",
+    savingStopsVoice: "Saving stops voice and keeps the answers shown here.",
+    footer: "Your answers stay here if you leave the page.",
+    save: "Save answers", saving: "Saving…",
+    choices: "Suggested answers",
+    created: "This automation is already created. Open it from the top of the page.",
   },
 };
-export function WorkflowQuestions({ workflow, save, voice, active = true, createFlow }: {
+export function WorkflowQuestions({ workflow, save, voice, active = true, createFlow, findFlow }: {
   workflow: WorkflowMap;
   save?: (correction: string) => Promise<WorkflowMap>;
   voice?: QuestionnaireVoice;
   active?: boolean;
   /** Present when the host can create an Automation Flow: every question becomes required. */
   createFlow?: (answers: WorkflowAnswer[]) => Promise<void>;
+  /** The Flow already created from this task, if any: then creation is not offered again. */
+  findFlow?: () => Promise<string | null>;
 }) {
-  const t = createFlow ? COPY.fr : COPY.en;
+  const t = createFlow ? COPY.creation : COPY.en;
   const copy = useRef(t); copy.current = t;
   const questions = [...new Set((workflow.openQuestions ?? []).map(q => q.trim()).filter(q => q && q !== EXTRA))];
   const fields = [...questions, EXTRA];
@@ -115,6 +120,19 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
   const [filling, setFilling] = useState(false);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
+  // The Flow already created from this task: the page header opens it.
+  const [existingFlow, setExistingFlow] = useState<string | null>(null);
+  // Looked up per task, and again each time the page is shown: the host keeps
+  // it mounted while hidden, and a Flow may be created meanwhile. The host
+  // passes a new function on every render.
+  const findFlowRef = useRef(findFlow); findFlowRef.current = findFlow;
+  const canFindFlow = Boolean(findFlow);
+  useEffect(() => {
+    if (!active || !canFindFlow || !findFlowRef.current) return;
+    let current = true;
+    findFlowRef.current().then(flowId => { if (current) setExistingFlow(flowId); }, () => {});
+    return () => { current = false; };
+  }, [active, canFindFlow, workflow.id]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const saving = useRef(false);
@@ -210,11 +228,11 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
     try {
       const kept = save && changed ? await persist(save) : answers;
       await createFlow(fields.filter(q => kept[q]?.trim()).map(question => ({ question, answer: kept[question].trim() })));
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Impossible de créer l'automatisation. Vos réponses sont conservées. Réessayez."); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not create the automation. Your answers are kept. Try again."); }
     finally { saving.current = false; setBusy(false); setCreating(false); }
   }
   if (!questions.length) return null;
-  const saveButton = <button type="submit" className={createFlow ? styles.secondary : undefined} disabled={!changed || busy}>{busy && !creating ? t.saving : t.save}</button>;
+  const saveButton = <button type="submit" disabled={!changed || busy}>{busy ? t.saving : t.save}</button>;
   return <section className={styles.questions} aria-label={t.section}>
     <div className={styles.heading}>
       <div><h2>{t.title}</h2><p className={styles.hint}>{!save ? t.unavailable : t.hint}</p></div>
@@ -233,11 +251,15 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
       {transcript && <details open={recording}><summary>{recording ? t.liveTranscript : t.originalTranscript}</summary><p className={styles.transcript}>{transcript}</p></details>}
       {!recording && transcript && <button type="button" className={styles.textButton} disabled={filling || busy} onClick={() => filler.current?.enqueue(transcriptRef.current, true, true)}>{t.retryVoice}</button>}
     </div>}
-    <form onSubmit={e => { e.preventDefault(); void submit(); }}>
+    {/* Creation mode has one way to confirm: create the automation (it saves the answers first). */}
+    <form onSubmit={e => { e.preventDefault(); if (!createFlow) void submit(); else if (!existingFlow) void create(); }}>
       {fields.map((question, index) => <div key={question} className={styles.field}>
         <label htmlFor={`${id}-${index}`}><span className={styles.number}>{index < questions.length ? String(index + 1).padStart(2, "0") : ""}</span><span>{question === EXTRA ? t.extra : question}</span>{answers[question]?.trim() && <Check size={16} aria-label={t.answered} />}</label>
         <div className={styles.answer}>
           {question === EXTRA && <p className={styles.hint}>{t.extraHint}</p>}
+          {question !== EXTRA && (workflow.openQuestionChoices?.[question] ?? []).length > 0 && <div className={styles.choices} role="group" aria-label={`${t.choices}: ${question}`}>
+            {workflow.openQuestionChoices![question].map(choice => <button key={choice} type="button" aria-pressed={(answers[question] ?? "").trim() === choice} disabled={!save || busy} onClick={() => manual(question, choice)}>{choice}</button>)}
+          </div>}
           <textarea id={`${id}-${index}`} aria-label={question === EXTRA ? t.extra : question} rows={question === EXTRA ? 3 : 2} maxLength={4000} value={answers[question] ?? ""} placeholder={question === EXTRA ? t.extraPlaceholder : t.placeholder} disabled={!save || busy} onChange={e => manual(question, e.target.value)} />
           <div className={styles.fieldActions}>
             {question !== EXTRA && !createFlow && <label><input type="checkbox" checked={answers[question] === "Not sure"} disabled={!save || busy} onChange={e => manual(question, e.target.checked ? "Not sure" : "")} />Not sure</label>}
@@ -247,7 +269,7 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
         </div>
       </div>)}
       {error && <p className={styles.error} role="alert">{error}</p>}
-      {save && <div className={styles.actions}><span role="status">{notice || (recording || filling ? t.savingStopsVoice : t.footer)}</span>{createFlow ? <div className={styles.actionButtons}>{saveButton}<button type="button" disabled={!complete || busy} onClick={() => void create()}>{creating ? "Création…" : "Créer l'automatisation"}</button></div> : saveButton}</div>}
+      {save && <div className={styles.actions}><span role="status">{notice || (recording || filling ? t.savingStopsVoice : createFlow && existingFlow ? t.created : t.footer)}</span>{createFlow ? !existingFlow && <button type="submit" disabled={!complete || busy}>{creating ? "Creating…" : "Create automation"}</button> : saveButton}</div>}
     </form>
   </section>;
 }
