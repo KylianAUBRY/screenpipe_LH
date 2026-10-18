@@ -112,12 +112,34 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     const openAutomationFlow = vi.fn(async () => {});
     await openTaskPage({ createAutomationFlow, findAutomationFlow: vi.fn(async () => "flow-1"), openAutomationFlow });
 
-    const open = await screen.findByRole("button", { name: "Open automation" });
+    const form = screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] }).closest("form")!;
+    const open = await within(form).findByRole("button", { name: "Open automation" });
     expect(screen.getByText(/already created/)).toBeVisible();
     expect(screen.queryByRole("button", { name: CREATE })).toBeNull();
     fireEvent.click(open);
     await waitFor(() => expect(openAutomationFlow).toHaveBeenCalledWith("flow-1"));
     expect(createAutomationFlow).not.toHaveBeenCalled();
+  });
+
+  it("offers « Open automation » at the top of the page too, once the automation exists", async () => {
+    const openAutomationFlow = vi.fn(async () => {});
+    await openTaskPage({ createAutomationFlow: vi.fn(async () => {}), findAutomationFlow: vi.fn(async () => "flow-1"), openAutomationFlow });
+
+    const buttons = await screen.findAllByRole("button", { name: "Open automation" });
+    expect(buttons).toHaveLength(2);
+    const [top] = buttons;
+    const firstQuestion = screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] });
+    // The top one comes before the questions, with the page's other actions.
+    expect(top.compareDocumentPosition(firstQuestion) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(top.closest("form")).toBeNull();
+    fireEvent.click(top);
+    await waitFor(() => expect(openAutomationFlow).toHaveBeenCalledWith("flow-1"));
+  });
+
+  it("shows no « Open automation » at the top while the automation does not exist", async () => {
+    await openTaskPage({ createAutomationFlow: vi.fn(async () => {}), findAutomationFlow: vi.fn(async () => null), openAutomationFlow: vi.fn(async () => {}) });
+    await screen.findByRole("button", { name: CREATE });
+    expect(screen.queryByRole("button", { name: "Open automation" })).toBeNull();
   });
 
   it("creates the automation when the answers are confirmed with Enter, not only saves them", async () => {
