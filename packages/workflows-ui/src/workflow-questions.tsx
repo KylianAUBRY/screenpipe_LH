@@ -51,7 +51,7 @@ const COPY = {
     savingStopsVoice: "Saving stops voice and keeps the answers shown here.",
     footer: "Saved answers refine future workflow updates.",
     save: "Save answers", saving: "Saving…",
-    choices: "Suggested answers", created: "", open: "",
+    choices: "Suggested answers", created: "", open: "", pending: "", confirm: "", applying: "",
   },
   creation: {
     section: "Questions and feedback",
@@ -78,6 +78,8 @@ const COPY = {
     save: "Save answers", saving: "Saving…",
     choices: "Suggested answers",
     created: "This automation is already created. Open it from the top of the page.",
+    pending: "Confirm to apply your changes to the automation.",
+    confirm: "Confirm changes", applying: "Applying…",
   },
 };
 export function WorkflowQuestions({ workflow, save, voice, active = true, createFlow, findFlow }: {
@@ -220,15 +222,19 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
     } catch (cause) { setError(cause instanceof Error ? cause.message : t.saveFailed); }
     finally { saving.current = false; setBusy(false); }
   }
-  /** Saves the answers first, so the Flow is never created from answers that were not kept. */
+  /**
+   * Saves the answers first, so the Flow is never created from answers that
+   * were not kept. Once the Flow exists, the same call applies changed
+   * answers to it (« Confirm changes »).
+   */
   async function create() {
-    if (!createFlow || !complete || saving.current) return;
+    if (!createFlow || !complete || (existingFlow && !changed) || saving.current) return;
     if (recording || filling) finishVoice.current?.();
     saving.current = true; setBusy(true); setCreating(true); setError(""); setNotice("");
     try {
       const kept = save && changed ? await persist(save) : answers;
       await createFlow(fields.filter(q => kept[q]?.trim()).map(question => ({ question, answer: kept[question].trim() })));
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not create the automation. Your answers are kept. Try again."); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : existingFlow ? "Could not apply the changes. Your answers are kept. Try again." : "Could not create the automation. Your answers are kept. Try again."); }
     finally { saving.current = false; setBusy(false); setCreating(false); }
   }
   if (!questions.length) return null;
@@ -251,8 +257,9 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
       {transcript && <details open={recording}><summary>{recording ? t.liveTranscript : t.originalTranscript}</summary><p className={styles.transcript}>{transcript}</p></details>}
       {!recording && transcript && <button type="button" className={styles.textButton} disabled={filling || busy} onClick={() => filler.current?.enqueue(transcriptRef.current, true, true)}>{t.retryVoice}</button>}
     </div>}
-    {/* Creation mode has one way to confirm: create the automation (it saves the answers first). */}
-    <form onSubmit={e => { e.preventDefault(); if (!createFlow) void submit(); else if (!existingFlow) void create(); }}>
+    {/* Creation mode has one way to confirm: create the automation, or once it
+        exists apply the changed answers to it (both save the answers first). */}
+    <form onSubmit={e => { e.preventDefault(); if (!createFlow) void submit(); else void create(); }}>
       {fields.map((question, index) => <div key={question} className={styles.field}>
         <label htmlFor={`${id}-${index}`}><span className={styles.number}>{index < questions.length ? String(index + 1).padStart(2, "0") : ""}</span><span>{question === EXTRA ? t.extra : question}</span>{answers[question]?.trim() && <Check size={16} aria-label={t.answered} />}</label>
         <div className={styles.answer}>
@@ -269,7 +276,9 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
         </div>
       </div>)}
       {error && <p className={styles.error} role="alert">{error}</p>}
-      {save && <div className={styles.actions}><span role="status">{notice || (recording || filling ? t.savingStopsVoice : createFlow && existingFlow ? t.created : t.footer)}</span>{createFlow ? !existingFlow && <button type="submit" disabled={!complete || busy}>{creating ? "Creating…" : "Create automation"}</button> : saveButton}</div>}
+      {save && <div className={styles.actions}><span role="status">{notice || (recording || filling ? t.savingStopsVoice : createFlow && existingFlow ? changed ? t.pending : t.created : t.footer)}</span>{createFlow ? existingFlow
+        ? <button type="submit" disabled={!changed || !complete || busy}>{creating ? t.applying : t.confirm}</button>
+        : <button type="submit" disabled={!complete || busy}>{creating ? "Creating…" : "Create automation"}</button> : saveButton}</div>}
     </form>
   </section>;
 }

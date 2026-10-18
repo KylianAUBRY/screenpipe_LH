@@ -861,7 +861,10 @@
    window effect when the app uses it (`macos-vibrancy` on <html>). The
    current page is marked as in the app's own sidebar. */
 :global(.dark) .sidebar { background: hsl(var(--sidebar-background)); }
-:global(html.dark.macos-vibrancy) .app { background: transparent; }
+/* Only the sidebar's column is see-through: the view can be scrolled as a
+   whole (an element scrolled into view), and the canvas must stay under it. */
+:global(html.dark.macos-vibrancy) .app { background: linear-gradient(to right, transparent var(--navigation-width, 240px), var(--paper) 0); }
+:global(html.dark.macos-vibrancy) .app.navigationCollapsed, :global(html.dark.macos-vibrancy) .appEmbedded { background: var(--paper); }
 :global(html.dark.macos-vibrancy) .workspace { background: var(--paper); }
 :global(html.dark.macos-vibrancy) .sidebar { background: rgba(255, 255, 255, .06); border-right-color: hsl(0 0% 100% / .08); }
 :global(.dark) .nav .navActive { background: hsl(var(--foreground) / .06); box-shadow: inset 0 0 0 1px hsl(var(--foreground) / .1); }

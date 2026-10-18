@@ -113,10 +113,38 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
 
     const form = screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] }).closest("form")!;
     expect(await within(form).findByText("This automation is already created. Open it from the top of the page.")).toBeVisible();
-    expect(within(form).queryByRole("button", { name: /automation/ })).toBeNull();
-    // Enter in the form no longer creates (nor opens) anything.
+    expect(within(form).queryByRole("button", { name: CREATE })).toBeNull();
+    // Nothing changed: nothing to confirm, and Enter applies nothing.
+    expect(within(form).getByRole("button", { name: "Confirm changes" })).toBeDisabled();
     fireEvent.submit(form);
     expect(createAutomationFlow).not.toHaveBeenCalled();
+  });
+
+  it("applies changed answers to the existing automation with « Confirm changes », after saving them", async () => {
+    const order: string[] = [];
+    const createAutomationFlow = vi.fn(async () => { order.push("apply"); });
+    const platform = await openTaskPage({ createAutomationFlow, findAutomationFlow: vi.fn(async () => "flow-1"), openAutomationFlow: vi.fn(async () => {}) });
+    const save = platform.saveWorkflowAnswers!;
+    platform.saveWorkflowAnswers = vi.fn(async (...args) => { order.push("save"); return save(...args); });
+    const form = screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] }).closest("form")!;
+    const confirm = await within(form).findByRole("button", { name: "Confirm changes" });
+
+    answer(CLARIFICATION_QUESTIONS[0], "No, only bugs.");
+    // Every question stays required.
+    expect(confirm).toBeDisabled();
+    answer(CLARIFICATION_QUESTIONS[1], "Always Medium.");
+    expect(within(form).getByText("Confirm to apply your changes to the automation.")).toBeVisible();
+    expect(confirm).toBeEnabled();
+
+    fireEvent.click(confirm); fireEvent.click(confirm);
+    await waitFor(() => expect(createAutomationFlow).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(["save", "apply"]);
+    expect(createAutomationFlow).toHaveBeenCalledWith(DEMO_TASK_ID, [
+      { question: CLARIFICATION_QUESTIONS[0], answer: "No, only bugs." },
+      { question: CLARIFICATION_QUESTIONS[1], answer: "Always Medium." },
+    ]);
+    // Saved: nothing left to confirm.
+    await waitFor(() => expect(confirm).toBeDisabled());
   });
 
   it("offers « Open automation » in the page header, once the automation exists", async () => {
