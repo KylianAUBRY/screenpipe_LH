@@ -727,10 +727,18 @@ export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailab
   // The host can turn this task into an Automation Flow: required answers, worded buttons.
   const createsFlow = !!(platform.createAutomationFlow && workflow.id && (platform.canCreateAutomationFlow?.(workflow.id) ?? true));
   const timelineLabel = createsFlow ? "View in timeline" : undefined;
-  const workflowActions = <div className={styles.workflowActions}>{createsFlow && platform.findAutomationFlow && platform.openAutomationFlow && <OpenAutomationButton taskId={workflow.id!} find={platform.findAutomationFlow} open={platform.openAutomationFlow} />}{agentActions}{platform.guides && <button className={styles.skillButton} type="button" aria-label={hasGuide ? "Open SOP" : "Create SOP"} title={hasGuide ? "Open SOP" : "Create SOP"} onClick={() => setGuideOpen(true)}><BookOpen size={16} aria-hidden="true"/>{hasGuide ? ui("Open SOP") : ui("Create SOP")}</button>}{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? ui("Creating skill…") : skillSaved ? platform.skillInstallMode === "preview" ? ui("Skill preview") : ui("Skill installed") : skillDraft ? ui("Review skill") : ui("Create skill")}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div>;
+  const workflowActions = <div className={styles.workflowActions}>{agentActions}{platform.guides && <button className={styles.skillButton} type="button" aria-label={hasGuide ? "Open SOP" : "Create SOP"} title={hasGuide ? "Open SOP" : "Create SOP"} onClick={() => setGuideOpen(true)}><BookOpen size={16} aria-hidden="true"/>{hasGuide ? ui("Open SOP") : ui("Create SOP")}</button>}{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? ui("Creating skill…") : skillSaved ? platform.skillInstallMode === "preview" ? ui("Skill preview") : ui("Skill installed") : skillDraft ? ui("Review skill") : ui("Create skill")}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div>;
   return (
     <>
-      <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
+      {/* Pinned while scrolling, like the Flow page header, so "Open
+          automation" stays in reach. */}
+      <header className={styles.taskHeader} data-testid="task-header">
+        <div className={styles.taskHeaderTitle}>
+          <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
+          <strong>{workflow.title}</strong>
+        </div>
+        {createsFlow && platform.findAutomationFlow && platform.openAutomationFlow && <OpenAutomationButton taskId={workflow.id!} find={platform.findAutomationFlow} open={platform.openAutomationFlow} />}
+      </header>
       {saveEdits ? <WorkflowEditor {...editorOptions} key={workflow.id || workflow.title} workflow={workflow} save={saveEdits} actions={workflowActions} renderSource={observationsAvailable ? stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} timelineLabel={timelineLabel} /> : undefined} /> : <WorkflowDocument workflow={workflow} actions={workflowActions} sourceLabel={sourceLabel}
         renderSource={observationsAvailable ? stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} timelineLabel={timelineLabel} /> : undefined} />}
       <div className={styles.workflowNotes}>
@@ -767,7 +775,7 @@ export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailab
 }
 
 /**
- * "Open automation" with the page's top actions, once an Automation Flow was
+ * "Open automation" in the Task Page header, once an Automation Flow was
  * created from this task (the questions block offers the same action below).
  */
 function OpenAutomationButton({ taskId, find, open }: {

@@ -121,17 +121,17 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     expect(createAutomationFlow).not.toHaveBeenCalled();
   });
 
-  it("offers « Open automation » at the top of the page too, once the automation exists", async () => {
+  it("offers « Open automation » in the page header too, once the automation exists", async () => {
     const openAutomationFlow = vi.fn(async () => {});
     await openTaskPage({ createAutomationFlow: vi.fn(async () => {}), findAutomationFlow: vi.fn(async () => "flow-1"), openAutomationFlow });
 
-    const buttons = await screen.findAllByRole("button", { name: "Open automation" });
-    expect(buttons).toHaveLength(2);
-    const [top] = buttons;
+    const header = screen.getByTestId("task-header");
+    const top = await within(header).findByRole("button", { name: "Open automation" });
+    expect(within(header).getByRole("button", { name: /All workflows/ })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Open automation" })).toHaveLength(2);
+    // The header comes before the page's content and the questions.
     const firstQuestion = screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] });
-    // The top one comes before the questions, with the page's other actions.
-    expect(top.compareDocumentPosition(firstQuestion) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(top.closest("form")).toBeNull();
+    expect(header.compareDocumentPosition(firstQuestion) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(top);
     await waitFor(() => expect(openAutomationFlow).toHaveBeenCalledWith("flow-1"));
   });
