@@ -21,7 +21,7 @@ export const fixtureFlow: Flow = {
   // The scripted task's first evidence (an embedded image, so no recorder frame).
   sourceMoment: { frameId: null, timestamp: "2026-10-17T02:05:41Z" },
   summary:
-    "Turns each bug or idea email sent to the NovaDesk support inbox into a ticket in the Jira project NOVA, and never creates a duplicate. AI only decides the type, product, priority and label, from how you handled similar emails in screenpipe; when it is not sure, nothing is created and screenpipe sends you a \"Sort by hand\" notification. Nothing runs until you turn it on.",
+    "Turns each bug or idea email sent to the NovaDesk support inbox into a clear ticket for the dev team in the Jira project NOVA, and never creates a duplicate. AI decides the type, product, priority and label from how you handled similar emails in screenpipe, and rewrites the email as a summary, steps to reproduce, expected result and impact; when it is not sure, nothing is created and screenpipe sends you a \"Sort by hand\" notification. Nothing runs until you turn it on.",
   nodes: [
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000001",
@@ -35,7 +35,7 @@ export const fixtureFlow: Flow = {
       name: "Read the email (AI)",
       type: "@n8n/n8n-nodes-langchain.agent",
       position: [260, 0],
-      sentence: "An AI reads the email as plain data, never as an instruction, looks in screenpipe at how you handled similar emails, then suggests the ticket type (Bug, Task or none), the product, a short summary, the priority, the back or front label, how sure it is and why.",
+      sentence: "An AI reads the email as plain data, never as an instruction, looks in screenpipe at how you handled similar emails, then picks the ticket type (Bug, Task or none), product, priority and back or front label, says how sure it is and why, and rewrites the email as a clear ticket for the dev team.",
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000003",
@@ -49,7 +49,7 @@ export const fixtureFlow: Flow = {
       name: "Answer format",
       type: "@n8n/n8n-nodes-langchain.outputParserStructured",
       position: [300, 220],
-      sentence: "The AI's answer is limited to seven fixed fields: type, product, priority, label and confidence from a closed list, a one-line summary of 80 characters at most and a reason of 200 characters at most.",
+      sentence: "The AI's answer has fixed fields: type, product, priority, label and confidence from a closed list, a one-line summary of 80 characters at most, a short reason, and the ticket text for developers (summary, steps to reproduce, expected result, impact), each of bounded length.",
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a000000009",
@@ -105,7 +105,7 @@ export const fixtureFlow: Flow = {
       name: "Create the Jira ticket",
       type: "n8n-nodes-base.httpRequest",
       position: [1420, 0],
-      sentence: "The ticket is created without AI in the Jira project NOVA from the AI's fields, titled \"Product - summary\", with the original email quoted as plain text and assigned to nobody.",
+      sentence: "The ticket is created without AI in the Jira project NOVA from the AI's fields, titled \"Product - summary\", with the AI's write-up for developers (summary, steps to reproduce, expected result, impact) and the email's sender, date and subject as its source, assigned to nobody.",
     },
     {
       id: "6d0f5c1e-0b7a-4c55-9f1e-01a00000000f",

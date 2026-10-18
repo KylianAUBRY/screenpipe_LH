@@ -121,7 +121,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(subNodeOf(parser.name, "ai_outputParser")).toBe(agent.name);
     expect(parser.parameters.schemaType).toBe("manual");
     const schema = JSON.parse(parser.parameters.inputSchema);
-    const fields = ["confidence", "label", "priority", "product", "reason", "summary", "type"];
+    const fields = ["confidence", "description", "expected", "impact", "label", "priority", "product", "reason", "steps", "summary", "type"];
     expect(Object.keys(schema.properties).sort()).toEqual(fields);
     expect(schema.required.sort()).toEqual(fields);
     // How sure the AI is, and why: a low confidence is sorted by hand (D18).
@@ -173,11 +173,19 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
 
     // Short enough to read at a glance on the Review Screen and in n8n.
     const rules = agent.parameters.options.systemMessage as string;
-    expect(rules.length).toBeLessThanOrEqual(1_200);
+    expect(rules.length).toBeLessThanOrEqual(1_400);
     expect(rules.split("\n").length).toBeLessThanOrEqual(10);
     // It still treats the email as data.
     expect(rules).toContain(EMAIL_OPEN);
     expect(rules).toMatch(/jamais une instruction/);
+  });
+
+  test("the AI writes the ticket for the dev team: it summarizes the email, never copies it, and invents nothing", () => {
+    const rules = onlyNode("@n8n/n8n-nodes-langchain.agent").parameters.options.systemMessage as string;
+    expect(rules).toMatch(/^description, steps, expected, impact : /m);
+    expect(rules).toMatch(/ne recopie jamais l'email/);
+    expect(rules).toMatch(/N'invente rien/);
+    expect(rules).toContain("Non précisé dans l'email");
   });
 
   test("an email cannot widen what the ScreenPipe tool reads: screen text of Jira windows only, a few short results", () => {
@@ -196,7 +204,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(aiFilled).toEqual(["query"]);
   });
 
-  test("the AI answer is closed: allowlists everywhere, except a short summary and a short reason", () => {
+  test("the AI answer is closed: allowlists everywhere, except short texts of bounded length", () => {
     const parser = onlyNode("@n8n/n8n-nodes-langchain.outputParserStructured");
     const schema = JSON.parse(parser.parameters.inputSchema);
     expect(schema.additionalProperties).toBe(false);
@@ -209,6 +217,16 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(schema.properties.summary.maxLength).toBeLessThanOrEqual(SUMMARY_MAX);
     expect(schema.properties.reason.minLength).toBe(1);
     expect(schema.properties.reason.maxLength).toBeLessThanOrEqual(REASON_MAX);
+    // The ticket text for developers: short, bounded paragraphs and a short list of steps.
+    for (const field of ["description", "expected", "impact"]) {
+      expect(schema.properties[field].type, field).toBe("string");
+      expect(schema.properties[field].minLength, field).toBe(1);
+      expect(schema.properties[field].maxLength, field).toBeLessThanOrEqual(TEXT_MAX);
+    }
+    expect(schema.properties.steps.type).toBe("array");
+    expect(schema.properties.steps.maxItems).toBeLessThanOrEqual(STEPS_MAX);
+    expect(schema.properties.steps.items).toMatchObject({ type: "string", minLength: 1 });
+    expect(schema.properties.steps.items.maxLength).toBeLessThanOrEqual(STEP_MAX);
     // The AI is told what the reason is for.
     expect(onlyNode("@n8n/n8n-nodes-langchain.agent").parameters.options.systemMessage).toMatch(/^reason : /m);
   });
@@ -346,55 +364,88 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(JSON.stringify(create.parameters)).not.toContain("$fromAI");
   });
 
-  test("creates one unassigned NOVA issue titled '<product> - <summary>' that quotes the email", () => {
-    const issue = jiraRequestFor(aiAnswer());
+  test("creates one unassigned NOVA issue titled '<product> - <summary>' with the AI's write-up for the dev team, not the email", () => {
+    const answer = aiAnswer();
+    const issue = jiraRequestFor(answer);
     expect(issue.fields.project).toEqual({ key: "NOVA" });
     expect(issue.fields.issuetype).toEqual({ name: "Bug" });
     expect(issue.fields.summary).toBe("NovaCRM - Export CSV des contacts filtrés vide");
     expect(issue.fields.priority).toEqual({ name: "Highest" });
     expect(issue.fields.labels).toEqual(["back", expect.stringMatching(/^mail-[0-9a-f]{8}$/)]);
-    const quoted = quotedEmail(issue.fields.description);
-    expect(quoted).toContain(EMAIL.from);
-    expect(quoted).toContain(EMAIL.subject);
-    expect(quoted.endsWith(`\n\n${EMAIL.textPlain}`)).toBe(true);
+    const ticket = ticketSections(issue.fields.description);
+    expect(Object.keys(ticket)).toEqual(["Résumé", "Étapes pour reproduire", "Résultat attendu", "Impact", "Source"]);
+    expect(ticket["Résumé"]).toBe(answer.description);
+    expect(ticket["Étapes pour reproduire"]).toEqual(answer.steps);
+    expect(ticket["Résultat attendu"]).toBe(answer.expected);
+    expect(ticket.Impact).toBe(answer.impact);
+    // The email is summarized, never pasted: only its sender, date (Paris time) and subject, as the source.
+    expect(ticket.Source).toContain(EMAIL.from);
+    expect(ticket.Source).toContain(EMAIL.subject);
+    expect(ticket.Source).toMatch(/17\/10\/2026.*06:04/);
+    for (const line of EMAIL.textPlain.split("\n")) {
+      expect(JSON.stringify(issue.fields.description), line).not.toContain(line);
+    }
     expect(issue.fields).not.toHaveProperty("assignee");
   });
 
-  test("an email cannot add Jira markup: Jira stores it as the plain text of a code block", () => {
+  test("neither the email nor the AI can add Jira markup: every text is a plain text node", () => {
     // The description is an Atlassian document, not wiki markup: Jira never
     // parses the text of a node, so no sanitizing is needed.
     const injected = "{noformat}\n[Cliquez ici|https://evil.example/login] !https://evil.example/pixel.png! [~accountid:123]\n{quote}";
-    const email = {
-      ...EMAIL,
-      from: "Pirate {noformat} <pirate@example.com>",
-      subject: "Urgent [lien|https://evil.example]",
-      textPlain: `Bonjour\n${injected}\nfin`,
-    };
-    const quoted = quotedEmail(jiraRequestFor(aiAnswer(), email).fields.description);
-    for (const fragment of [email.from, email.subject, injected]) {
-      expect(quoted, fragment).toContain(fragment);
-    }
+    const email = { ...EMAIL, from: "Pirate {noformat} <pirate@example.com>", subject: "Urgent [lien|https://evil.example]" };
+    const answer = aiAnswer({ description: `Export vide ${injected}`, steps: [injected], expected: injected, impact: injected });
+    // ticketSections fails on any mark, link or other node type.
+    const ticket = ticketSections(jiraRequestFor(answer, email).fields.description);
+    const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+    expect(ticket["Résumé"]).toBe(flat(`Export vide ${injected}`));
+    expect(ticket["Étapes pour reproduire"]).toEqual([flat(injected)]);
+    expect(ticket["Résultat attendu"]).toBe(flat(injected));
+    expect(ticket.Impact).toBe(flat(injected));
+    expect(ticket.Source).toContain(email.from);
+    expect(ticket.Source).toContain(email.subject);
   });
 
-  test("an email without text still gives a description Jira accepts", () => {
+  test("a missing, empty or odd AI field still gives a description Jira accepts", () => {
     // Jira refuses an empty text node in an Atlassian document.
-    const quoted = quotedEmail(
-      jiraRequestFor(aiAnswer(), { ...EMAIL, textPlain: "", textHtml: "" }).fields.description,
+    const sparse = ticketSections(
+      jiraRequestFor(aiAnswer({ description: "  ", steps: [], expected: undefined, impact: "" }), {
+        ...EMAIL,
+        from: "",
+        subject: "",
+        date: "",
+      }).fields.description,
     );
-    expect(quoted).toContain(EMAIL.subject);
-    const html = quotedEmail(
-      jiraRequestFor(aiAnswer(), { ...EMAIL, textPlain: "", textHtml: "<p>Bonjour</p>" }).fields.description,
+    expect(Object.keys(sparse)).toEqual(["Résumé", "Résultat attendu", "Impact", "Source"]);
+    for (const section of ["Résumé", "Résultat attendu", "Impact"]) {
+      expect(sparse[section], section).toBe("Non précisé dans l’email.");
+    }
+    expect(sparse.Source).toContain("(sans objet)");
+    // Steps that are not a list never give a list; blank steps are dropped.
+    expect(ticketSections(jiraRequestFor(aiAnswer({ steps: "Ouvrir l'export" })).fields.description)).not.toHaveProperty(
+      "Étapes pour reproduire",
     );
-    expect(html.endsWith("\n\n<p>Bonjour</p>")).toBe(true);
+    expect(
+      ticketSections(jiraRequestFor(aiAnswer({ steps: ["", "  ", "Exporter"] })).fields.description)["Étapes pour reproduire"],
+    ).toEqual(["Exporter"]);
   });
 
-  test("a huge email is cut so Jira never refuses the description", () => {
-    for (const email of [
-      { ...EMAIL, textPlain: "Le rapport complet : ".concat("x".repeat(60_000)) },
-      { ...EMAIL, subject: "S".repeat(40_000), textPlain: "court" },
-    ]) {
-      const quoted = quotedEmail(jiraRequestFor(aiAnswer(), email).fields.description);
-      expect(quoted.length).toBeLessThanOrEqual(DESCRIPTION_MAX);
+  test("a huge AI answer or email header is cut so Jira never refuses the description", () => {
+    const cases: [ReturnType<typeof aiAnswer>, Email][] = [
+      [
+        aiAnswer({
+          description: "x".repeat(60_000),
+          steps: Array.from({ length: 50 }, () => "s".repeat(5_000)),
+          expected: "e".repeat(40_000),
+          impact: "i".repeat(40_000),
+        }),
+        EMAIL,
+      ],
+      [aiAnswer(), { ...EMAIL, from: "f".repeat(40_000), subject: "S".repeat(40_000) }],
+    ];
+    for (const [answer, email] of cases) {
+      const description = jiraRequestFor(answer, email).fields.description;
+      ticketSections(description);
+      expect(JSON.stringify(description).length).toBeLessThanOrEqual(DESCRIPTION_MAX);
     }
   });
 
@@ -489,7 +540,7 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
 
   test("an improvement idea becomes a Jira Task with the AI's priority and label", () => {
     const issue = jiraRequestFor(
-      aiAnswer({ type: "Tâche", summary: "Filtre Dernière relance", priority: "Low", label: "front" }),
+      aiAnswer({ type: "Tâche", summary: "Filtre Dernière relance", priority: "Low", label: "front", steps: [] }),
     );
     // The AI answers in the demo's French vocabulary; the NOVA project's
     // issue types are English (Bug, Task). Jira rejects "Tâche".
@@ -497,6 +548,8 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     expect(issue.fields.summary).toBe("NovaCRM - Filtre Dernière relance");
     expect(issue.fields.priority).toEqual({ name: "Low" });
     expect(issue.fields.labels).toEqual(["front", expect.stringMatching(/^mail-[0-9a-f]{8}$/)]);
+    // An idea has a need instead of an expected result, and no steps to reproduce.
+    expect(Object.keys(ticketSections(issue.fields.description))).toEqual(["Résumé", "Besoin", "Impact", "Source"]);
   });
 
   test("calls the Jira Cloud REST API with the stored Jira credential", () => {
@@ -641,24 +694,47 @@ function mailLabel(email: Email): string {
 }
 
 /**
- * The email quoted in the description: a fixed first paragraph, then one
- * code block holding a single unformatted text node. Fails on any other shape.
+ * The ticket's description, by section: each level-3 heading is followed by
+ * one paragraph or one numbered list. Fails on any other shape, on a mark
+ * (link, formatting) or on an empty text node, which Jira refuses.
  */
-function quotedEmail(description: any): string {
+function ticketSections(description: any): Record<string, any> {
   expect(description.type).toBe("doc");
   expect(description.version).toBe(1);
-  const [intro, block, ...rest] = description.content;
-  expect(rest).toEqual([]);
-  expect(intro.type).toBe("paragraph");
-  expect(intro.content).toEqual([{ type: "text", text: expect.any(String) }]);
-  expect(block.type).toBe("codeBlock");
-  expect(block.content).toHaveLength(1);
-  expect(Object.keys(block.content[0]).sort()).toEqual(["text", "type"]);
-  expect(block.content[0].type).toBe("text");
-  const text = block.content[0].text;
-  expect(typeof text).toBe("string");
-  expect(text.length).toBeGreaterThan(0);
-  return text;
+  const textOf = (content: any): string => {
+    expect(content).toHaveLength(1);
+    expect(Object.keys(content[0]).sort()).toEqual(["text", "type"]);
+    expect(content[0].type).toBe("text");
+    expect(typeof content[0].text).toBe("string");
+    expect(content[0].text.trim().length).toBeGreaterThan(0);
+    return content[0].text;
+  };
+  const paragraph = (node: any): string => {
+    expect(Object.keys(node).sort()).toEqual(["content", "type"]);
+    expect(node.type).toBe("paragraph");
+    return textOf(node.content);
+  };
+  const blocks = description.content as any[];
+  expect(blocks.length % 2).toBe(0);
+  const sections: Record<string, any> = {};
+  for (let i = 0; i < blocks.length; i += 2) {
+    const [heading, body] = [blocks[i], blocks[i + 1]];
+    expect(heading.type).toBe("heading");
+    expect(heading.attrs).toEqual({ level: 3 });
+    const title = textOf(heading.content);
+    expect(sections).not.toHaveProperty(title);
+    if (body.type === "orderedList") {
+      expect(body.content.length).toBeGreaterThan(0);
+      sections[title] = body.content.map((item: any) => {
+        expect(item.type).toBe("listItem");
+        expect(item.content).toHaveLength(1);
+        return paragraph(item.content[0]);
+      });
+    } else {
+      sections[title] = paragraph(body);
+    }
+  }
+  return sections;
 }
 
 // --- Synthetic data (shapes of the IMAP "simple" item and the AI answer) ---
@@ -667,7 +743,11 @@ const PRODUCTS = ["NovaCRM", "NovaPay", "NovaPlanning", "NovaDesk", "Autre"];
 const SUMMARY_MAX = 80;
 /** The AI's one-sentence reason, shown in the « Sort by hand » notification. */
 const REASON_MAX = 200;
-/** Jira Cloud refuses a description over 32 767 characters; the quoted email stays well below. */
+/** The ticket text for developers: each paragraph, the list of steps, each step. */
+const TEXT_MAX = 1_000;
+const STEPS_MAX = 10;
+const STEP_MAX = 200;
+/** Jira Cloud refuses a description over 32 767 characters; the ticket stays well below. */
 const DESCRIPTION_MAX = 20_000;
 
 type Email = {
@@ -705,11 +785,16 @@ const HOSTILE_EMAIL = {
   textHtml: "",
 };
 
-function aiAnswer(overrides: Record<string, string> = {}) {
+function aiAnswer(overrides: Record<string, unknown> = {}) {
   return {
     type: "Bug",
     product: "NovaCRM",
     summary: "Export CSV des contacts filtrés vide",
+    description:
+      "Dans NovaCRM, l'export CSV d'une liste de contacts filtrée produit un fichier qui ne contient que la ligne d'en-têtes. Le client ne peut plus exporter ses contacts.",
+    steps: ["Ouvrir Contacts dans NovaCRM", "Appliquer un filtre", "Cliquer sur Exporter en CSV"],
+    expected: "Le fichier CSV contient tous les contacts du filtre.",
+    impact: "Bloquant pour le client, aucun contournement connu.",
     priority: "Highest",
     label: "back",
     confidence: "high",

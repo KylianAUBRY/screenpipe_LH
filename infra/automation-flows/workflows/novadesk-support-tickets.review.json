@@ -1,5 +1,5 @@
 {
   "workflowId": "spNovaFlow000001",
   "sourceTaskId": "wf-novadesk-support-tickets",
-  "summary": "Turns each bug or idea email sent to the NovaDesk support inbox into a ticket in the Jira project NOVA, and never creates a duplicate. AI only decides the type, product, priority and label, from how you handled similar emails in screenpipe; when it is not sure, nothing is created and screenpipe sends you a \"Sort by hand\" notification. Nothing runs until you turn it on."
+  "summary": "Turns each bug or idea email sent to the NovaDesk support inbox into a clear ticket for the dev team in the Jira project NOVA, and never creates a duplicate. AI decides the type, product, priority and label from how you handled similar emails in screenpipe, and rewrites the email as a summary, steps to reproduce, expected result and impact; when it is not sure, nothing is created and screenpipe sends you a \"Sort by hand\" notification. Nothing runs until you turn it on."
 }
