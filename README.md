@@ -113,11 +113,18 @@ Flow from a request; it goes through the same review.
 
 ![Screenpipe chat with the Create flow shortcut](docs/automation-flows/screenshots/6-chat-create-flow.png)
 
-**7. Screenpipe nodes in n8n.** A workflow started by the **ScreenPipe
+**7. Describe the Flow.** **New Flow** fills in the creation prompt; you add
+what the Flow should do, here: when I say "create a ticket", turn the last two
+minutes of what I said into a Jira task. The chat builds it in n8n, switched
+off, and links to its Review Screen.
+
+![Screenpipe chat with a Flow creation prompt](docs/automation-flows/screenshots/7-chat-creation-prompt.png)
+
+**8. Screenpipe nodes in n8n.** A workflow started by the **ScreenPipe
 Trigger** on a spoken keyword: two **ScreenPipe** steps summarize the activity
 and fetch recent captures, then an AI step writes a briefing.
 
-![n8n workflow built with the ScreenPipe Trigger and ScreenPipe nodes](docs/automation-flows/screenshots/7-screenpipe-nodes-in-n8n.png)
+![n8n workflow built with the ScreenPipe Trigger and ScreenPipe nodes](docs/automation-flows/screenshots/8-screenpipe-nodes-in-n8n.png)
 
 ## Quick start
 
