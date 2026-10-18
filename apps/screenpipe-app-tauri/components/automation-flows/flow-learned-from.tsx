@@ -11,7 +11,6 @@
 
 import React, { useEffect, useState } from "react";
 import { Clock, ImageOff } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -68,9 +67,7 @@ export function FlowLearnedFrom({ flow, api }: { flow: Flow; api: FlowsApi }) {
               View in timeline
             </OpenButton>
           )}
-          <Button size="sm" variant="outline" onClick={() => void api.openTaskPage(taskId)}>
-            View task
-          </Button>
+          {/* No way to the Task Page here: « Review and edit » at the top opens it. */}
         </div>
       </div>
       {repetitions && repetitions.length > 0 && (

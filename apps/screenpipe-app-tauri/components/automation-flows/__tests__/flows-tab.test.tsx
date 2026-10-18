@@ -282,13 +282,16 @@ describe("Review Screen", () => {
     expect(await screen.findByText(line)).toBeTruthy();
   });
 
-  it("opens the graph in n8n and goes back to the Task Page", async () => {
+  it("opens the graph in n8n, and the Task Page only from « Review and edit »", async () => {
     const api = fakeApi();
     render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={api} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Open in n8n" }));
     expect(api.openInN8n).toHaveBeenCalledWith(fixtureFlow.n8nUrl);
-    fireEvent.click(screen.getByRole("button", { name: "View task" }));
+    // « Learned from » had its own « View task » to the same page: gone.
+    await screen.findByTestId("flow-learned-from");
+    expect(screen.queryByRole("button", { name: "View task" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Review and edit" }));
     expect(api.openTaskPage).toHaveBeenCalledWith(fixtureFlow.sourceTaskId);
   });
 
@@ -756,9 +759,6 @@ describe("Review Screen", () => {
     expect(within(cards[0]).getAllByRole("button", { name: /^Open capture \d of 3/ })).toHaveLength(3);
     expect(within(cards[0]).getByText(/Oct 17, .+ · Gmail, Jira$/)).toBeTruthy();
     expect(within(cards[1]).getByText("No capture")).toBeTruthy();
-
-    fireEvent.click(within(screen.getByTestId("flow-learned-from")).getByRole("button", { name: "View task" }));
-    expect(api.openTaskPage).toHaveBeenCalledWith(fixtureFlow.sourceTaskId);
   });
 
   it("opens a capture large, with the timeline only for a recorder frame of this machine", async () => {
@@ -992,7 +992,7 @@ describe("Design rules (docs/DESIGN.md)", () => {
     );
     await screen.findByRole("heading", { name: fixtureFlow.name });
     expect(forcedCasing(review.container)).toEqual([]);
-    for (const name of ["Pause", "Open in n8n", "View task"]) {
+    for (const name of ["Pause", "Open in n8n", "Review and edit"]) {
       expect(screen.getByRole("button", { name })).toBeTruthy();
     }
     expect(screen.getByRole("heading", { name: "What this Flow does" })).toBeTruthy();
