@@ -59,10 +59,10 @@ after a previous run before `demo.ts`.
 | 0:50 | Review Screen: summary, « Learned from » captures, graph with one sentence per step; « Open in n8n » (n8n in Safari) for 5 s. | |
 | 1:10 | Click « Turn on ». Send the bug email from the phone (the draft). | active in < 1 s |
 | 1:20 | While it works (~10–20 s after Send: 5 s Undo Send, then Gmail poll every 5 s, AI ~4 s, Jira ~1 s), show the history line « Turned on by you ». | ScreenPipe notification « Ticket NOVA-xx created » with « Open in Jira » |
-| 1:45 | Click « Open in Jira »: the ticket « NovaCRM - … », Bug, High, label `back`, sections Context → Acceptance criteria, unassigned. | NOVA-58–61: 8.6–12.6 s after the send (18 Oct, sent by API) |
-| 2:00 | « Change it » → add « Add the auto label to every ticket it creates » → send. | Needs Review + switched off in ~15–20 s |
-| 2:25 | « Review the Flow » → banner « changed since it was last on » → « Turn on ». | re-activated at t+105 s |
-| 2:40 | (If time) a second email → ticket with labels `auto` + `back`. | NOVA-35 |
+| 1:45 | Click « Open in Jira »: the ticket « NovaCRM - … », Bug, High, label `back`, sections Context → Acceptance criteria, unassigned. | NOVA-58–61: 8.6–12.6 s after the send (API); live rehearsal 18 Oct 14:54: NOVA-62 at +13.6 s |
+| 2:00 | Open the ScreenPipe chat (the Review Screen has no « Change it » button any more) and send: `In the Automation Flow "NovaDesk: support emails → Jira tickets", add the label auto to every Jira ticket it creates.` | Flow paused, new version with `auto` in its Jira step |
+| 2:25 | Automations → Flows → NovaDesk → banner « changed since it was last on » → « Turn on ». | On re-activation the Gmail trigger re-reads the previous email once; the duplicate check stops it (no second ticket, one extra Activity row). |
+| 2:40 | (If time) a second email → ticket with labels `auto` + `back`. | live rehearsal 18 Oct 15:00: NOVA-63 at +8.0 s, labels `auto` + `back` |
 
 Total measured without narration: 105–110 s for the whole journey in
 rehearsals 1–3 (`evidence/LIVE-CHECKS.md`). **Show the ticket in Jira before
