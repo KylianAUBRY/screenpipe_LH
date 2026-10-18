@@ -1,5 +1,9 @@
 # Screenpipe × n8n: Automation Flows
 
+**Integrated into Screenpipe and ready to use.** Automation Flows live in the
+Screenpipe desktop app, under Automations → **Flows**: connect a local n8n
+with the [Quick start](#quick-start) and they work.
+
 **Screenpipe spots the work you repeat. Automation Flows turn it into an
 [n8n](https://n8n.io) workflow you can read before it runs: explicit steps,
 AI only where judgment is needed, nothing on until you say so.**
