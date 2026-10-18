@@ -3,6 +3,6 @@
 
 # Domain Docs
 
-This repo is single-context. `CONTEXT.md` (repo root) is the hackathon glossary
-(notably `Automation Flow`, `Detected Task`); use those terms. If `GLOSSARY.md` or `docs/adr/`
+This repo is single-context. `CONTEXT.md` (repo root) is the Automation Flows
+glossary (notably `Automation Flow`, `Detected Task`); use those terms. If `GLOSSARY.md` or `docs/adr/`
 exist, follow them; otherwise proceed.
