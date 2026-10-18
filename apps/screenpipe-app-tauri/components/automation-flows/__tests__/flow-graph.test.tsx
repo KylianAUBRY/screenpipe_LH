@@ -128,7 +128,7 @@ describe("Review Screen graph", () => {
   const node = (name: string) => fixtureFlow.nodes.find((candidate) => candidate.name === name)!;
   const link = (from: string, to: string) => ({ from: node(from).id, to: node(to).id });
 
-  // A workflow on one row: an AI step with its model, parser and tool, then
+  // A workflow on one row: an AI step with its model and parser, then
   // two more steps.
   const AI_STEP = "Read the email (AI)";
   const linearFlow: Flow = {
@@ -138,7 +138,6 @@ describe("Review Screen graph", () => {
       AI_STEP,
       "screenpipe AI model",
       "Answer format",
-      "screenpipe history",
       "Ticket needed",
       "Create the Jira ticket",
     ].map(node),
@@ -146,7 +145,6 @@ describe("Review Screen graph", () => {
       link("New support email", AI_STEP),
       link("screenpipe AI model", AI_STEP),
       link("Answer format", AI_STEP),
-      link("screenpipe history", AI_STEP),
       link(AI_STEP, "Ticket needed"),
       link("Ticket needed", "Create the Jira ticket"),
     ],
@@ -207,8 +205,8 @@ describe("Review Screen graph", () => {
     const at = (name: string) => box(node(name).id);
     const row = at(AI_STEP).y;
 
-    // Only the AI step's model, parser and tools hang under it.
-    for (const name of ["screenpipe AI model", "Answer format", "screenpipe history", "screenpipe activity"]) {
+    // Only the AI step's model and parser hang under it.
+    for (const name of ["screenpipe AI model", "Answer format"]) {
       expect(at(name).y).toBeGreaterThan(row);
     }
     // n8n draws « Confident enough » below « Sort by hand », and « Let Jira
@@ -238,7 +236,7 @@ describe("Review Screen graph", () => {
     expect(links.length).toBe(fixtureFlow.edges.length);
 
     const byName = new Map(fixtureFlow.nodes.map((node) => [node.name, node]));
-    const contextNames = new Set(["screenpipe AI model", "Answer format", "screenpipe history", "screenpipe activity"]);
+    const contextNames = new Set(["screenpipe AI model", "Answer format"]);
     for (const link of links) {
       const [from, to] = link.getAttribute("aria-label")!.split(" → ").map((name) => byName.get(name)!);
       const alongRow = !contextNames.has(from.name) && from.position[1] === to.position[1] && to.position[0] > from.position[0];
@@ -276,7 +274,7 @@ describe("Review Screen graph", () => {
     const graph = await renderGraph();
     const box = boxes(graph);
     const centreX = (id: string) => box(id).x + box(id).width / 2;
-    const context = ["screenpipe AI model", "Answer format", "screenpipe history", "screenpipe activity"].map(
+    const context = ["screenpipe AI model", "Answer format"].map(
       (name) => node(name).id,
     );
     const mean = context.reduce((sum, id) => sum + centreX(id), 0) / context.length;

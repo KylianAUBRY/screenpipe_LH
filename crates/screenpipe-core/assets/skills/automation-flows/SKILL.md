@@ -240,7 +240,12 @@ off; the user reviews it and switches it on.
        (`appName`, `windowName`, `startTime`, `endTime`); or `operation`
        `activitySummary` with `startTime` (e.g. `1h ago`), `endTime`
        (`now`) and `summaryFilters` (`appName`, `query`); both take
-       `maxTextLength` (default 1000).
+       `maxTextLength` (default 1000). `CUSTOM.screenPipe` also has
+       `operation` `notify`, which shows the user a ScreenPipe notification:
+       `title`, `body` (plain text), `buttonLabel` and `buttonUrl` (a web
+       link, or `screenpipe://flows/<id>` to open inside ScreenPipe; leave
+       both out for no button), `notificationId` (one notification per id;
+       leave it out for one per run) and `notifyUrl` (leave it out).
 4. Build it step by step in a hidden draft (« Build a Flow step by step »),
    with its `summary`: 2 or 3 plain English sentences, what the Flow does and
    how.
