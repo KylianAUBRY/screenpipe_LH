@@ -8,6 +8,7 @@ import { createFixtureWorkflowsPlatform } from "@screenpipe/workflows-ui/fixture
 import { buildDetectedTask, CLARIFICATION_QUESTIONS, DEMO_TASK_ID, QUESTION_CHOICES } from "@/lib/automation-flows/demo-task/detected-task";
 import { upsertTask } from "@/lib/automation-flows/demo-task/catalog";
 import { readWorkflowAnswers } from "../../../../packages/workflows-ui/src/workflow-answers";
+import { THINKING_MS } from "../../../../packages/workflows-ui/src/workflow-questions";
 
 // The Task Page of the scripted Detected Task, opened as the notification does.
 const at = "2026-10-17T02:05:41Z";
@@ -136,8 +137,18 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     expect(within(form).getByText("Confirm to apply your changes to the automation.")).toBeVisible();
     expect(confirm).toBeEnabled();
 
-    fireEvent.click(confirm); fireEvent.click(confirm);
-    await waitFor(() => expect(createAutomationFlow).toHaveBeenCalledTimes(1));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fireEvent.click(confirm); fireEvent.click(confirm);
+      // The AI « thinks » first, shown in percent only (no time), before anything is applied.
+      const thinking = await within(form).findByRole("progressbar", { name: "Applying your changes" });
+      expect(thinking).toHaveTextContent(/\d+%/);
+      expect(thinking).not.toHaveTextContent(/second|\d\s?s\b/);
+      expect(within(form).getByRole("button", { name: "Applying…" })).toBeDisabled();
+      expect(createAutomationFlow).not.toHaveBeenCalled();
+      await act(() => vi.advanceTimersByTimeAsync(THINKING_MS));
+      await waitFor(() => expect(createAutomationFlow).toHaveBeenCalledTimes(1));
+    } finally { vi.useRealTimers(); }
     expect(order).toEqual(["save", "apply"]);
     expect(createAutomationFlow).toHaveBeenCalledWith(DEMO_TASK_ID, [
       { question: CLARIFICATION_QUESTIONS[0], answer: "No, only bugs." },

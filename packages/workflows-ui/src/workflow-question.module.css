@@ -46,3 +46,10 @@
 .choices button:disabled { opacity: 0.5; }
 /* Native controls (textarea scrollbars, checkboxes) follow the app theme. */
 :global(.dark) .questions { color-scheme: dark; }
+/* « Confirm changes »: simulated AI thinking, shown as a percentage only. */
+.thinking { flex: 1; min-width: 200px; max-width: 420px; display: grid; gap: 8px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.thinking > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
+.thinking > div:first-child > div:last-child { color: var(--ink); font-variant-numeric: tabular-nums; }
+.track { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.track > div { height: 100%; background: var(--ink); transition: width .2s ease-out; }
+@media (prefers-reduced-motion: reduce) { .track > div { transition: none; } }

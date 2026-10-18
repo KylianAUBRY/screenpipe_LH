@@ -52,6 +52,7 @@ const COPY = {
     footer: "Saved answers refine future workflow updates.",
     save: "Save answers", saving: "Saving…",
     choices: "Suggested answers", created: "", open: "", pending: "", confirm: "", applying: "",
+    thinkingLabel: "", thinking: (_percent: number) => "",
   },
   creation: {
     section: "Questions and feedback",
@@ -80,8 +81,32 @@ const COPY = {
     created: "This automation is already created. Open it from the top of the page.",
     pending: "Confirm to apply your changes to the automation.",
     confirm: "Confirm changes", applying: "Applying…",
+    thinkingLabel: "Applying your changes",
+    thinking: (percent: number) => percent < 25 ? "Reading your changes…" : percent < 55 ? "Thinking through the automation…" : percent < 85 ? "Checking each step…" : "Finishing up…",
   },
 };
+/** How long « Confirm changes » shows the AI thinking before it applies the answers. */
+export const THINKING_MS = 5000;
+/**
+ * Simulated AI thinking for « Confirm changes »: 0 → 100 % over `ms`, in uneven
+ * jumps with pauses, never going back. It reports a percentage only, no time.
+ */
+function think(ms: number, onProgress: (percent: number) => void) {
+  return new Promise<void>(resolve => {
+    const start = Date.now();
+    let shown = 0;
+    const tick = () => {
+      const elapsed = Date.now() - start;
+      if (elapsed >= ms) { onProgress(100); resolve(); return; }
+      const f = elapsed / ms;
+      // Slow start, faster middle, slow end; skipped ticks read as pauses.
+      const target = Math.floor(100 * f * f * (3 - 2 * f));
+      if (target > shown && Math.random() > 0.35) { shown = target; onProgress(shown); }
+      setTimeout(tick, Math.min(80 + Math.random() * 160, ms - elapsed));
+    };
+    onProgress(0); tick();
+  });
+}
 export function WorkflowQuestions({ workflow, save, voice, active = true, createFlow, findFlow }: {
   workflow: WorkflowMap;
   save?: (correction: string) => Promise<WorkflowMap>;
@@ -122,6 +147,8 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
   const [filling, setFilling] = useState(false);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
+  // « Confirm changes »: the simulated thinking, in percent, while it runs.
+  const [progress, setProgress] = useState<number | null>(null);
   // The Flow already created from this task: the page header opens it.
   const [existingFlow, setExistingFlow] = useState<string | null>(null);
   // Looked up per task, and again each time the page is shown: the host keeps
@@ -225,7 +252,7 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
   /**
    * Saves the answers first, so the Flow is never created from answers that
    * were not kept. Once the Flow exists, the same call applies changed
-   * answers to it (« Confirm changes »).
+   * answers to it (« Confirm changes »), after a simulated AI thinking.
    */
   async function create() {
     if (!createFlow || !complete || (existingFlow && !changed) || saving.current) return;
@@ -233,9 +260,10 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
     saving.current = true; setBusy(true); setCreating(true); setError(""); setNotice("");
     try {
       const kept = save && changed ? await persist(save) : answers;
+      if (existingFlow) await think(THINKING_MS, setProgress);
       await createFlow(fields.filter(q => kept[q]?.trim()).map(question => ({ question, answer: kept[question].trim() })));
     } catch (cause) { setError(cause instanceof Error ? cause.message : existingFlow ? "Could not apply the changes. Your answers are kept. Try again." : "Could not create the automation. Your answers are kept. Try again."); }
-    finally { saving.current = false; setBusy(false); setCreating(false); }
+    finally { saving.current = false; setBusy(false); setCreating(false); setProgress(null); }
   }
   if (!questions.length) return null;
   const saveButton = <button type="submit" disabled={!changed || busy}>{busy ? t.saving : t.save}</button>;
@@ -276,7 +304,12 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
         </div>
       </div>)}
       {error && <p className={styles.error} role="alert">{error}</p>}
-      {save && <div className={styles.actions}><span role="status">{notice || (recording || filling ? t.savingStopsVoice : createFlow && existingFlow ? changed ? t.pending : t.created : t.footer)}</span>{createFlow ? existingFlow
+      {save && <div className={styles.actions}>{progress !== null
+        ? <div className={styles.thinking} role="progressbar" aria-label={t.thinkingLabel} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+          <div><div>{t.thinking(progress)}</div><div>{progress}%</div></div>
+          <div className={styles.track}><div style={{ width: `${progress}%` }} /></div>
+        </div>
+        : <span role="status">{notice || (recording || filling ? t.savingStopsVoice : createFlow && existingFlow ? changed ? t.pending : t.created : t.footer)}</span>}{createFlow ? existingFlow
         ? <button type="submit" disabled={!changed || !complete || busy}>{creating ? t.applying : t.confirm}</button>
         : <button type="submit" disabled={!complete || busy}>{creating ? "Creating…" : "Create automation"}</button> : saveButton}</div>}
     </form>
