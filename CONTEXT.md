@@ -1,7 +1,8 @@
-# ScreenPipe Automation Flows (hackathon)
+# ScreenPipe Automation Flows
 
-Vocabulary for the hackathon feature that turns a repetitive task detected by
-ScreenPipe into a reviewable automation backed by n8n.
+Vocabulary for Automation Flows: reviewable automations backed by n8n, created
+from the ScreenPipe chat or from a repetitive task ScreenPipe detected. The
+feature is described in the "Automation Flows" section of `README.md`.
 
 ## Language
 

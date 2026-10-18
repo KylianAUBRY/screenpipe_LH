@@ -17,8 +17,3 @@ Tickets live as local markdown under `.scratch/<topic>/`. See `docs/agents/issue
 ### Domain docs
 
 Single-context. See `docs/agents/domain.md`.
-
-## Hackathon mode
-
-This repo is currently in hackathon mode — read the "Hackathon mode" section
-of `AGENTS.md` before doing anything.

@@ -5,7 +5,7 @@
 // The only seam between the Automation Flows UI and the rest of the app:
 // the typed client over the engine's `/automation-flows/*` routes, plus the
 // few app navigations the Flows screens need. Contract:
-// .scratch/hackathon/SPEC.md, "Contract: /automation-flows/*".
+// docs/automation-flows/history/hackathon/SPEC.md, "Contract: /automation-flows/*".
 
 import { localFetch } from "@/lib/api";
 import { emit } from "@tauri-apps/api/event";
