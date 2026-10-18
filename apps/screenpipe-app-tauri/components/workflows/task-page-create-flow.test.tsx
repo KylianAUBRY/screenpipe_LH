@@ -107,28 +107,26 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     expect(screen.getByRole("button", { name: CREATE })).toBeEnabled();
   });
 
-  it("opens the automation instead of creating it once it exists", async () => {
+  it("stops offering creation once the automation exists, and points to the header", async () => {
     const createAutomationFlow = vi.fn(async () => {});
-    const openAutomationFlow = vi.fn(async () => {});
-    await openTaskPage({ createAutomationFlow, findAutomationFlow: vi.fn(async () => "flow-1"), openAutomationFlow });
+    await openTaskPage({ createAutomationFlow, findAutomationFlow: vi.fn(async () => "flow-1"), openAutomationFlow: vi.fn(async () => {}) });
 
     const form = screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] }).closest("form")!;
-    const open = await within(form).findByRole("button", { name: "Open automation" });
-    expect(screen.getByText(/already created/)).toBeVisible();
-    expect(screen.queryByRole("button", { name: CREATE })).toBeNull();
-    fireEvent.click(open);
-    await waitFor(() => expect(openAutomationFlow).toHaveBeenCalledWith("flow-1"));
+    expect(await within(form).findByText("This automation is already created. Open it from the top of the page.")).toBeVisible();
+    expect(within(form).queryByRole("button", { name: /automation/ })).toBeNull();
+    // Enter in the form no longer creates (nor opens) anything.
+    fireEvent.submit(form);
     expect(createAutomationFlow).not.toHaveBeenCalled();
   });
 
-  it("offers « Open automation » in the page header too, once the automation exists", async () => {
+  it("offers « Open automation » in the page header, once the automation exists", async () => {
     const openAutomationFlow = vi.fn(async () => {});
     await openTaskPage({ createAutomationFlow: vi.fn(async () => {}), findAutomationFlow: vi.fn(async () => "flow-1"), openAutomationFlow });
 
     const header = screen.getByTestId("task-header");
     const top = await within(header).findByRole("button", { name: "Open automation" });
     expect(within(header).getByRole("button", { name: /All workflows/ })).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "Open automation" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Open automation" })).toHaveLength(1);
     // The header comes before the page's content and the questions.
     const firstQuestion = screen.getByRole("textbox", { name: CLARIFICATION_QUESTIONS[0] });
     expect(header.compareDocumentPosition(firstQuestion) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -158,7 +156,7 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
 
     const header = screen.getByTestId("task-header");
     expect(await within(header).findByRole("button", { name: "Open automation" })).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "Open automation" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Open automation" })).toHaveLength(1);
   });
 
   it("creates the automation when the answers are confirmed with Enter, not only saves them", async () => {
