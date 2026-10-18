@@ -123,15 +123,17 @@ export function WorkflowQuestions({ workflow, save, voice, active = true, create
   const [creating, setCreating] = useState(false);
   // The Flow already created from this task: the action then opens it.
   const [existingFlow, setExistingFlow] = useState<string | null>(null);
-  // Looked up once per task: the host passes a new function on every render.
+  // Looked up per task, and again each time the page is shown: the host keeps
+  // it mounted while hidden, and a Flow may be created meanwhile. The host
+  // passes a new function on every render.
   const findFlowRef = useRef(findFlow); findFlowRef.current = findFlow;
   const canFindFlow = Boolean(findFlow);
   useEffect(() => {
-    if (!canFindFlow || !findFlowRef.current) return;
+    if (!active || !canFindFlow || !findFlowRef.current) return;
     let current = true;
     findFlowRef.current().then(flowId => { if (current) setExistingFlow(flowId); }, () => {});
     return () => { current = false; };
-  }, [canFindFlow, workflow.id]);
+  }, [active, canFindFlow, workflow.id]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const saving = useRef(false);

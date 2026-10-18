@@ -737,7 +737,7 @@ export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailab
           <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
           <strong>{workflow.title}</strong>
         </div>
-        {createsFlow && platform.findAutomationFlow && platform.openAutomationFlow && <OpenAutomationButton taskId={workflow.id!} find={platform.findAutomationFlow} open={platform.openAutomationFlow} />}
+        {createsFlow && platform.findAutomationFlow && platform.openAutomationFlow && <OpenAutomationButton taskId={workflow.id!} active={active} find={platform.findAutomationFlow} open={platform.openAutomationFlow} />}
       </header>
       {saveEdits ? <WorkflowEditor {...editorOptions} key={workflow.id || workflow.title} workflow={workflow} save={saveEdits} actions={workflowActions} renderSource={observationsAvailable ? stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} timelineLabel={timelineLabel} /> : undefined} /> : <WorkflowDocument workflow={workflow} actions={workflowActions} sourceLabel={sourceLabel}
         renderSource={observationsAvailable ? stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} timelineLabel={timelineLabel} /> : undefined} />}
@@ -778,19 +778,23 @@ export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailab
  * "Open automation" in the Task Page header, once an Automation Flow was
  * created from this task (the questions block offers the same action below).
  */
-function OpenAutomationButton({ taskId, find, open }: {
+function OpenAutomationButton({ taskId, active, find, open }: {
   taskId: string;
+  active: boolean;
   find: (taskId: string) => Promise<string | null>;
   open: (flowId: string) => Promise<void>;
 }) {
   const [flowId, setFlowId] = useState<string | null>(null);
-  // Looked up once per task: the host may pass a new function on every render.
+  // Looked up per task, and again each time the page is shown: the host keeps
+  // it mounted while hidden, and a Flow may be created meanwhile. The host may
+  // pass a new function on every render.
   const findRef = useRef(find); findRef.current = find;
   useEffect(() => {
+    if (!active) return;
     let current = true;
     findRef.current(taskId).then(id => { if (current) setFlowId(id); }, () => {});
     return () => { current = false; };
-  }, [taskId]);
+  }, [active, taskId]);
   if (!flowId) return null;
   return <button className={styles.skillButton} type="button" onClick={() => void open(flowId).catch(() => {})}><Workflow size={14} aria-hidden="true" />Open automation</button>;
 }

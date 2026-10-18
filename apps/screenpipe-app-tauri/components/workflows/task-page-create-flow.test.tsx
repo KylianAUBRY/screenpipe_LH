@@ -142,6 +142,25 @@ describe("Task Page: Clarification Questions unlock Flow creation", () => {
     expect(screen.queryByRole("button", { name: "Open automation" })).toBeNull();
   });
 
+  it("finds the automation created while the page was hidden, once it is shown again", async () => {
+    // The app keeps the Task Page mounted while another section is shown.
+    let flowId: string | null = null;
+    const platform = await openTaskPage({ createAutomationFlow: vi.fn(async () => {}), findAutomationFlow: vi.fn(async () => flowId), openAutomationFlow: vi.fn(async () => {}) });
+    expect(screen.queryByRole("button", { name: "Open automation" })).toBeNull();
+
+    const app = (active: boolean) => <WorkflowsApp platform={platform} storageKey={null} active={active} reviewRequest={{ key: "demo", workflowId: DEMO_TASK_ID }} />;
+    cleanup();
+    const { rerender } = render(app(true));
+    await screen.findByRole("button", { name: CREATE });
+    await act(async () => { rerender(app(false)); });
+    flowId = "flow-1";
+    await act(async () => { rerender(app(true)); });
+
+    const header = screen.getByTestId("task-header");
+    expect(await within(header).findByRole("button", { name: "Open automation" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Open automation" })).toHaveLength(2);
+  });
+
   it("creates the automation when the answers are confirmed with Enter, not only saves them", async () => {
     const createAutomationFlow = vi.fn(async () => {});
     await openTaskPage({ createAutomationFlow });
