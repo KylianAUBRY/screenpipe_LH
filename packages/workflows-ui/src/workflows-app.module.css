@@ -855,7 +855,17 @@
 :global(.dark) .bottleneckEvidence summary, :global(.dark) .bottleneckTime span, :global(.dark) .bottleneckTime small, :global(.dark) .iconLink,
 :global(.dark) .processingHead p, :global(.dark) .replay > p, :global(.dark) .replay button, :global(.dark) .replayCaption > span, :global(.dark) .replayNavigation > span,
 :global(.dark) .contextSaveStatus { color: var(--muted); }
-:global(.dark) .nav .navActive, :global(.dark) .nav .navActive > span, :global(.dark) .embeddedNav .embeddedNavActive { color: var(--on-ink); }
+:global(.dark) .embeddedNav .embeddedNavActive { color: var(--on-ink); }
+/* The backgrounds of the app's other pages: the content on the app canvas,
+   the sidebar in the app's sidebar colour, or see-through to the macOS
+   window effect when the app uses it (`macos-vibrancy` on <html>). The
+   current page is marked as in the app's own sidebar. */
+:global(.dark) .sidebar { background: hsl(var(--sidebar-background)); }
+:global(html.dark.macos-vibrancy) .app { background: transparent; }
+:global(html.dark.macos-vibrancy) .workspace { background: var(--paper); }
+:global(html.dark.macos-vibrancy) .sidebar { background: rgba(255, 255, 255, .06); border-right-color: hsl(0 0% 100% / .08); }
+:global(.dark) .nav .navActive { background: hsl(var(--foreground) / .06); box-shadow: inset 0 0 0 1px hsl(var(--foreground) / .1); }
+:global(.dark) .nav .navActive, :global(.dark) .nav .navActive > span { color: var(--ink); }
 :global(.dark) .nav button:hover, :global(.dark) .embeddedNav button:hover, :global(.dark) .search > button:hover { background: var(--soft); color: var(--ink); }
 :global(.dark) .backButton:hover, :global(.dark) .emptyState h2, :global(.dark) .splitLegend strong { color: var(--ink); }
 :global(.dark) .shortcutsButton { border-color: var(--line); background: var(--panel); color: var(--muted); }
