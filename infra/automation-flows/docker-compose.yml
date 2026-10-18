@@ -1,7 +1,7 @@
 # screenpipe — AI that knows everything you've seen, said, or heard
 # https://screenpipe.com
 
-# Local n8n for the Automation Flows hackathon (see .scratch/hackathon/SPEC.md).
+# Local n8n for Automation Flows (design history: docs/automation-flows/history/hackathon/SPEC.md).
 # Start: docker compose -f infra/automation-flows/docker-compose.yml up -d
 # Credentials (Gmail OAuth, Jira, OpenAI-compatible, ScreenPipe API) and the API key
 # are created in the n8n UI and stay in the n8n_data volume, never in the repo.

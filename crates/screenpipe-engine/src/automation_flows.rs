@@ -319,7 +319,7 @@ async fn require_json(request: Request, next: Next) -> Response {
 }
 
 // ---------------------------------------------------------------------------
-// Wire types (contract: .scratch/hackathon/SPEC.md, "Contract: /automation-flows/*")
+// Wire types (contract: docs/automation-flows/history/hackathon/SPEC.md, "Contract: /automation-flows/*")
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]

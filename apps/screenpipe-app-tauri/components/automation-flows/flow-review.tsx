@@ -11,7 +11,7 @@
 // from"), the Flow's Activity (D18, with Retry on a failed run) and the
 // history. A page to look at and switch: the review (questions, choices)
 // happens on the Task Page in Workflows. Plan:
-// .scratch/hackathon/flow-front-merge.md.
+// docs/automation-flows/history/hackathon/flow-front-merge.md.
 
 import React, { useState } from "react";
 import { ArrowLeft, ExternalLink, Pause, Pencil, Power, RotateCcw } from "lucide-react";
