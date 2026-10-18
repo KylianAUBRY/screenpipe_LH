@@ -80,6 +80,45 @@ no tokens. Our nodes add triggers and data that only Screenpipe has:
 | **Connected** | n8n's hundreds of integrations. |
 | **Trusted by companies** | Transparent and auditable. |
 
+## Screenshots
+
+**1. Task page.** The detected task, its real screen captures, and **Open
+automation** once the Flow exists.
+
+![Task page of the detected task "Turn bug emails into Jira tickets"](docs/automation-flows/screenshots/1-task-page.png)
+
+**2. Flows.** Automations → **Flows** lists the Flows created from
+Screenpipe, with their status and last run.
+
+![Flows list with the NovaDesk Flow, not on yet](docs/automation-flows/screenshots/2-flows-list.png)
+
+**3. Review Screen.** The one-sentence summary, the n8n graph redrawn with one
+sentence per step, and **Turn on**: nothing runs before that click.
+
+![Review Screen of the NovaDesk Flow](docs/automation-flows/screenshots/3-flow-review.png)
+
+**4. How it works.** The redrawn graph: the main steps in a row; under the AI
+step, its model, its answer format and the two Screenpipe tools; around Jira,
+the duplicate check and the retries. Click a card to read its whole sentence.
+
+![Redrawn n8n graph with one sentence per step](docs/automation-flows/screenshots/4-flow-graph.png)
+
+**5. The same Flow in n8n.** **Open in n8n** shows the real workflow; edits
+happen there.
+
+![The NovaDesk workflow in the n8n editor](docs/automation-flows/screenshots/5-n8n-workflow.png)
+
+**6. Create from the chat.** **Create flow** in the Screenpipe chat starts a
+Flow from a request; it goes through the same review.
+
+![Screenpipe chat with the Create flow shortcut](docs/automation-flows/screenshots/6-chat-create-flow.png)
+
+**7. Screenpipe nodes in n8n.** A workflow started by the **ScreenPipe
+Trigger** on a spoken keyword: two **ScreenPipe** steps summarize the activity
+and fetch recent captures, then an AI step writes a briefing.
+
+![n8n workflow built with the ScreenPipe Trigger and ScreenPipe nodes](docs/automation-flows/screenshots/7-screenpipe-nodes-in-n8n.png)
+
 ## Quick start
 
 You need the Screenpipe desktop app, [Docker](https://www.docker.com) and
