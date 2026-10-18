@@ -2,7 +2,7 @@
 
 **Found:** live check (ticket 16), 2026-10-18 09:00.
 
-**Status:** ready-for-agent
+**Status:** fixed in bcb3e74c0, live check pending
 
 **What happens:** the Task Page was open (from an earlier ⌃⌥⌘D press within
 90 s). `reset.ts` cleared the answers and ⌃⌥⌘D reinstalled the demo task in the
@@ -20,6 +20,6 @@ always reads the task again, so the first « Create automation » works.
 Until fixed, the runbook says: leave the Task Page (go to Chat) before pressing
 ⌃⌥⌘D, and click « Create automation » again if that message shows.
 
-- [ ] Reproduced in the browser mock or a component test (open page, catalog rewritten, create).
-- [ ] The page re-reads the task when the demo deeplink or shortcut opens it.
+- [x] Reproduced in a component test (open page, catalog rewritten, create): `components/workflows/task-page-create-flow.test.tsx` « ticket 17 », fails without the fix.
+- [x] The page re-reads the task when the demo deeplink or shortcut opens it (every review request reloads the catalog and remounts the Task Page).
 - [ ] Live: two rehearsals in a row without leaving the Task Page create the Flow on the first click.
