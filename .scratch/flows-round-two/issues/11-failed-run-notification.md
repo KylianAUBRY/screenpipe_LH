@@ -90,3 +90,18 @@ not given the setting (the demo reset deletes it, so `from-task` imports fresh).
 - `cd apps/screenpipe-app-tauri && bunx vitest run components/automation-flows lib/workflows/automation-flows.test.ts lib/notifications/actions.test.ts lib/__tests__/notification-actions.test.ts app/notification-panel/page.test.tsx components/chat/markdown-block.test.tsx`
   → 8 files, 186 tests passed.
 - `bunx tsc --noEmit -p .` → no error in the changed files.
+
+## Live finding (n8n 2.42.2)
+
+- n8n refuses to save a workflow whose `settings.errorWorkflow` names a
+  workflow with no published version (`400 "The selected error workflow has no
+  published version."`), so every write naming the error workflow failed while
+  it was installed switched off. Fix (branch `fix-error-workflow-published`):
+  `error_workflow_id` publishes the error workflow after installing it, and
+  publishes an installed one that is not published; if n8n refuses, the Flow
+  is written without `errorWorkflow` (health check covers failures). Its only
+  trigger is the Error Trigger, so publishing runs nothing; Flows still switch
+  on only by the user's click. The fake n8n now refuses like n8n; tests
+  asserting « no /publish » exclude the error workflow's publish.
+  `cargo test -p screenpipe-engine --test automation_flows_test` → 106 passed;
+  `cargo test -p screenpipe-engine --lib automation_flows` → 5 passed.

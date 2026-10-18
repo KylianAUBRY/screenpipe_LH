@@ -74,6 +74,22 @@ fn is_error_workflow(workflow: &Value) -> bool {
     })
 }
 
+/// n8n 2.x refuses to save a workflow whose `settings.errorWorkflow` names a
+/// workflow with no published version (live check, n8n 2.42.2).
+fn unpublished_error_workflow(state: &N8nState, body: &Value) -> Option<Value> {
+    let named = body["settings"]["errorWorkflow"].as_str()?;
+    let published = state
+        .workflows
+        .iter()
+        .any(|w| w["id"] == named && w["activeVersionId"].is_string());
+    (!published)
+        .then(|| json!({"message": "The selected error workflow has no published version."}))
+}
+
+/// Ids the fake gives ScreenPipe's error workflow, so request paths tell it
+/// apart from a Flow's.
+const ERROR_WORKFLOW_ID_PREFIX: &str = "spFlowErrors";
+
 impl FakeN8n {
     /// The workflows n8n holds, except ScreenPipe's error workflow (D16).
     fn workflows(&self) -> Vec<Value> {
@@ -253,9 +269,17 @@ impl Respond for FakeN8n {
                 if let Some(message) = &state.refuse_create {
                     return json_response(400, json!({"message": message}));
                 }
+                if let Some(refusal) = unpublished_error_workflow(&state, &body) {
+                    return json_response(400, refusal);
+                }
                 state.next_id += 1;
                 let mut workflow = body.clone();
-                workflow["id"] = json!(format!("wf{}", state.next_id));
+                let prefix = if is_error_workflow(&body) {
+                    ERROR_WORKFLOW_ID_PREFIX
+                } else {
+                    "wf"
+                };
+                workflow["id"] = json!(format!("{prefix}{}", state.next_id));
                 workflow["active"] = json!(false);
                 workflow["isArchived"] = json!(false);
                 workflow["versionId"] = json!("version-1");
@@ -290,6 +314,9 @@ impl Respond for FakeN8n {
                 }
                 if let Some(message) = &state.refuse_update {
                     return json_response(400, json!({"message": message}));
+                }
+                if let Some(refusal) = unpublished_error_workflow(&state, &body) {
+                    return json_response(400, refusal);
                 }
                 let republish = query("publishIfActive").as_deref() != Some("false");
                 state.updates += 1;
@@ -691,15 +718,25 @@ async fn workflow_posts(server: &MockServer) -> Vec<Value> {
         .collect()
 }
 
-/// Bodies of the POST requests the fake n8n received on paths ending with
-/// `suffix` (e.g. "/publish").
+/// Whether a request path targets ScreenPipe's error workflow (D16), which
+/// ScreenPipe publishes itself: it is not a Flow.
+fn targets_error_workflow(path: &str) -> bool {
+    path.contains(&format!("/workflows/{ERROR_WORKFLOW_ID_PREFIX}"))
+}
+
+/// Bodies of the POST requests the fake n8n received on a Flow's paths
+/// ending with `suffix` (e.g. "/publish"); the error workflow's are left out.
 async fn posts_ending_with(server: &MockServer, suffix: &str) -> Vec<(String, Value)> {
     server
         .received_requests()
         .await
         .unwrap()
         .into_iter()
-        .filter(|r| r.method.as_str() == "POST" && r.url.path().ends_with(suffix))
+        .filter(|r| {
+            r.method.as_str() == "POST"
+                && r.url.path().ends_with(suffix)
+                && !targets_error_workflow(r.url.path())
+        })
         .map(|r| {
             (
                 r.url.path().to_string(),
@@ -1768,6 +1805,7 @@ async fn nothing_but_the_activate_route_switches_a_flow_on() {
         .into_iter()
         .map(|r| r.url.path().to_string())
         .filter(|path| path.ends_with("/publish") || path.ends_with("/activate"))
+        .filter(|path| !targets_error_workflow(path))
         .collect();
     assert!(switched_on.is_empty(), "{switched_on:?}");
     assert_eq!(n8n.workflows()[0]["active"], false);
@@ -3427,6 +3465,64 @@ async fn node_lookup_takes_the_local_api_key() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+async fn an_installed_error_workflow_left_unpublished_is_published_before_a_flow_names_it() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    app.create_from_task().await;
+    // Installed by an earlier version of ScreenPipe, switched off.
+    let error_id = n8n.error_workflows()[0]["id"].as_str().unwrap().to_string();
+    n8n.edit_workflow(&error_id, |w| {
+        w["active"] = json!(false);
+        w["activeVersionId"] = Value::Null;
+    });
+
+    let (status, flow) = chat_create(
+        &app,
+        json!({"workflow": chat_workflow(), "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{flow}");
+    let errors = n8n.error_workflows();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0]["active"], true);
+    let workflow = n8n
+        .workflows()
+        .into_iter()
+        .find(|w| w["id"] == flow["id"])
+        .unwrap();
+    assert_eq!(workflow["settings"]["errorWorkflow"], error_id.as_str());
+    // Publishing the error workflow switched no Flow on.
+    assert!(posts_ending_with(&server, "/publish").await.is_empty());
+    assert!(n8n.workflows().iter().all(|w| w["active"] == false));
+}
+
+#[tokio::test]
+async fn a_flow_is_still_created_when_n8n_refuses_to_publish_the_error_workflow() {
+    let (server, n8n) = start_fake_n8n().await;
+    let app = App::new().await;
+    app.configure_n8n(&server.uri());
+    n8n.0.lock().unwrap().refuse_publish = Some("publishing is unavailable".into());
+
+    let (status, flow) = chat_create(
+        &app,
+        json!({"workflow": chat_workflow(), "summary": "Chaque soir, un résumé."}),
+    )
+    .await;
+    // Its failures then reach ScreenPipe only through the health check.
+    assert_eq!(status, StatusCode::CREATED, "{flow}");
+    let workflow = n8n
+        .workflows()
+        .into_iter()
+        .find(|w| w["id"] == flow["id"])
+        .unwrap();
+    assert!(
+        workflow["settings"].get("errorWorkflow").is_none(),
+        "{workflow}"
+    );
+}
+
+#[tokio::test]
 async fn every_flow_reports_its_failed_runs_through_one_error_workflow() {
     let (server, n8n) = start_fake_n8n().await;
     let app = App::new().await;
@@ -3440,12 +3536,17 @@ async fn every_flow_reports_its_failed_runs_through_one_error_workflow() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{from_chat}");
 
-    // n8n holds one error workflow: switched off (n8n runs an error workflow
-    // without activation), and never listed as a Flow.
+    // n8n holds one error workflow: published (n8n 2.x refuses a Flow naming
+    // an unpublished one; its Error Trigger runs only on a failed run), and
+    // never listed as a Flow.
     let errors = n8n.error_workflows();
     assert_eq!(errors.len(), 1, "{errors:?}");
     let error_workflow = &errors[0];
-    assert_eq!(error_workflow["active"], false);
+    assert_eq!(error_workflow["active"], true);
+    assert_eq!(
+        error_workflow["activeVersionId"],
+        error_workflow["versionId"]
+    );
     assert_eq!(error_workflow["tags"][0]["name"], "screenpipe-flow-errors");
     let (_, list) = app.call("GET", "/automation-flows", None).await;
     let listed: Vec<&Value> = list.as_array().unwrap().iter().map(|f| &f["id"]).collect();

@@ -5,9 +5,13 @@
 //! A failed Flow run is reported (SPEC D16).
 //!
 //! Every Flow names, in its n8n settings, one n8n Error Workflow that
-//! ScreenPipe installs once, switched off (n8n runs an error workflow without
-//! activation) and tagged [`ERROR_WORKFLOW_TAG`], never [`FLOW_TAG`]: it is
-//! not a Flow. When a run fails, n8n runs it; it calls
+//! ScreenPipe installs once, tagged [`ERROR_WORKFLOW_TAG`], never
+//! [`FLOW_TAG`]: it is infrastructure, not a Flow. ScreenPipe publishes it,
+//! since n8n 2.x refuses to save a workflow naming an error workflow with no
+//! published version. Its only trigger is n8n's Error Trigger, so publishing
+//! it runs nothing on its own: it runs only when a Flow run fails. Flows
+//! themselves still switch on only by the user's click. When a run fails,
+//! n8n runs it; it calls
 //! `POST /automation-flows/:id/failures` with the failed execution's id. The
 //! engine reads that execution (it holds the n8n key; n8n does not hand the
 //! failed run's input to an error workflow) and sends the app's notification
@@ -98,10 +102,11 @@ fn error_workflow(screenpipe_url: &str) -> Value {
     })
 }
 
-/// The id of ScreenPipe's error workflow, installed on first use. `None`
-/// when n8n holds no ScreenPipe API credential it could call back with (or
-/// several): the Flow is still created, its failures reach ScreenPipe only
-/// through the health check.
+/// The id of ScreenPipe's error workflow, installed on first use and
+/// published (n8n 2.x refuses a Flow naming an unpublished error workflow).
+/// `None` when n8n holds no ScreenPipe API credential it could call back with
+/// (or several), or refuses to publish it: the Flow is still written, its
+/// failures reach ScreenPipe only through the health check.
 async fn error_workflow_id(state: &FlowsState, api: &N8nApi) -> Result<Option<String>, FlowError> {
     let installed = api
         .all_pages(
@@ -115,8 +120,8 @@ async fn error_workflow_id(state: &FlowsState, api: &N8nApi) -> Result<Option<St
                 .as_array()
                 .is_some_and(|tags| tags.iter().any(|tag| tag["name"] == ERROR_WORKFLOW_TAG))
     });
-    if let Some(id) = existing.and_then(|workflow| workflow["id"].as_str()) {
-        return Ok(Some(id.to_string()));
+    if let Some(existing) = existing {
+        return Ok(published(api, existing).await);
     }
     let mut body = error_workflow(&state.failure_reports.screenpipe_url_from_n8n);
     if let Err(problem) = check_nodes(api, &mut body).await {
@@ -127,7 +132,26 @@ async fn error_workflow_id(state: &FlowsState, api: &N8nApi) -> Result<Option<St
         .expect_ok(Method::POST, "/workflows", &[], Some(&body))
         .await?;
     let created = api.add_tag(created, ERROR_WORKFLOW_TAG).await?;
-    workflow_id(&created).map(Some)
+    Ok(published(api, &created).await)
+}
+
+/// The error workflow's id once n8n runs its saved version; `None` when n8n
+/// refuses to publish it. Publishing starts nothing: its only trigger is
+/// n8n's Error Trigger.
+async fn published(api: &N8nApi, workflow: &Value) -> Option<String> {
+    let id = workflow["id"].as_str()?;
+    let version = workflow["versionId"].as_str();
+    if workflow["active"] == true && workflow["activeVersionId"].as_str() == version {
+        return Some(id.to_string());
+    }
+    let body = version.map(|version| json!({"versionId": version}));
+    match api.switch(id, "publish", body.as_ref()).await {
+        Ok(_) => Some(id.to_string()),
+        Err(e) => {
+            tracing::warn!("automation flows: error workflow not published: {e:?}");
+            None
+        }
+    }
 }
 
 /// What ScreenPipe's error workflow sends: the failed execution, or only the
