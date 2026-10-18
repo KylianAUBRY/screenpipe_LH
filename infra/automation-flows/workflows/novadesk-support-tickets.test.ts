@@ -117,9 +117,9 @@ describe("demo n8n workflow: NovaDesk support emails become Jira tickets", () =>
     // `chatgpt/` models are answered by the user's ChatGPT subscription; the
     // `:low` suffix is the reasoning effort, which n8n cannot send itself.
     expect(model.parameters.model).toMatchObject({ mode: "id", value: "chatgpt/gpt-5.6-luna:low" });
-    // A call that hangs fails the step after 12 s, without the client's own
+    // A call that hangs fails the step after 8 s, without the client's own
     // retries, and n8n runs the whole AI step once more.
-    expect(model.parameters.options.timeout).toBe(12_000);
+    expect(model.parameters.options.timeout).toBe(8_000);
     expect(model.parameters.options.maxRetries).toBe(0);
     expect(agent.retryOnFail).toBe(true);
     expect(agent.maxTries).toBe(2);

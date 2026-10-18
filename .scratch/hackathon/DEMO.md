@@ -81,7 +81,7 @@ Flow keeps working without the change.
 
 ## If something goes wrong
 
-- **No ticket 30 s after the email:** a hung AI call is cut after 12 s and
+- **No ticket 30 s after the email:** a hung AI call is cut after 8 s and
   tried once more; if n8n still shows no run or a running one, keep talking
   over the Review Screen and show the Jira ticket of a previous rehearsal
   (NOVA-61).
@@ -101,7 +101,7 @@ Flow keeps working without the change.
 
 Workflow `novadesk-support-tickets.json`: Gmail Trigger (OAuth, 12 poll times
 = every 5 s, read and unread, INBOX), AI step `chatgpt/gpt-5.6-luna:low`
-(12 s timeout, 1 retry), no ScreenPipe tools. "Sent" is the email's Date
+(8 s timeout, 1 retry), no ScreenPipe tools. "Sent" is the email's Date
 header (second precision); "start" is n8n's run start.
 
 | Email | Sent (UTC) | Run start | AI step | Ticket | Notification |
