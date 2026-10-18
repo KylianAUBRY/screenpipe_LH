@@ -398,13 +398,14 @@ describe("Review Screen", () => {
 
     const list = await screen.findByRole("list", { name: "Flow activity" });
     expect(api.activity).toHaveBeenCalledWith(fixtureFlow.id);
+    // The newest three first; « Show all » unrolls the rest, as History does.
+    const ids = () => within(list).getAllByRole("listitem").map((item) => item.getAttribute("data-testid"));
+    expect(ids()).toEqual(["flow-run-e4", "flow-run-e3", "flow-run-e2"]);
+    const showAll = screen.getByRole("button", { name: "Show all 4" });
+    expect(showAll).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(showAll);
+    expect(ids()).toEqual(["flow-run-e4", "flow-run-e3", "flow-run-e2", "flow-run-e1"]);
     const items = within(list).getAllByRole("listitem");
-    expect(items.map((item) => item.getAttribute("data-testid"))).toEqual([
-      "flow-run-e4",
-      "flow-run-e3",
-      "flow-run-e2",
-      "flow-run-e1",
-    ]);
     const [failed, abstained, ignored, ticket] = items;
     expect(within(failed).getByText("Failed")).toBeTruthy();
     expect(within(failed).getByText(/503 Service Unavailable/)).toBeTruthy();
@@ -416,6 +417,35 @@ describe("Review Screen", () => {
     expect(within(ticket).getByText("Ticket NOVA-28 created")).toBeTruthy();
     expect(within(ticket).getByText(/Arthur Noteris <arthur@novadesk.fr> · “Export des contacts vide”/)).toBeTruthy();
     expect(within(ticket).getByText(/^Sat, Oct 17, \d{2}:\d{2} [AP]M$/)).toBeTruthy();
+  });
+
+  it("folds the Activity back with « Show less », and offers no « Show all » for three runs or fewer", async () => {
+    const run = (id: string, hour: number): FlowRun => ({
+      executionId: id,
+      startedAt: `2026-10-17T${String(hour).padStart(2, "0")}:00:00.000Z`,
+      outcome: "ignored",
+      reason: "Not a customer request.",
+      email: { sender: "Google <no-reply@accounts.google.com>", subject: `Alert ${id}` },
+      ticket: null,
+    });
+    const five = ["e5", "e4", "e3", "e2", "e1"].map((id, index) => run(id, 12 - index));
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ activity: vi.fn(async () => five) })} />);
+
+    const list = await screen.findByRole("list", { name: "Flow activity" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+    expect(screen.getByRole("heading", { name: /^Activity/ }).textContent).toBe("Activity 5");
+    fireEvent.click(screen.getByRole("button", { name: "Show all 5" }));
+    expect(within(list).getAllByRole("listitem")).toHaveLength(5);
+    const showLess = screen.getByRole("button", { name: "Show less" });
+    expect(showLess).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(showLess);
+    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+
+    cleanup();
+    render(<FlowsTab flowId={fixtureFlow.id} onSelectFlow={vi.fn()} api={fakeApi({ activity: vi.fn(async () => five.slice(0, 3)) })} />);
+    const short = await screen.findByRole("list", { name: "Flow activity" });
+    expect(within(short).getAllByRole("listitem")).toHaveLength(3);
+    expect(screen.queryByRole("button", { name: /Show all/ })).toBeNull();
   });
 
   it("says when the Flow has handled no email yet", async () => {

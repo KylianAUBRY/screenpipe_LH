@@ -21,9 +21,14 @@ import { formatDate, outcomeLabel } from "./labels";
 /** What « Retry » gave, per failed run on screen. */
 type Retry = { state: "busy" } | { state: "done"; run: FlowRun } | { state: "error"; error: FlowsApiError };
 
+/** Runs shown before « Show all »: the newest ones, as in History. */
+const ACTIVITY_PREVIEW = 3;
+
 export function FlowActivity({ flowId, api }: { flowId: string; api: FlowsApi }) {
   const [runs, , replace] = useFlowsLoad(() => api.activity(flowId), flowId);
   const [retries, setRetries] = useState<Record<string, Retry>>({});
+  const [expanded, setExpanded] = useState(false);
+  const total = runs.state === "ready" ? runs.data.length : 0;
 
   async function retry(executionId: string) {
     const set = (next: Retry) => setRetries((previous) => ({ ...previous, [executionId]: next }));
@@ -44,7 +49,9 @@ export function FlowActivity({ flowId, api }: { flowId: string; api: FlowsApi })
 
   return (
     <section className="space-y-2">
-      <SectionLabel>Activity</SectionLabel>
+      <SectionLabel>
+        Activity {total > 0 && <span className="font-mono">{total}</span>}
+      </SectionLabel>
       {runs.state === "loading" && (
         <p className="text-sm text-muted-foreground">Loading the activity…</p>
       )}
@@ -58,7 +65,7 @@ export function FlowActivity({ flowId, api }: { flowId: string; api: FlowsApi })
       )}
       {runs.state === "ready" && runs.data.length > 0 && (
         <ul className="divide-y divide-border border border-border" aria-label="Flow activity">
-          {runs.data.map((run) => (
+          {(expanded ? runs.data : runs.data.slice(0, ACTIVITY_PREVIEW)).map((run) => (
             <RunRow
               key={run.executionId}
               run={run}
@@ -67,6 +74,17 @@ export function FlowActivity({ flowId, api }: { flowId: string; api: FlowsApi })
             />
           ))}
         </ul>
+      )}
+      {total > ACTIVITY_PREVIEW && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="text-muted-foreground"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "Show less" : `Show all ${total}`}
+        </Button>
       )}
     </section>
   );
