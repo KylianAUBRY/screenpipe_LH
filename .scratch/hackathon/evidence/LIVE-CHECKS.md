@@ -180,3 +180,35 @@ n8n check ran in a temporary workflow, deleted afterwards.
 | ScreenPipe Trigger active in n8n: window `Terminal`, flow `DucCIr8YH6FdrZOZ`, keyword « automatisation » | each polled without error and set its cursor; nothing fired (no new event during the minute, by design) |
 | ScreenPipe Trigger, « Fetch Test Event » path (real node code against ScreenPipe): keyword « ok », window Terminal, pipe `digital-clone`, flow NovaDesk | each returned its newest real event |
 | ScreenPipe Trigger window `Terminal` active in n8n, Terminal brought to the front for 12 s (19:42:37), then Claude | first poll set the cursor (`active: false`, Claude in front); the next poll (19:43:03) fired once: execution 60, mode `trigger`, success, event `matchedAt` 19:42:37 |
+
+## Round two live check, partial (ticket 16), 2026-10-18 08:58–09:08
+
+App: dev build of `aced6ee30` (front built 04:43:49, binary 04:44:53) run from
+`~/dev` with `SCREENPIPE_DEV_USE_PROD_DATA=1`; n8n 2.42.2 in Docker. Native app
+driven by accessibility, emails sent from the Gmail connector. Stopped at the
+user's request before the failure/retry, health banner, deletion, chat-built
+Flow and theme checks; the demo was reset afterwards (exit 0).
+
+| Check | Observed |
+|---|---|
+| `GET /automation-flows/health` | `n8n: "reachable"`, `checkedAt` from app start |
+| Node search `q=shell` | Execute Command and its tool twin, both `switchedOff: true` (ticket 05) |
+| Jira card | `jiraSoftwareCloudApi` `inN8n: "one"`, « NovaDesk Jira » (ticket 05) |
+| Error workflow « ScreenPipe — échecs des Flows » | published, HTTP node `host.docker.internal:3030/…/failures` with the `screenpipeApi` credential (ticket 11) |
+| `reset.ts` | exit 0 in 4 s, other Flows untouched |
+| ⌃⌥⌘D with Finder in front | notification « Repetitive task detected » in 1.2 s (ticket 03) |
+| ⌃⌥⌘D again within 90 s | not shown (dedupe); Home comes forward and opens the Task Page, but only ~9 s after the press; the toast was not seen in the accessibility tree |
+| « View task » | Task Page in < 1 s: 3 repetitions with captures (4:05, 4:09, 4:12), « 0 of 2 answered », Create automation disabled until 2/2 |
+| **« Create automation » (1st click)** | **failed: « This workflow changed while you were answering. Your draft is kept. Review it and save again. »** The Task Page had stayed open while the shortcut reinstalled the task. A second click created the Flow (Review Screen in 0.9 s). Demo risk: see ticket 17 of round two. |
+| Created Flow in n8n | inactive, tag `screenpipe-flow`, `settings.errorWorkflow` = the error workflow, 16 nodes |
+| Review Screen | summary, graph of 15 steps with one sentence each and no credential/host line (ticket 01), Learned from ×3, Activity « No email handled yet », History « Never turned on »; buttons Dismiss, Delete, Review and edit, Open in n8n, Turn on |
+| « Turn on » | active in n8n in 0.7 s; History « Turned on by you » |
+| Bug email « NovaCRM : la recherche de contacts… » | execution 61 started 1 s after sending, 69 s total; **NOVA-47** Bug, Highest, title « NovaCRM - La recherche de contacts ignore les noms avec accent », labels `back` + `mail-d3817198`, email quoted in a code block, unassigned; AI `confidence: high` with a reason; both ScreenPipe tools ran (tickets 08, 10) |
+| Ambiguous email « Question sur les relances » | execution 62: `confidence: low`, « Sort by hand » ran, notification « Sort by hand » with From / Subject / Reason as plain text, no ticket (ticket 09) |
+| Thank-you email « Merci pour votre aide » | execution 63: `type: none`, `confidence: high`, stops at « Ticket needed », no ticket |
+
+Not checked yet: duplicate run of the same email, forced failure → notification
+→ « Relancer » (11, 12), Activity rows after those runs (13), health banner
+with n8n stopped and a failure missed while the app was down (14), Delete from
+the list / Review Screen / chat (04), chat building a Flow step by step (06,
+07), dark and light theme (02), « Open in n8n », the rehearsals.
