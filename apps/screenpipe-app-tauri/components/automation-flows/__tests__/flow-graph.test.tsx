@@ -6,7 +6,7 @@
 // client with the fixture Flow.
 
 import React from "react";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Flow, FlowsApi } from "../api";
 import { FlowsTab } from "../flows-tab";
@@ -54,6 +54,37 @@ describe("Review Screen graph", () => {
       expect(sentence.className).toContain("line-clamp-3");
       expect(sentence.className).not.toContain("sr-only");
       expect(card.getAttribute("title")).toBe(node.sentence);
+    }
+  });
+
+  it("opens the whole name and sentence when a card is clicked, and closes on Escape", async () => {
+    const graph = await renderGraph();
+    const node = fixtureFlow.nodes.find((candidate) => candidate.name === "screenpipe history") ?? fixtureFlow.nodes[0];
+    const card = within(graph).getByTestId(`flow-node-${node.id}`);
+    const open = within(card).getByRole("button");
+    expect(open).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(open);
+    const details = await screen.findByRole("dialog");
+    expect(open).toHaveAttribute("aria-expanded", "true");
+    expect(within(details).getByText(node.name)).toBeTruthy();
+    // Nothing cut here: the card's three-line limit does not apply.
+    const full = within(details).getByText(node.sentence!);
+    expect(full.className).not.toContain("line-clamp");
+
+    fireEvent.keyDown(details, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(open).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps the cards clickable although React Flow turns pointer events off on them", async () => {
+    const graph = await renderGraph();
+    for (const node of fixtureFlow.nodes) {
+      const card = within(graph).getByTestId(`flow-node-${node.id}`);
+      // Cards cannot be selected or dragged, so React Flow sets pointer-events: none on them.
+      expect(card.closest<HTMLElement>(".react-flow__node")!.style.pointerEvents).toBe("none");
+      expect(within(card).getByRole("button").className).toContain("pointer-events-auto");
     }
   });
 

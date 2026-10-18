@@ -5,8 +5,8 @@
 "use client";
 
 // Read-only picture of a Flow's n8n workflow for the Review Screen: each node
-// by its name and three lines of its one-sentence explanation (all of it on
-// hover). Editing happens in n8n ("Open in n8n").
+// by its name and three lines of its one-sentence explanation (click a card
+// to read all of it). Editing happens in n8n ("Open in n8n").
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -21,6 +21,7 @@ import {
   type NodeProps,
   type ReactFlowInstance,
 } from "@xyflow/react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { Flow, FlowNode } from "./api";
 
 // Cards hold the name and three lines of the sentence. Narrow cards and short
@@ -62,12 +63,13 @@ const EDGE_COLOR = "hsl(var(--muted-foreground))";
 const HIDDEN_HANDLE = "!h-px !w-px !min-h-0 !min-w-0 !border-0 !bg-transparent";
 
 function StepCard({ data: { node } }: NodeProps<StepNode>) {
+  const sentence = node.sentence ?? NO_SENTENCE;
   return (
     <div
       data-testid={`flow-node-${node.id}`}
-      title={node.sentence ?? NO_SENTENCE}
+      title={sentence}
       style={{ height: NODE_HEIGHT }}
-      className="overflow-hidden border border-border bg-background p-3"
+      className="relative overflow-hidden border border-border bg-background"
     >
       {HANDLES.map((handle) => (
         <Handle
@@ -81,12 +83,27 @@ function StepCard({ data: { node } }: NodeProps<StepNode>) {
         />
       ))}
       {/* The step's name, large enough to read in the fitted picture, then
-          three lines at most of what it does; the whole sentence is on hover.
-          The n8n node type and fixed facts stay in n8n ("Open in n8n"). */}
-      <p className="line-clamp-2 break-words text-lg font-medium leading-snug">{node.name}</p>
-      <p className="mt-1 line-clamp-3 break-words text-xs leading-snug text-muted-foreground">
-        {node.sentence ?? NO_SENTENCE}
-      </p>
+          three lines at most of what it does; clicking the card opens all of
+          it. React Flow turns pointer events off on cards that cannot be
+          selected, so the button turns them back on. The n8n node type and
+          fixed facts stay in n8n ("Open in n8n"). */}
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="pointer-events-auto block h-full w-full cursor-pointer p-3 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-accent/40"
+          >
+            <span className="line-clamp-2 break-words text-lg font-medium leading-snug">{node.name}</span>
+            <span className="mt-1 line-clamp-3 break-words text-xs leading-snug text-muted-foreground">
+              {sentence}
+            </span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent side="bottom" className="w-80 space-y-1 rounded-none">
+          <p className="break-words font-medium">{node.name}</p>
+          <p className="break-words text-sm leading-relaxed text-muted-foreground">{sentence}</p>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
